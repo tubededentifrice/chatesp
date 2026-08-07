@@ -1,0 +1,11 @@
+{
+  "name": "transport_core",
+  "version": "0.1.0",
+  "dependencies": {
+    "agent_core": "*"
+  },
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include"
+  }
+}

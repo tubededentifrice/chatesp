@@ -1,0 +1,60 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <atomic>
+
+#include "chatesp/agent_interfaces.hpp"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+
+namespace chatesp {
+namespace network {
+
+struct WifiCredentials {
+    const char *ssid = nullptr;
+    std::size_t ssid_size = 0;
+    const char *password = nullptr;
+    std::size_t password_size = 0;
+};
+
+struct ConnectPolicy {
+    std::uint32_t attempt_timeout_ms = 8'000;
+    std::uint32_t total_timeout_ms = 25'000;
+    std::uint32_t retry_delay_ms = 300;
+    std::uint8_t max_attempts = 3;
+};
+
+class NetworkManager {
+public:
+    esp_err_t initialize();
+    agent::Error connect(
+        const WifiCredentials &credentials,
+        agent::CancellationToken &cancellation,
+        const ConnectPolicy &policy = {});
+    void disconnect();
+    void shutdown();
+    [[nodiscard]] bool connected() const;
+
+private:
+    static void event_handler(
+        void *argument, esp_event_base_t event_base, std::int32_t event_id,
+        void *event_data);
+    void handle_event(
+        esp_event_base_t event_base, std::int32_t event_id, void *event_data);
+    void clean_failed_initialize();
+
+    EventGroupHandle_t events_ = nullptr;
+    esp_netif_t *station_ = nullptr;
+    esp_event_handler_instance_t wifi_events_ = nullptr;
+    esp_event_handler_instance_t ip_events_ = nullptr;
+    std::atomic<std::uint8_t> last_disconnect_reason_{0};
+    bool initialized_ = false;
+    bool wifi_driver_initialized_ = false;
+    bool wifi_started_ = false;
+};
+
+}  // namespace network
+}  // namespace chatesp

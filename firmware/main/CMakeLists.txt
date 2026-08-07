@@ -3,8 +3,18 @@ idf_component_register(
         "app_main.cpp"
         "audio_capture.cpp"
         "audio_playback.cpp"
+        "device_settings.cpp"
+        "http_transport.cpp"
+        "network_manager.cpp"
         "power_control.cpp"
         "ui.cpp"
     INCLUDE_DIRS "."
-    REQUIRES chatesp_board esp_codec_dev
+    REQUIRES
+        chatesp_board
+        esp_codec_dev
+        esp_event
+        esp_http_client
+        esp_netif
+        esp_wifi
+        mbedtls
 )
