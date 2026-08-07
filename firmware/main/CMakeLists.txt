@@ -3,6 +3,7 @@ idf_component_register(
         "app_main.cpp"
         "audio_capture.cpp"
         "audio_playback.cpp"
+        "cloud_providers.cpp"
         "device_settings.cpp"
         "http_transport.cpp"
         "network_manager.cpp"
@@ -16,5 +17,6 @@ idf_component_register(
         esp_http_client
         esp_netif
         esp_wifi
+        heap
         mbedtls
 )
