@@ -3,20 +3,26 @@ idf_component_register(
         "app_main.cpp"
         "audio_capture.cpp"
         "audio_playback.cpp"
+        "ble_provisioning.cpp"
         "cloud_providers.cpp"
         "device_settings.cpp"
         "http_transport.cpp"
         "network_manager.cpp"
         "power_control.cpp"
+        "settings_store.cpp"
         "ui.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         chatesp_board
+        bt
         esp_codec_dev
         esp_event
         esp_http_client
+        esp_hw_support
         esp_netif
+        esp_partition
         esp_wifi
         heap
         mbedtls
+        nvs_flash
 )
