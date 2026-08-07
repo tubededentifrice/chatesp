@@ -1,0 +1,151 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+
+#include "chatesp/agent_limits.hpp"
+#include "chatesp/fixed_text.hpp"
+
+namespace chatesp {
+namespace agent {
+
+enum class Error : std::uint8_t {
+    none,
+    invalid_argument,
+    limit_exceeded,
+    malformed_response,
+    cancelled,
+    connect_timeout,
+    first_byte_timeout,
+    idle_timeout,
+    total_timeout,
+    disconnected,
+    rate_limited,
+    authentication,
+    payment_required,
+    server_error,
+    unsupported_media,
+    tool_not_found,
+    tool_failed,
+    model_failed,
+};
+
+enum class MessageRole : std::uint8_t {
+    user,
+    assistant,
+    assistant_tool_call,
+    tool,
+};
+
+struct ToolInvocation {
+    FixedText<Limits::max_tool_call_id_bytes> id;
+    FixedText<Limits::max_tool_name_bytes> name;
+    FixedText<Limits::max_tool_arguments_bytes> arguments;
+};
+
+struct Message {
+    MessageRole role = MessageRole::user;
+    FixedText<Limits::max_message_bytes> content;
+    ToolInvocation tool_call;
+};
+
+class ConversationHistory {
+public:
+    [[nodiscard]] std::size_t size() const { return size_; }
+    [[nodiscard]] std::size_t remaining() const {
+        return Limits::max_history_messages - size_;
+    }
+    [[nodiscard]] const Message &at(std::size_t index) const {
+        return messages_[index];
+    }
+
+    Error append_text(MessageRole role, const char *text, std::size_t length);
+    Error append_tool_call(const ToolInvocation &call);
+    Error append_tool_result(
+        const ToolInvocation &call, const char *json, std::size_t length);
+    void make_room_for_turn();
+    void truncate(std::size_t size);
+    void clear();
+
+private:
+    void discard_oldest_turn();
+
+    std::array<Message, Limits::max_history_messages> messages_{};
+    std::size_t size_ = 0;
+};
+
+enum class ChatTurnKind : std::uint8_t { answer, tool_call };
+
+struct ChatTurn {
+    ChatTurnKind kind = ChatTurnKind::answer;
+    FixedText<Limits::max_answer_bytes> answer;
+    ToolInvocation tool_call;
+
+    void clear() {
+        kind = ChatTurnKind::answer;
+        answer.clear();
+        tool_call = {};
+    }
+};
+
+struct WebResult {
+    FixedText<Limits::max_title_bytes> title;
+    FixedText<Limits::max_url_bytes> url;
+    FixedText<Limits::max_snippet_bytes> snippet;
+};
+
+struct WebResults {
+    std::array<WebResult, Limits::max_web_results> items{};
+    std::size_t size = 0;
+};
+
+struct ImageResult {
+    FixedText<Limits::max_image_id_bytes> id;
+    FixedText<Limits::max_title_bytes> title;
+    FixedText<Limits::max_url_bytes> page_url;
+    FixedText<Limits::max_url_bytes> thumbnail_url;
+    FixedText<Limits::max_url_bytes> image_url;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+struct ImageResults {
+    std::array<ImageResult, Limits::max_image_results> items{};
+    std::size_t size = 0;
+};
+
+struct AudioView {
+    const std::uint8_t *data = nullptr;
+    std::size_t size = 0;
+    std::uint32_t sample_rate_hz = 16'000;
+    std::uint8_t channels = 1;
+    std::uint8_t bits_per_sample = 16;
+};
+
+struct ImageFetchRequest {
+    const char *url = nullptr;
+    std::size_t max_bytes = Limits::max_image_download_bytes;
+    std::uint32_t max_dimension = Limits::max_image_dimension;
+    std::uint8_t max_redirects = Limits::max_image_redirects;
+    RequestPolicy policy = image_fetch_policy();
+};
+
+enum class ImageMediaType : std::uint8_t { jpeg, png, webp };
+
+struct ImageMetadata {
+    ImageMediaType media_type = ImageMediaType::jpeg;
+    std::size_t content_length = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+[[nodiscard]] bool retry_allowed(
+    Error error, std::uint8_t completed_attempts, bool output_started,
+    const RequestPolicy &policy);
+
+[[nodiscard]] Error validate_image_fetch_request(
+    const ImageFetchRequest &request);
+
+}  // namespace agent
+}  // namespace chatesp
