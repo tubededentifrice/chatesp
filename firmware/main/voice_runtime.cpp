@@ -177,7 +177,7 @@ struct RuntimeSettings {
             assign_setting(wifi_password, local.wifi_password) &&
             chat_model.assign("deepseek/deepseek-v4-flash") &&
             transcription_model.assign("openai/whisper-large-v3-turbo") &&
-            speech_model.assign("google/gemini-3.1-flash-tts-preview");
+            speech_model.assign("hexgrad/kokoro-82m");
         if (!configured) {
             clear();
         }
@@ -218,7 +218,7 @@ struct RuntimeSettings {
                 chat_model.view().data(),
                 transcription_model.view().data(),
                 speech_model.view().data(),
-                "Achird",
+                "af_heart",
             },
         };
     }

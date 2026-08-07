@@ -373,15 +373,10 @@ Error build_openrouter_speech_request(
         size == 0 || size > Limits::max_tts_input_bytes) {
         return Error::invalid_argument;
     }
-    constexpr char direction[] =
-        "Read only the transcript in a warm, natural, conversational voice. "
-        "Transcript:\n";
-    FixedText<Limits::max_tts_input_bytes + sizeof(direction)> input;
-    if (!input.append(direction, sizeof(direction) - 1) ||
-        !input.append(text, size) || !body.append("{\"model\":") ||
+    if (!body.append("{\"model\":") ||
         !detail::append_json_string(body, config.speech_model) ||
         !body.append(",\"input\":") ||
-        !detail::append_json_string(body, input.data(), input.size()) ||
+        !detail::append_json_string(body, text, size) ||
         !body.append(",\"voice\":") ||
         !detail::append_json_string(body, config.speech_voice) ||
         !body.append(",\"response_format\":\"pcm\"}")) {

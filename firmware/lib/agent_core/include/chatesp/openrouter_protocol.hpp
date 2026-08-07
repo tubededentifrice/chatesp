@@ -10,8 +10,8 @@ namespace agent {
 struct OpenRouterConfig {
     const char *chat_model = "deepseek/deepseek-v4-flash";
     const char *transcription_model = "openai/whisper-large-v3-turbo";
-    const char *speech_model = "google/gemini-3.1-flash-tts-preview";
-    const char *speech_voice = "Achird";
+    const char *speech_model = "hexgrad/kokoro-82m";
+    const char *speech_voice = "af_heart";
 };
 
 using ChatRequestBody = FixedText<Limits::max_chat_request_bytes>;

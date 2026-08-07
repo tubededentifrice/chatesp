@@ -7,7 +7,7 @@ struct AppPreferences: Codable, Equatable {
     var chatEndpoint = "https://openrouter.ai/api/v1"
     var chatModel = "deepseek/deepseek-v4-flash"
     var transcriptionModel = "openai/whisper-large-v3-turbo"
-    var speechModel = "google/gemini-3.1-flash-tts-preview"
+    var speechModel = "hexgrad/kokoro-82m"
     var appliedRevision: UInt32 = 0
     var acknowledgedFingerprintHex: String?
     var pendingRevision: UInt32?

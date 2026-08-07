@@ -20,8 +20,8 @@ motion has a purpose: recording level, network work, tool work, or speech.
 
 - Chat: `deepseek/deepseek-v4-flash` through OpenRouter.
 - Speech recognition: `openai/whisper-large-v3-turbo` through OpenRouter.
-- Speech synthesis: `google/gemini-3.1-flash-tts-preview` through OpenRouter.
-  It returns 24 kHz, 16-bit, mono PCM and gives natural multilingual speech.
+- Speech synthesis: `hexgrad/kokoro-82m` with the `af_heart` voice through
+  OpenRouter. It returns streaming 24 kHz, 16-bit, mono PCM.
 - Search: Brave Web Search and Brave Image Search through a provider adapter.
 
 One OpenRouter key can supply chat, transcription, and speech. The provider

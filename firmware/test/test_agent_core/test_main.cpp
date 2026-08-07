@@ -465,8 +465,12 @@ void test_openrouter_transcription_and_speech_protocols() {
         Error::none,
         build_openrouter_speech_request(
             OpenRouterConfig{}, "Hello.", 6, body));
-    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "Transcript:\\nHello."));
-    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"voice\":\"Achird\""));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(body.c_str(), "\"model\":\"hexgrad/kokoro-82m\""));
+    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"input\":\"Hello.\""));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(body.c_str(), "\"voice\":\"af_heart\""));
+    TEST_ASSERT_NULL(std::strstr(body.c_str(), "Transcript:"));
     assert_error(
         Error::none,
         validate_openrouter_pcm_content_type(
