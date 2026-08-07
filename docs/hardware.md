@@ -15,27 +15,39 @@ The target is the Waveshare ESP32-S3-Touch-AMOLED-1.8.
 - MicroSD over SDMMC
 - Two physical buttons
 
-Use the official managed component
-`waveshare/esp32_s3_touch_amoled_1_8`. The BSP is the source of truth for pins
-and supported board revisions.
+Use the official `waveshare/esp32_s3_touch_amoled_1_8` component as the board
+base. Pin it to a reviewed source commit. The current 2.0.3 display start always
+creates a CO5300 panel. It probes both touch types, but it does not select an
+SH8601 display. The ChatESP board adapter must add the original-board SH8601
+path before original-board support is complete.
+
+Probe the touch controller after reset release. Address `0x15` identifies V2.
+Address `0x38` identifies the original board. Do not infer the display revision
+from a failed display start.
 
 ## Button behavior
 
-The top button is the user action button:
+The top PWR button is the user action button. It connects to the AXP2101, not to
+an ESP GPIO. Read the PMU press and release events through I2C while awake:
 
 - short press from idle: sleep;
 - hold: record while held;
 - release after recording: submit.
 
-The second button has no product behavior yet. A diagnostic build can use it
-only when the diagnostic screen and documentation state this clearly.
+Disable the PMU automatic long-hold shutdown during product use so a normal
+recording does not turn off the board. Keep a tested recovery path.
+
+The second BOOT button is GPIO0 and has no product behavior. A diagnostic build
+can use it only when the diagnostic screen and documentation state this
+clearly.
 
 ## Power behavior
 
-Before deep sleep, stop audio, radio work, display updates, touch, and unused
-peripherals. Configure only a supported button wake source. Turn the AMOLED off
-through the BSP or PMU path. Clear the in-memory thread. Measure sleep current
-on battery hardware before making a battery-life claim.
+Before sleep, stop audio, radio work, display updates, touch, and unused
+peripherals. Turn the AMOLED off and request AXP2101 system-off. A PWR press then
+causes a cold boot and a new thread. PMU system-off is the primary path because
+PWR cannot be an ESP deep-sleep wake GPIO. Measure current on battery hardware
+before making a battery-life claim.
 
 ## Physical acceptance gates
 

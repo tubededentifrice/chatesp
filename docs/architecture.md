@@ -15,8 +15,8 @@ threshold requests sleep. A held press starts audio capture. Release ends the
 capture and submits it. The exact threshold is a tested configuration value.
 
 Each accepted interaction resets a 30-second monotonic inactivity timer. Chat
-messages stay in PSRAM only. Deep sleep clears the messages. A wake creates a
-new thread.
+messages stay in PSRAM only. PMU system-off clears the messages. A cold-boot
+wake creates a new thread.
 
 ## Modules
 

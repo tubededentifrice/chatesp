@@ -43,7 +43,8 @@ documentation contracts consistent.
 - Keep packet encoding, limits, UUIDs, revision rules, fingerprint rules, and
   acknowledgements authoritative in `docs/provisioning-protocol.md`. Store
   non-secret iOS choices in one versioned preferences record.
-- Support original and V2 boards through the BSP. Keep pins in one board layer.
+- Use the BSP as the base. Its current display start supports V2 only. Keep an
+  original-board SH8601 path in one board layer. Keep pins in that layer.
 
 ## Implement
 

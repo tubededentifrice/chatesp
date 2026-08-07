@@ -41,6 +41,8 @@ PLATFORMIO_SPEC_RE = re.compile(
 HASHED_REQUIREMENT_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^\s;\\]+)"
 )
+COMPONENT_NAME_RE = re.compile(r"^[a-z0-9_.-]+/[a-z0-9_.-]+$")
+COMPONENT_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 PYPI_REGISTRY = "https://pypi.org/simple"
 JSON_CACHE: dict[str, dict] = {}
 
@@ -251,6 +253,177 @@ def check_platformio(
     return registry_references, git_references
 
 
+def yaml_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
+def check_idf_manifests(
+    root: Path,
+) -> tuple[set[tuple[str, str, str]], dict[str, tuple[str, str]]]:
+    git_references: set[tuple[str, str, str]] = set()
+    expected: dict[str, tuple[str, str]] = {}
+    manifests = sorted(
+        path
+        for path in (root / "firmware").glob("**/idf_component.yml")
+        if "managed_components" not in path.parts and ".pio" not in path.parts
+    )
+    for path in manifests:
+        lines = path.read_text().splitlines()
+        in_dependencies = False
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            if line == "dependencies:":
+                in_dependencies = True
+                index += 1
+                continue
+            if in_dependencies and line and not line.startswith(" "):
+                in_dependencies = False
+            match = re.match(r"^  ([a-z0-9_.-]+/[a-z0-9_.-]+):\s*(.*)$", line)
+            if not in_dependencies or not match:
+                index += 1
+                continue
+
+            name = match.group(1)
+            inline = yaml_scalar(match.group(2))
+            fields: dict[str, str] = {}
+            index += 1
+            while index < len(lines) and not re.match(r"^  \S", lines[index]):
+                field_match = re.match(r"^    ([a-z_]+):\s*(.*)$", lines[index])
+                if field_match:
+                    fields[field_match.group(1)] = yaml_scalar(field_match.group(2))
+                index += 1
+
+            if inline:
+                version = inline
+                if version[0] in "^~<>=*" or "," in version:
+                    raise PolicyError(
+                        f"IDF component dependency is not exact in {path}: {name} {version}"
+                    )
+                expected[name] = ("registry", version)
+                continue
+
+            version = fields.get("version", "")
+            git_url = fields.get("git", "")
+            if git_url:
+                url_match = GITHUB_URL_RE.fullmatch(git_url)
+                if not url_match or not GIT_COMMIT_RE.fullmatch(version):
+                    raise PolicyError(
+                        f"IDF Git component must use GitHub HTTPS and a full commit: {name}"
+                    )
+                reference = (
+                    url_match.group("owner"),
+                    url_match.group("repo").removesuffix(".git"),
+                    version,
+                )
+                git_references.add(reference)
+                expected[name] = ("git", version)
+            elif not version or version[0] in "^~<>=*" or "," in version:
+                raise PolicyError(
+                    f"IDF component dependency is not exactly pinned in {path}: {name}"
+                )
+            else:
+                expected[name] = ("registry", version)
+    return git_references, expected
+
+
+def check_idf_lock(
+    root: Path, expected: dict[str, tuple[str, str]]
+) -> tuple[
+    set[tuple[str, str, str]], set[tuple[str, str, str, str]], dict[str, tuple[str, str]]
+]:
+    if not expected:
+        return set(), set(), {}
+    path = root / "firmware" / "dependencies.lock"
+    if not path.exists():
+        raise PolicyError("firmware/dependencies.lock is required")
+
+    records: dict[str, dict[str, str]] = {}
+    current: str | None = None
+    in_dependencies = False
+    for line in path.read_text().splitlines():
+        if line == "dependencies:":
+            in_dependencies = True
+            continue
+        if in_dependencies and line == "direct_dependencies:":
+            break
+        entry = re.match(r"^  (\S[^:]*):$", line)
+        if entry:
+            current = entry.group(1)
+            records[current] = {}
+            continue
+        if current is None:
+            continue
+        field = re.match(r"^    (component_hash|version):\s*(.*)$", line)
+        if field:
+            records[current][field.group(1)] = yaml_scalar(field.group(2))
+            continue
+        source_field = re.match(r"^      (type|registry_url|git|path):\s*(.*)$", line)
+        if source_field:
+            records[current][source_field.group(1)] = yaml_scalar(source_field.group(2))
+
+    git_references: set[tuple[str, str, str]] = set()
+    registry_references: set[tuple[str, str, str, str]] = set()
+    locked: dict[str, tuple[str, str]] = {}
+    for name, record in records.items():
+        source_type = record.get("type", "")
+        version = record.get("version", "")
+        if source_type == "idf":
+            continue
+        if not COMPONENT_NAME_RE.fullmatch(name) or not version:
+            raise PolicyError(f"invalid IDF component lock record: {name}")
+        if source_type == "git":
+            git_url = record.get("git", "")
+            url_match = GITHUB_URL_RE.fullmatch(git_url)
+            if not url_match or not GIT_COMMIT_RE.fullmatch(version):
+                raise PolicyError(f"mutable IDF Git lock record: {name}")
+            git_references.add(
+                (
+                    url_match.group("owner"),
+                    url_match.group("repo").removesuffix(".git"),
+                    version,
+                )
+            )
+            locked[name] = ("git", version)
+        elif source_type == "service":
+            component_hash = record.get("component_hash", "")
+            if not COMPONENT_HASH_RE.fullmatch(component_hash):
+                raise PolicyError(f"IDF registry component has no SHA-256 hash: {name}")
+            namespace, component = name.split("/", 1)
+            registry_references.add((namespace, component, version, component_hash))
+            locked[name] = ("registry", version)
+        else:
+            raise PolicyError(f"unapproved IDF component source for {name}: {source_type}")
+
+    for name, pin in expected.items():
+        if locked.get(name) != pin:
+            raise PolicyError(
+                f"firmware/dependencies.lock has {locked.get(name)!r} for {name}; expected {pin!r}"
+            )
+    return git_references, registry_references, locked
+
+
+def check_component_registry_reference(
+    reference: tuple[str, str, str, str], cutoff: datetime
+) -> None:
+    namespace, component, version, expected_hash = reference
+    name = f"{namespace}/{component}"
+    quoted_name = "/".join(urllib.parse.quote(item, safe="") for item in name.split("/"))
+    data = fetch_json(f"https://components.espressif.com/api/components/{quoted_name}")
+    versions = [item for item in data.get("versions", []) if item.get("version") == version]
+    if data.get("namespace") != namespace or data.get("name") != component or len(versions) != 1:
+        raise PolicyError(f"component registry did not return exact metadata for {name}@{version}")
+    record = versions[0]
+    if record.get("version") != version or record.get("component_hash") != expected_hash:
+        raise PolicyError(f"component registry hash mismatch for {name}@{version}")
+    require_old_enough(
+        f"IDF component {name}@{version}", parse_time(record["created_at"]), cutoff
+    )
+
+
 def check_github_actions(root: Path) -> set[tuple[str, str, str]]:
     references: set[tuple[str, str, str]] = set()
     workflow_root = root / ".github" / "workflows"
@@ -281,6 +454,8 @@ def check_github_actions(root: Path) -> set[tuple[str, str, str]]:
 def check_hashed_requirements(root: Path, cutoff: datetime) -> int:
     path = root / "tools" / "espidf-python-requirements.txt"
     if not path.exists():
+        if (root / "firmware" / "platformio.ini").exists():
+            raise PolicyError("tools/espidf-python-requirements.txt is required")
         return 0
 
     blocks: list[list[str]] = []
@@ -415,11 +590,19 @@ def main() -> int:
         hashed_requirement_count = check_hashed_requirements(root, cutoff)
         platformio_references, platformio_git_references = check_platformio(root)
         git_references.update(platformio_git_references)
+        idf_git_references, expected_idf_components = check_idf_manifests(root)
+        git_references.update(idf_git_references)
+        lock_git_references, component_references, _ = check_idf_lock(
+            root, expected_idf_components
+        )
+        git_references.update(lock_git_references)
         for reference in sorted(git_references):
             check_github_reference(reference, cutoff)
         check_github_release("astral-sh", "uv", UV_CI_VERSION, cutoff)
         for reference in sorted(platformio_references):
             check_platformio_reference(reference, cutoff)
+        for reference in sorted(component_references):
+            check_component_registry_reference(reference, cutoff)
     except (KeyError, PolicyError, ValueError) as error:
         print(f"Dependency age check failed: {error}", file=sys.stderr)
         return 1
@@ -429,6 +612,7 @@ def main() -> int:
         f"two-week cutoff {cutoff.isoformat()}, "
         f"{len(git_references)} Git pin(s), "
         f"{len(platformio_references)} PlatformIO pin(s), "
+        f"{len(component_references)} IDF registry pin(s), "
         f"uv {UV_CI_VERSION}, "
         f"{hashed_requirement_count} hashed ESP-IDF Python pin(s)."
     )

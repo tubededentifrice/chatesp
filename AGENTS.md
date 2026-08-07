@@ -47,11 +47,12 @@ Some files can be absent during initial setup. Read them when they exist.
 
 ## Hardware and security constraints
 
-- Support the Waveshare board revisions through the official
-  `waveshare/esp32_s3_touch_amoled_1_8` BSP. Do not copy pin values into many
-  modules.
+- Use the official `waveshare/esp32_s3_touch_amoled_1_8` BSP as the base. Its
+  current display start supports V2 only. Keep an original-board SH8601 path in
+  the board adapter. Do not copy pin values into many modules.
 - The display is 368 by 448. The original board uses SH8601 and FT3168. The V2
-  board uses CO5300 and CST820. Detect or select the board revision with the BSP.
+  board uses CO5300 and CST820. Detect the revision in the board adapter. Use
+  the BSP hardware helpers after detection.
 - The board has an ES8311 audio codec, QMI8658 IMU, AXP2101 PMU, PCF85063A RTC,
   16 MB flash, and 8 MB PSRAM.
 - Use bounded network operations. One failed optional service must not block

@@ -2,9 +2,10 @@
 .pio/
 .platformio/
 managed_components/
-dependencies.lock
 sdkconfig
 sdkconfig.old
+sdkconfig.*
+!sdkconfig.defaults
 build/
 *.bin
 *.elf

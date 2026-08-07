@@ -30,9 +30,11 @@ ScrapingDog without a change to the conversation state machine.
 
 ## Repository status
 
-The project is in active initial development. Repository policy and architecture
-exist first. Firmware and iOS implementation follow in verified tasks. Do not
-use this status as a claim that the device workflow is complete.
+The project is in active initial development. The connected V2 board now runs
+the black terminal interface and enters the visible sleep state after 30 seconds.
+Native tests cover the interaction state machine. The physical button, voice,
+cloud, BLE, iOS, and real low-power paths are not complete. Do not use this
+status as a claim that the full device workflow works.
 
 ## Development
 
@@ -54,7 +56,13 @@ Run repository checks:
 ```sh
 uv run --locked python -m unittest discover -s tests -p 'test_*.py'
 uv run --locked python tools/check_secrets.py
+uv run --locked python tools/pio.py test -e native
+uv run --locked python tools/pio.py run -e watch
 ```
+
+Run all PlatformIO commands through `tools/pio.py`. The wrapper checks the
+dependency cooldown first. For the watch build, it also creates the ESP-IDF
+Python environment from a hash-locked requirements file.
 
 Never put credentials in tracked files. Local development values belong in
 `.secrets/device.env`, which Git ignores. The iOS app will store secrets in

@@ -8,8 +8,12 @@ from unittest.mock import patch
 
 from tools.check_dependency_age import (
     PolicyError,
+    check_component_registry_reference,
     check_github_actions,
     check_github_release,
+    check_hashed_requirements,
+    check_idf_lock,
+    check_idf_manifests,
     check_platformio,
     check_pyproject,
     check_uv_lock,
@@ -90,6 +94,15 @@ class DependencyPolicyTests(unittest.TestCase):
             with self.assertRaises(PolicyError):
                 check_github_actions(root)
 
+    def test_requires_hash_lock_for_firmware_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            firmware = root / "firmware"
+            firmware.mkdir()
+            (firmware / "platformio.ini").write_text("[env:watch]\n")
+            with self.assertRaises(PolicyError):
+                check_hashed_requirements(root, datetime.now(timezone.utc))
+
     def test_requires_ci_uv_release_to_finish_cooldown(self) -> None:
         cutoff = datetime(2026, 7, 24, tzinfo=timezone.utc)
         metadata = {
@@ -128,6 +141,95 @@ class DependencyPolicyTests(unittest.TestCase):
             )
             with self.assertRaises(PolicyError):
                 check_platformio(root)
+
+    def test_accepts_full_idf_component_git_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            main = root / "firmware" / "main"
+            main.mkdir(parents=True)
+            (main / "idf_component.yml").write_text(
+                "dependencies:\n"
+                "  vendor/board:\n"
+                "    git: https://github.com/vendor/components.git\n"
+                "    path: bsp/board\n"
+                "    version: 0123456789abcdef0123456789abcdef01234567\n"
+            )
+            references, expected = check_idf_manifests(root)
+            self.assertEqual(
+                {("vendor", "components", "0123456789abcdef0123456789abcdef01234567")},
+                references,
+            )
+            self.assertEqual(
+                ("git", "0123456789abcdef0123456789abcdef01234567"),
+                expected["vendor/board"],
+            )
+
+    def test_rejects_mutable_idf_component_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            main = root / "firmware" / "main"
+            main.mkdir(parents=True)
+            (main / "idf_component.yml").write_text(
+                "dependencies:\n  vendor/board:\n    version: ^2.0.0\n"
+            )
+            with self.assertRaises(PolicyError):
+                check_idf_manifests(root)
+
+    def test_ignores_downloaded_idf_component_manifests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            managed = root / "firmware" / "managed_components" / "vendor__driver"
+            managed.mkdir(parents=True)
+            (managed / "idf_component.yml").write_text(
+                "dependencies:\n  vendor/helper:\n    version: ^1\n"
+            )
+            references, expected = check_idf_manifests(root)
+            self.assertEqual(set(), references)
+            self.assertEqual({}, expected)
+
+    def test_requires_idf_registry_component_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            firmware = root / "firmware"
+            firmware.mkdir()
+            (firmware / "dependencies.lock").write_text(
+                "dependencies:\n"
+                "  vendor/driver:\n"
+                "    dependencies:\n"
+                "    - name: idf\n"
+                "      version: '>=5.2'\n"
+                "    source:\n"
+                "      registry_url: https://components.espressif.com\n"
+                "      type: service\n"
+                "    version: 1.2.3\n"
+                "direct_dependencies:\n"
+            )
+            with self.assertRaises(PolicyError):
+                check_idf_lock(root, {"vendor/driver": ("registry", "1.2.3")})
+
+    def test_checks_idf_component_hash_and_cooldown(self) -> None:
+        metadata = {
+            "namespace": "vendor",
+            "name": "driver",
+            "versions": [
+                {
+                    "version": "1.2.3",
+                    "component_hash": "a" * 64,
+                    "created_at": "2026-06-01T00:00:00Z",
+                }
+            ],
+        }
+        with patch("tools.check_dependency_age.fetch_json", return_value=metadata):
+            check_component_registry_reference(
+                ("vendor", "driver", "1.2.3", "a" * 64),
+                datetime(2026, 7, 1, tzinfo=timezone.utc),
+            )
+        with patch("tools.check_dependency_age.fetch_json", return_value=metadata):
+            with self.assertRaises(PolicyError):
+                check_component_registry_reference(
+                    ("vendor", "driver", "1.2.3", "b" * 64),
+                    datetime(2026, 7, 1, tzinfo=timezone.utc),
+                )
 
 
 if __name__ == "__main__":
