@@ -1,0 +1,4 @@
+interface:
+  display_name: "Self Review"
+  short_description: "Review and autofix recent ChatESP changes"
+  default_prompt: "Use $selfreview autofix to review and fix my recent ChatESP changes."

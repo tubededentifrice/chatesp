@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain ChatESP"
+  short_description: "Build and validate the ChatESP product"
+  default_prompt: "Use $maintain-chatesp to implement and validate this ChatESP change."

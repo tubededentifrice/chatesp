@@ -1,0 +1,33 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Check dependency pins and age
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/check_dependency_age.py
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          enable-cache: false
+          version: "0.11.32"
+      - name: Install locked tools
+        run: uv sync --locked
+      - name: Run repository tests
+        run: uv run --locked python -m unittest discover -s tests -p 'test_*.py'
+      - name: Scan commit candidates for secrets
+        run: uv run --locked python tools/check_secrets.py

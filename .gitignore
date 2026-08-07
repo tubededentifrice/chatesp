@@ -1,0 +1,49 @@
+# PlatformIO and ESP-IDF
+.pio/
+.platformio/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+build/
+*.bin
+*.elf
+*.hex
+*.map
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Xcode and Swift
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.ipa
+*.dSYM/
+*.dSYM.zip
+.build/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*~
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.secrets/
+secrets/
+*.local
+*Secrets.h
+*Secrets.swift
+firmware/main/local_config.h
+ios/Local.xcconfig
