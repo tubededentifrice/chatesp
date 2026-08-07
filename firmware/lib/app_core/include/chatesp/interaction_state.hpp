@@ -35,6 +35,7 @@ public:
     void tool_started(std::uint32_t now_ms);
     void speech_started(std::uint32_t now_ms);
     void interaction_finished(std::uint32_t now_ms);
+    void note_idle_activity(std::uint32_t now_ms);
     void fail(std::uint32_t now_ms);
     void cancel_for_sleep();
 

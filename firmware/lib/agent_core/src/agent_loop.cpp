@@ -8,10 +8,15 @@ Error AgentLoop::run(
     FixedText<Limits::max_answer_bytes> &answer,
     CancellationToken &cancellation) {
     answer.clear();
+    answer_pending_speech_ = false;
     if (user_text == nullptr || size == 0 ||
         size > Limits::max_transcript_bytes) {
         return Error::invalid_argument;
     }
+    if (cancellation.cancelled()) {
+        return Error::cancelled;
+    }
+    notify(AgentProgressEvent::transcription_complete);
     if (cancellation.cancelled()) {
         return Error::cancelled;
     }
@@ -28,6 +33,10 @@ Error AgentLoop::run(
     }
 
     for (std::size_t round = 0; round <= Limits::max_tool_rounds; ++round) {
+        if (cancellation.cancelled()) {
+            return fail(Error::cancelled);
+        }
+        notify(AgentProgressEvent::model_start);
         if (cancellation.cancelled()) {
             return fail(Error::cancelled);
         }
@@ -48,7 +57,12 @@ Error AgentLoop::run(
             if (error != Error::none) {
                 return fail(error);
             }
+            notify(AgentProgressEvent::answer_ready);
+            if (cancellation.cancelled()) {
+                return fail(Error::cancelled);
+            }
             answer = turn.answer;
+            answer_pending_speech_ = true;
             return Error::none;
         }
         if (round == Limits::max_tool_rounds) {
@@ -60,6 +74,10 @@ Error AgentLoop::run(
             return fail(error);
         }
         FixedText<Limits::max_tool_result_bytes> result;
+        notify(AgentProgressEvent::tool_start);
+        if (cancellation.cancelled()) {
+            return fail(Error::cancelled);
+        }
         error = tools_.execute(turn.tool_call, result, cancellation);
         if (error == Error::cancelled || cancellation.cancelled()) {
             return fail(Error::cancelled);
@@ -75,6 +93,20 @@ Error AgentLoop::run(
         }
     }
     return fail(Error::limit_exceeded);
+}
+
+void AgentLoop::report_speech_start() {
+    if (!answer_pending_speech_) {
+        return;
+    }
+    answer_pending_speech_ = false;
+    notify(AgentProgressEvent::speech_start);
+}
+
+void AgentLoop::notify(AgentProgressEvent event) {
+    if (observer_ != nullptr) {
+        observer_->on_agent_progress(event);
+    }
 }
 
 }  // namespace agent

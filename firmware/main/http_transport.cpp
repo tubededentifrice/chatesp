@@ -161,44 +161,23 @@ agent::Error HttpTransport::execute(
         }
 
         ResponseHeaders response_headers;
-        const esp_http_client_config_t config = {
-            .url = current_url.c_str(),
-            .host = nullptr,
-            .port = 0,
-            .username = nullptr,
-            .password = nullptr,
-            .auth_type = HTTP_AUTH_TYPE_NONE,
-            .path = nullptr,
-            .query = nullptr,
-            .cert_pem = nullptr,
-            .cert_len = 0,
-            .client_cert_pem = nullptr,
-            .client_cert_len = 0,
-            .client_key_pem = nullptr,
-            .client_key_len = 0,
-            .client_key_password = nullptr,
-            .client_key_password_len = 0,
-            .user_agent = "ChatESP/0.1",
-            .method = request.method == HttpMethod::get ? HTTP_METHOD_GET
-                                                        : HTTP_METHOD_POST,
-            .timeout_ms = phase_timeout(
-                total_timer, request.timeouts.total_timeout_ms,
-                request.timeouts.connect_timeout_ms),
-            .disable_auto_redirect = true,
-            .max_redirection_count = 0,
-            .max_authorization_retries = -1,
-            .event_handler = capture_header,
-            .transport_type = HTTP_TRANSPORT_OVER_SSL,
-            .buffer_size = static_cast<int>(kTransferBufferBytes),
-            .buffer_size_tx = static_cast<int>(kTransferBufferBytes),
-            .user_data = &response_headers,
-            .is_async = false,
-            .use_global_ca_store = false,
-            .skip_cert_common_name_check = false,
-            .common_name = nullptr,
-            .crt_bundle_attach = esp_crt_bundle_attach,
-            .keep_alive_enable = false,
-        };
+        esp_http_client_config_t config{};
+        config.url = current_url.c_str();
+        config.auth_type = HTTP_AUTH_TYPE_NONE;
+        config.user_agent = "ChatESP/0.1";
+        config.method = request.method == HttpMethod::get ? HTTP_METHOD_GET
+                                                          : HTTP_METHOD_POST;
+        config.timeout_ms = phase_timeout(
+            total_timer, request.timeouts.total_timeout_ms,
+            request.timeouts.connect_timeout_ms);
+        config.disable_auto_redirect = true;
+        config.max_authorization_retries = -1;
+        config.event_handler = capture_header;
+        config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+        config.buffer_size = static_cast<int>(kTransferBufferBytes);
+        config.buffer_size_tx = static_cast<int>(kTransferBufferBytes);
+        config.user_data = &response_headers;
+        config.crt_bundle_attach = esp_crt_bundle_attach;
         esp_http_client_handle_t client = esp_http_client_init(&config);
         if (client == nullptr) {
             return agent::Error::disconnected;

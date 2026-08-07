@@ -79,14 +79,18 @@ void ConversationHistory::discard_oldest_turn() {
         clear();
         return;
     }
-    for (std::size_t index = remove_count; index < size_; ++index) {
+    const std::size_t prior_size = size_;
+    for (std::size_t index = remove_count; index < prior_size; ++index) {
         messages_[index - remove_count] = std::move(messages_[index]);
     }
     size_ -= remove_count;
+    for (std::size_t index = size_; index < prior_size; ++index) {
+        messages_[index] = {};
+    }
 }
 
 void ConversationHistory::clear() {
-    for (std::size_t index = 0; index < size_; ++index) {
+    for (std::size_t index = 0; index < messages_.size(); ++index) {
         messages_[index] = {};
     }
     size_ = 0;

@@ -10,11 +10,19 @@ Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short, useful message. Sleep stays available after a
 failure.
 
+One complete request has a 90-second monotonic limit. This limit includes
+Wi-Fi connection, transcription, model calls, tool calls, and speech. Provider
+retries use the remaining request time and wait 250 ms before one retry.
+
 The bottom PWR-button duration selects the action. A press shorter than the
 recording threshold requests sleep. A held press cancels active work or speech
 and starts audio capture. Release ends the capture and submits it. A held wake
 continues into audio capture. The exact threshold is a tested configuration
 value.
+
+The button poll runs separately from cloud work. A button press cancels active
+audio and HTTPS work. A separate bounded task shows BLE passkeys, but a voice
+button press always hides the passkey view.
 
 Each accepted interaction resets a 30-second monotonic inactivity timer. Chat
 messages stay in PSRAM only. AXP2101 system-off clears them. A PWR-button wake

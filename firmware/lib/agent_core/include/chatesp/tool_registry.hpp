@@ -69,6 +69,7 @@ public:
     [[nodiscard]] const ImageResults &last_results() const {
         return last_results_;
     }
+    void clear_results() { last_results_ = {}; }
 
 private:
     ImageSearchProvider &provider_;

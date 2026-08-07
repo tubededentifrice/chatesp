@@ -101,6 +101,12 @@ void InteractionStateMachine::interaction_finished(std::uint32_t now_ms) {
     }
 }
 
+void InteractionStateMachine::note_idle_activity(std::uint32_t now_ms) {
+    if (state_ == InteractionState::idle && !button_down_) {
+        last_activity_at_ms_ = now_ms;
+    }
+}
+
 void InteractionStateMachine::fail(std::uint32_t now_ms) {
     if (state_ != InteractionState::sleep_pending) {
         button_down_ = false;

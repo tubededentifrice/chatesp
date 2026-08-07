@@ -20,6 +20,9 @@ struct OpenRouterConnectionView {
     agent::OpenRouterConfig models{};
 };
 
+// Connection and key views do not own their bytes. The caller must keep the
+// bytes valid and must update them only while no provider request is active.
+
 class OpenRouterChatProvider final : public agent::ChatProvider {
 public:
     OpenRouterChatProvider(
@@ -33,6 +36,9 @@ public:
     agent::Error complete(
         const agent::ConversationHistory &history, agent::ChatTurn &turn,
         agent::CancellationToken &cancellation) override;
+    void set_connection(const OpenRouterConnectionView &connection) {
+        connection_ = connection;
+    }
     void cancel_active();
 
 private:
@@ -55,6 +61,9 @@ public:
         const agent::AudioView &audio,
         agent::FixedText<agent::Limits::max_transcript_bytes> &transcript,
         agent::CancellationToken &cancellation) override;
+    void set_connection(const OpenRouterConnectionView &connection) {
+        connection_ = connection;
+    }
     void cancel_active();
 
 private:
@@ -74,6 +83,9 @@ public:
     agent::Error speak(
         const char *text, std::size_t size, agent::PcmSink &sink,
         agent::CancellationToken &cancellation) override;
+    void set_connection(const OpenRouterConnectionView &connection) {
+        connection_ = connection;
+    }
     void cancel_active();
 
 private:
@@ -94,6 +106,7 @@ public:
     agent::Error search(
         const char *query, std::size_t size, agent::WebResults &results,
         agent::CancellationToken &cancellation) override;
+    void set_api_key(provider::SecretView api_key) { api_key_ = api_key; }
     void cancel_active();
 
 private:
@@ -115,6 +128,7 @@ public:
     agent::Error search(
         const char *query, std::size_t size, agent::ImageResults &results,
         agent::CancellationToken &cancellation) override;
+    void set_api_key(provider::SecretView api_key) { api_key_ = api_key; }
     void cancel_active();
 
 private:

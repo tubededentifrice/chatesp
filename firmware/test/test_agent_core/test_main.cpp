@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -17,6 +18,24 @@ class TestCancellation final : public CancellationToken {
 public:
     bool value = false;
     [[nodiscard]] bool cancelled() const override { return value; }
+};
+
+class ProgressRecorder final : public AgentProgressObserver {
+public:
+    std::array<AgentProgressEvent, 8> events{};
+    std::size_t size = 0;
+    TestCancellation *cancellation = nullptr;
+    AgentProgressEvent cancel_at = AgentProgressEvent::speech_start;
+    bool cancel_enabled = false;
+
+    void on_agent_progress(AgentProgressEvent event) override {
+        if (size < events.size()) {
+            events[size++] = event;
+        }
+        if (cancel_enabled && event == cancel_at && cancellation != nullptr) {
+            cancellation->value = true;
+        }
+    }
 };
 
 class EchoTool final : public Tool {
@@ -231,6 +250,94 @@ void test_agent_loop_gives_model_a_sanitized_tool_error() {
         loop.history().at(2).content.c_str());
 }
 
+void test_agent_loop_reports_bounded_progress_in_order() {
+    EchoTool tool;
+    ToolRegistry registry;
+    registry.add(tool);
+    SequenceChat chat;
+    chat.tool_turns = 1;
+    ProgressRecorder progress;
+    AgentLoop loop(chat, registry, &progress);
+    FixedText<Limits::max_answer_bytes> answer;
+    TestCancellation cancellation;
+
+    assert_error(
+        Error::none, loop.run("Question", 8, answer, cancellation));
+    loop.report_speech_start();
+    loop.report_speech_start();
+
+    const std::array<AgentProgressEvent, 6> expected = {
+        AgentProgressEvent::transcription_complete,
+        AgentProgressEvent::model_start,
+        AgentProgressEvent::tool_start,
+        AgentProgressEvent::model_start,
+        AgentProgressEvent::answer_ready,
+        AgentProgressEvent::speech_start,
+    };
+    TEST_ASSERT_EQUAL_UINT32(expected.size(), progress.size);
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        TEST_ASSERT_EQUAL_INT(
+            static_cast<int>(expected[index]),
+            static_cast<int>(progress.events[index]));
+    }
+}
+
+void test_agent_loop_stops_when_progress_observer_sees_cancellation() {
+    EchoTool tool;
+    ToolRegistry registry;
+    registry.add(tool);
+    SequenceChat chat;
+    ProgressRecorder progress;
+    TestCancellation cancellation;
+    progress.cancellation = &cancellation;
+    progress.cancel_at = AgentProgressEvent::model_start;
+    progress.cancel_enabled = true;
+    AgentLoop loop(chat, registry, &progress);
+    FixedText<Limits::max_answer_bytes> answer;
+
+    assert_error(
+        Error::cancelled, loop.run("Question", 8, answer, cancellation));
+    TEST_ASSERT_EQUAL_UINT32(2, progress.size);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(AgentProgressEvent::transcription_complete),
+        static_cast<int>(progress.events[0]));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(AgentProgressEvent::model_start),
+        static_cast<int>(progress.events[1]));
+    TEST_ASSERT_EQUAL_INT(0, chat.calls);
+    TEST_ASSERT_EQUAL_UINT32(0, loop.history().size());
+    TEST_ASSERT_TRUE(answer.empty());
+
+    loop.report_speech_start();
+    TEST_ASSERT_EQUAL_UINT32(2, progress.size);
+}
+
+void test_agent_loop_cancels_before_a_reported_tool_starts() {
+    EchoTool tool;
+    ToolRegistry registry;
+    registry.add(tool);
+    SequenceChat chat;
+    chat.tool_turns = 1;
+    ProgressRecorder progress;
+    TestCancellation cancellation;
+    progress.cancellation = &cancellation;
+    progress.cancel_at = AgentProgressEvent::tool_start;
+    progress.cancel_enabled = true;
+    AgentLoop loop(chat, registry, &progress);
+    FixedText<Limits::max_answer_bytes> answer;
+
+    assert_error(
+        Error::cancelled, loop.run("Question", 8, answer, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, chat.calls);
+    TEST_ASSERT_EQUAL_INT(0, tool.calls);
+    TEST_ASSERT_EQUAL_UINT32(0, loop.history().size());
+    TEST_ASSERT_TRUE(answer.empty());
+    TEST_ASSERT_EQUAL_UINT32(3, progress.size);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(AgentProgressEvent::tool_start),
+        static_cast<int>(progress.events[2]));
+}
+
 void test_search_tools_validate_query_and_bound_result() {
     TestCancellation cancellation;
     TestWebSearch web_provider;
@@ -254,6 +361,8 @@ void test_search_tools_validate_query_and_bound_result() {
         image_tool.execute(args, sizeof(args) - 1, result, cancellation));
     TEST_ASSERT_EQUAL_UINT32(1, image_tool.last_results().size);
     TEST_ASSERT_NOT_NULL(std::strstr(result.c_str(), "thumbnail_url"));
+    image_tool.clear_results();
+    TEST_ASSERT_EQUAL_UINT32(0, image_tool.last_results().size);
 }
 
 void test_openrouter_chat_builder_has_bounded_contract() {
@@ -449,6 +558,9 @@ int main(int, char **) {
     RUN_TEST(test_agent_loop_honors_cancellation_before_provider);
     RUN_TEST(test_agent_loop_rolls_back_cancelled_turn);
     RUN_TEST(test_agent_loop_gives_model_a_sanitized_tool_error);
+    RUN_TEST(test_agent_loop_reports_bounded_progress_in_order);
+    RUN_TEST(test_agent_loop_stops_when_progress_observer_sees_cancellation);
+    RUN_TEST(test_agent_loop_cancels_before_a_reported_tool_starts);
     RUN_TEST(test_search_tools_validate_query_and_bound_result);
     RUN_TEST(test_openrouter_chat_builder_has_bounded_contract);
     RUN_TEST(test_openrouter_parses_answer_and_tool_call);

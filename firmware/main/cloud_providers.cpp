@@ -1,5 +1,6 @@
 #include "cloud_providers.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -7,6 +8,9 @@
 
 #include "chatesp/transport_policy.hpp"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace chatesp {
 namespace cloud {
@@ -22,6 +26,11 @@ constexpr std::size_t kBraveKeyBytes = 512;
 constexpr char kJsonContentType[] = "application/json";
 constexpr const char *kJsonTypes[] = {kJsonContentType};
 constexpr const char *kPcmTypes[] = {"audio/pcm"};
+constexpr std::uint32_t kRetryDelayMs = 250;
+
+std::uint32_t monotonic_ms() {
+    return static_cast<std::uint32_t>(esp_timer_get_time() / 1'000ULL);
+}
 
 void secure_wipe(void *data, std::size_t size) {
     auto *bytes = static_cast<volatile std::uint8_t *>(data);
@@ -240,18 +249,62 @@ private:
     std::uint8_t pending_value_ = 0;
 };
 
+bool retry_delay(
+    std::uint32_t duration_ms,
+    agent::CancellationToken &cancellation) {
+    constexpr std::uint32_t slice_ms = 25;
+    std::uint32_t waited_ms = 0;
+    while (waited_ms < duration_ms) {
+        if (cancellation.cancelled()) {
+            return false;
+        }
+        const std::uint32_t delay_ms =
+            std::min(slice_ms, duration_ms - waited_ms);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        waited_ms += delay_ms;
+    }
+    return !cancellation.cancelled();
+}
+
+template <typename OutputStarted>
+agent::Error execute_with_retry(
+    transport::HttpTransport &transport,
+    const transport::HttpRequest &request, transport::ResponseSink &sink,
+    agent::CancellationToken &cancellation,
+    OutputStarted output_started) {
+    const std::uint32_t started_ms = monotonic_ms();
+    agent::Error error = agent::Error::none;
+    for (std::uint8_t completed = 1;; ++completed) {
+        const std::uint32_t elapsed_ms = monotonic_ms() - started_ms;
+        if (elapsed_ms >= request.timeouts.total_timeout_ms) {
+            return agent::Error::total_timeout;
+        }
+        transport::HttpRequest attempt = request;
+        attempt.timeouts.total_timeout_ms =
+            request.timeouts.total_timeout_ms - elapsed_ms;
+        error = transport.execute(attempt, sink, cancellation);
+        if (!agent::retry_allowed(
+                error, completed, output_started(), request.timeouts)) {
+            return error;
+        }
+        const std::uint32_t after_attempt_ms = monotonic_ms() - started_ms;
+        if (after_attempt_ms >= request.timeouts.total_timeout_ms ||
+            request.timeouts.total_timeout_ms - after_attempt_ms <=
+                kRetryDelayMs) {
+            return agent::Error::total_timeout;
+        }
+        if (!retry_delay(kRetryDelayMs, cancellation)) {
+            return agent::Error::cancelled;
+        }
+    }
+}
+
 agent::Error execute_buffered_with_retry(
     transport::HttpTransport &transport,
     const transport::HttpRequest &request, transport::ResponseSink &sink,
     agent::CancellationToken &cancellation) {
-    agent::Error error = agent::Error::none;
-    for (std::uint8_t completed = 1;; ++completed) {
-        error = transport.execute(request, sink, cancellation);
-        if (!agent::retry_allowed(
-                error, completed, false, request.timeouts)) {
-            return error;
-        }
-    }
+    return execute_with_retry(
+        transport, request, sink, cancellation, []() { return false; });
 }
 
 agent::Error require_network(
@@ -495,14 +548,9 @@ agent::Error OpenRouterSpeechProvider::speak(
         request.response = {
             kPcmTypes, 1, agent::Limits::max_tts_pcm_bytes};
         request.timeouts = agent::speech_policy();
-        for (std::uint8_t completed = 1;; ++completed) {
-            error = transport_.execute(request, response_sink, cancellation);
-            if (!agent::retry_allowed(
-                    error, completed, response_sink.output_started(),
-                    request.timeouts)) {
-                break;
-            }
-        }
+        error = execute_with_retry(
+            transport_, request, response_sink, cancellation,
+            [&response_sink]() { return response_sink.output_started(); });
     }
     secure_wipe(authorization.data(), authorization.size());
     secure_wipe(body.data(), body.capacity());

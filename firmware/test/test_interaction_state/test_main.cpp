@@ -86,6 +86,20 @@ void test_inactivity_handles_millisecond_wrap() {
         static_cast<int>(machine.state()));
 }
 
+void test_idle_activity_extends_the_sleep_timer() {
+    InteractionStateMachine machine;
+    machine.ready(100);
+    machine.note_idle_activity(20'000);
+    machine.tick(49'999);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(machine.state()));
+    machine.tick(50'000);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::sleep_pending),
+        static_cast<int>(machine.state()));
+}
+
 void test_busy_flow_returns_to_fresh_idle_timer() {
     InteractionStateMachine machine;
     machine.ready(0);
@@ -189,6 +203,7 @@ int main(int, char **) {
     RUN_TEST(test_release_at_hold_threshold_without_tick_requests_sleep);
     RUN_TEST(test_inactivity_sleeps_only_from_idle);
     RUN_TEST(test_inactivity_handles_millisecond_wrap);
+    RUN_TEST(test_idle_activity_extends_the_sleep_timer);
     RUN_TEST(test_busy_flow_returns_to_fresh_idle_timer);
     RUN_TEST(test_error_returns_to_idle_after_visible_period);
     RUN_TEST(test_button_hold_preempts_active_work);

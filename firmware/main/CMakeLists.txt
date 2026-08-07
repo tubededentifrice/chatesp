@@ -9,8 +9,10 @@ idf_component_register(
         "http_transport.cpp"
         "network_manager.cpp"
         "power_control.cpp"
+        "pcm_playback_sink.cpp"
         "settings_store.cpp"
         "ui.cpp"
+        "voice_runtime.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         chatesp_board

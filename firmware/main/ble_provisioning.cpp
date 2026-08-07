@@ -372,7 +372,10 @@ esp_err_t start(
         return ESP_ERR_INVALID_STATE;
     }
 
-    (void)settings_store->initialize();
+    const esp_err_t storage_result = settings_store->initialize();
+    if (storage_result != ESP_OK) {
+        return storage_result;
+    }
 #if defined(CONFIG_BT_NIMBLE_NVS_PERSIST) && CONFIG_BT_NIMBLE_NVS_PERSIST
     if (settings_store->persistence() != SettingsPersistence::encrypted_nvs) {
         return ESP_ERR_INVALID_STATE;

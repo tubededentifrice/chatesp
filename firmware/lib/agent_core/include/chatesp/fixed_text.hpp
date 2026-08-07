@@ -11,6 +11,7 @@ template <std::size_t Capacity>
 class FixedText {
 public:
     constexpr FixedText() = default;
+    ~FixedText() { clear(); }
 
     explicit FixedText(const char *text) { assign(text); }
 
@@ -62,8 +63,11 @@ public:
     }
 
     void clear() {
+        volatile char *cursor = data_.data();
+        for (std::size_t index = 0; index < data_.size(); ++index) {
+            cursor[index] = '\0';
+        }
         size_ = 0;
-        data_[0] = '\0';
     }
 
     [[nodiscard]] const char *c_str() const { return data_.data(); }
