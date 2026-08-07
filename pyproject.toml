@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Pinned host tools for ChatESP firmware development"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-  "pip==25.2",
+  "pip==26.1.2",
   "platformio==6.1.19",
 ]
 
