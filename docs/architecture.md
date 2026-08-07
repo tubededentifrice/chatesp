@@ -10,13 +10,15 @@ Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short, useful message. Sleep stays available after a
 failure.
 
-The top-button duration selects the action. A press shorter than the recording
-threshold requests sleep. A held press starts audio capture. Release ends the
-capture and submits it. The exact threshold is a tested configuration value.
+The bottom PWR-button duration selects the action. A press shorter than the
+recording threshold requests sleep. A held press cancels active work or speech
+and starts audio capture. Release ends the capture and submits it. A held wake
+continues into audio capture. The exact threshold is a tested configuration
+value.
 
 Each accepted interaction resets a 30-second monotonic inactivity timer. Chat
-messages stay in PSRAM only. PMU system-off clears the messages. A cold-boot
-wake creates a new thread.
+messages stay in PSRAM only. AXP2101 system-off clears them. A PWR-button wake
+causes a cold boot and creates a new thread.
 
 ## Modules
 
@@ -33,7 +35,8 @@ wake creates a new thread.
 - `ui`: terminal layout and state-specific motion.
 - `provisioning`: versioned BLE packets, encrypted settings, acknowledgement,
   and NVS persistence.
-- `power`: inactivity, cancel, peripheral shutdown, deep sleep, and wake reset.
+- `power`: inactivity, PWR-button input, peripheral shutdown, AXP2101
+  system-off, and cold-boot reset.
 
 ## Model contract
 

@@ -7,15 +7,30 @@ InteractionStateMachine::InteractionStateMachine(InteractionConfig config)
 
 void InteractionStateMachine::ready(std::uint32_t now_ms) {
     button_down_ = false;
+    wake_press_ = false;
     set_state(InteractionState::idle, now_ms);
     last_activity_at_ms_ = now_ms;
 }
 
 void InteractionStateMachine::button_down(std::uint32_t now_ms) {
+    if (state_ == InteractionState::sleep_pending || button_down_) {
+        return;
+    }
+    if (state_ != InteractionState::idle) {
+        set_state(InteractionState::idle, now_ms);
+    }
+    button_down_ = true;
+    wake_press_ = false;
+    button_down_at_ms_ = now_ms;
+    last_activity_at_ms_ = now_ms;
+}
+
+void InteractionStateMachine::wake_button_down(std::uint32_t now_ms) {
     if (state_ != InteractionState::idle || button_down_) {
         return;
     }
     button_down_ = true;
+    wake_press_ = true;
     button_down_at_ms_ = now_ms;
     last_activity_at_ms_ = now_ms;
 }
@@ -25,13 +40,17 @@ void InteractionStateMachine::button_up(std::uint32_t now_ms) {
         return;
     }
     button_down_ = false;
+    const bool was_wake_press = wake_press_;
+    wake_press_ = false;
     last_activity_at_ms_ = now_ms;
     if (state_ == InteractionState::recording) {
         set_state(InteractionState::transcribing, now_ms);
         return;
     }
     if (state_ == InteractionState::idle) {
-        set_state(InteractionState::sleep_pending, now_ms);
+        if (!was_wake_press) {
+            set_state(InteractionState::sleep_pending, now_ms);
+        }
     }
 }
 
@@ -85,12 +104,14 @@ void InteractionStateMachine::interaction_finished(std::uint32_t now_ms) {
 void InteractionStateMachine::fail(std::uint32_t now_ms) {
     if (state_ != InteractionState::sleep_pending) {
         button_down_ = false;
+        wake_press_ = false;
         set_state(InteractionState::error, now_ms);
     }
 }
 
 void InteractionStateMachine::cancel_for_sleep() {
     button_down_ = false;
+    wake_press_ = false;
     state_ = InteractionState::sleep_pending;
 }
 

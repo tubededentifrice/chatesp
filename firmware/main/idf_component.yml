@@ -2,8 +2,3 @@ version: "1.0.0"
 
 dependencies:
   idf: ">=5.5,<5.6"
-  waveshare/esp32_s3_touch_amoled_1_8:
-    git: https://github.com/waveshareteam/Waveshare-ESP32-components.git
-    path: bsp/esp32_s3_touch_amoled_1_8
-    version: 241f74ab98aab76eb4cea92ca47d42395b5c57a3
-    public: true

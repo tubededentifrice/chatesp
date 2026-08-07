@@ -138,45 +138,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.5.0
-  waveshare/esp32_s3_touch_amoled_1_8:
-    component_hash: 750296aff09857ea78633c18094699349d404a6cfc5ce98157f44e36c75162b2
-    dependencies:
-    - name: espressif/usb
-      public: true
-      rules:
-      - if: idf_version >=6.0
-      version: ^1.0.0
-    - name: espressif/esp_codec_dev
-      public: true
-      version: ~1.5
-    - name: espressif/esp_lcd_co5300
-      version: ^2.0.3
-    - name: espressif/esp_lcd_touch_cst816s
-      version: ^1.1.1~1
-    - name: espressif/esp_lcd_touch_ft5x06
-      version: ^1.1.0~1
-    - name: espressif/esp_lvgl_port
-      public: true
-      version: ^2
-    - name: idf
-      version: '>=5.3'
-    - name: lvgl/lvgl
-      version: '>=8,<10'
-    - name: espressif/esp_lcd_panel_io_additions
-      version: ^1
-    - name: espressif/esp_io_expander_tca9554
-      public: true
-      version: ^2
-    source:
-      git: https://github.com/waveshareteam/Waveshare-ESP32-components.git
-      path: bsp/esp32_s3_touch_amoled_1_8
-      type: git
-    targets:
-    - esp32s3
-    version: 241f74ab98aab76eb4cea92ca47d42395b5c57a3
 direct_dependencies:
+- espressif/esp_codec_dev
+- espressif/esp_io_expander_tca9554
+- espressif/esp_lcd_co5300
+- espressif/esp_lcd_panel_io_additions
+- espressif/esp_lcd_touch_cst816s
+- espressif/esp_lcd_touch_ft5x06
+- espressif/esp_lvgl_port
 - idf
-- waveshare/esp32_s3_touch_amoled_1_8
-manifest_hash: ad25de9e7bf5b9a0692840a667fb4ca8bc16f295796d0f8348ff202889402ac7
+- lvgl/lvgl
+manifest_hash: 81761f0bba6fb52089ae1c264d8765b1280af177ef81ab5a34af37eb16f93de1
 target: esp32s3
 version: 2.0.0

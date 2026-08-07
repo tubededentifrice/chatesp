@@ -1,6 +1,6 @@
 ---
 name: maintain-chatesp
-description: Maintain, extend, diagnose, or review the ChatESP firmware, iOS companion, hardware integration, secure BLE provisioning, voice pipeline, model harness, tools, tests, and build documentation. Use for work with the Waveshare ESP32-S3-Touch-AMOLED-1.8, PlatformIO or ESP-IDF, LVGL, ES8311 audio, Wi-Fi, OpenRouter, Brave Search, deep sleep, SwiftUI, Keychain, AccessorySetupKit, or Core Bluetooth in this repository.
+description: Maintain, extend, diagnose, or review the ChatESP firmware, iOS companion, hardware integration, secure BLE provisioning, voice pipeline, model harness, tools, tests, and build documentation. Use for work with the Waveshare ESP32-S3-Touch-AMOLED-1.8, PlatformIO or ESP-IDF, LVGL, ES8311 audio, Wi-Fi, OpenRouter, Brave Search, AXP2101 system-off, SwiftUI, Keychain, AccessorySetupKit, or Core Bluetooth in this repository.
 ---
 
 # Maintain ChatESP
@@ -31,14 +31,15 @@ documentation contracts consistent.
 
 ## Preserve the product invariants
 
-- Hold and release the top button for talk. Use a short idle press for sleep.
+- Hold and release the bottom PWR button for talk. Use a short idle press for
+  sleep.
 - Keep a thread only during the 30-second awake session. Clear it on sleep.
 - Keep the screen black and terminal-like. Use motion only for state feedback.
 - Keep answers concise and natural for speech.
 - Keep raw audio transient. Do not log or persist private content or secrets.
 - Keep optional network, search, image, touch, IMU, RTC, and iOS failures from
   blocking sleep or a later voice interaction.
-- Keep the second button unassigned outside clearly labeled diagnostics.
+- Keep the top BOOT button unassigned outside clearly labeled diagnostics.
 - Use authenticated encrypted BLE, Keychain, and encrypted NVS for secrets.
 - Keep packet encoding, limits, UUIDs, revision rules, fingerprint rules, and
   acknowledgements authoritative in `docs/provisioning-protocol.md`. Store

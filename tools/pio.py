@@ -27,6 +27,11 @@ def selected_environments(arguments: list[str]) -> set[str]:
     return selected
 
 
+def requires_idf_python(arguments: list[str]) -> bool:
+    selected = selected_environments(arguments)
+    return not selected or bool(selected & {"watch_dev", "watch_prod"})
+
+
 def prepare_idf_python(root: Path, core_dir: Path) -> None:
     requirements = root / "tools" / "espidf-python-requirements.txt"
     lock_digest = hashlib.sha256(requirements.read_bytes()).hexdigest()
@@ -104,7 +109,7 @@ def main() -> int:
     environment.setdefault("PLATFORMIO_CORE_DIR", str(root / ".platformio"))
     environment.setdefault("ESP_IDF_VERSION", IDF_FRAMEWORK_VERSION)
     core_dir = Path(environment["PLATFORMIO_CORE_DIR"])
-    if "watch" in selected_environments(sys.argv[1:]):
+    if requires_idf_python(sys.argv[1:]):
         prepare_idf_python(root, core_dir)
     return subprocess.run(
         [pio, *sys.argv[1:]], cwd=project, env=environment, check=False

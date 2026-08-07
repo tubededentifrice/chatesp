@@ -28,6 +28,7 @@ public:
 
     void ready(std::uint32_t now_ms);
     void button_down(std::uint32_t now_ms);
+    void wake_button_down(std::uint32_t now_ms);
     void button_up(std::uint32_t now_ms);
     void tick(std::uint32_t now_ms);
     void transcription_ready(std::uint32_t now_ms);
@@ -52,6 +53,7 @@ private:
     std::uint32_t last_activity_at_ms_ = 0;
     std::uint32_t state_entered_at_ms_ = 0;
     bool button_down_ = false;
+    bool wake_press_ = false;
 };
 
 const char *state_name(InteractionState state);

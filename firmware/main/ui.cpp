@@ -32,7 +32,7 @@ const char *hint(InteractionState state) {
         case InteractionState::speaking:
             return "PLAYING ANSWER";
         case InteractionState::error:
-            return "HOLD TO TRY AGAIN";
+            return "VOICE SERVICE IS NEXT";
         case InteractionState::sleep_pending:
             return "NEW THREAD ON WAKE";
         case InteractionState::booting:
@@ -66,16 +66,18 @@ void create_screen() {
 }  // namespace
 
 bool start() {
-    if (bsp_display_start() == nullptr) {
+    lv_display_t *display = bsp_display_start();
+    if (display == nullptr || bsp_display_backlight_off() != ESP_OK) {
         return false;
     }
-    if (bsp_display_brightness_set(65) != ESP_OK || !bsp_display_lock(1000)) {
+    if (!bsp_display_lock(1000)) {
         return false;
     }
     create_screen();
     show_state(InteractionState::booting);
+    lv_refr_now(display);
     bsp_display_unlock();
-    return true;
+    return bsp_display_brightness_set(65) == ESP_OK;
 }
 
 void show_state(InteractionState state) {
@@ -84,6 +86,18 @@ void show_state(InteractionState state) {
     }
     lv_label_set_text(status_label, state_name(state));
     lv_label_set_text(hint_label, hint(state));
+}
+
+esp_err_t sleep() { return bsp_display_backlight_off(); }
+
+esp_err_t wake(InteractionState state) {
+    if (!bsp_display_lock(1000)) {
+        return ESP_ERR_TIMEOUT;
+    }
+    show_state(state);
+    lv_refr_now(nullptr);
+    bsp_display_unlock();
+    return bsp_display_brightness_set(65);
 }
 
 }  // namespace chatesp::ui
