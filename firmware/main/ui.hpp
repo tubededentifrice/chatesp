@@ -17,6 +17,8 @@ enum class WifiIndicator : std::uint8_t {
     failed,
 };
 
+// Start the display and show the full-boot splash. Do not use this function
+// for an in-session display wake.
 bool start();
 
 // The caller must own the BSP display lock for all show functions.

@@ -706,6 +706,8 @@ private:
     }
 
     void run() {
+        // Replace the full-boot splash when this task can accept input. Do not
+        // add a splash timer because it would delay hold-to-talk.
         interaction_.ready(monotonic_ms());
         previous_state_ = interaction_.state();
         if (button_pressed_.load(std::memory_order_acquire)) {

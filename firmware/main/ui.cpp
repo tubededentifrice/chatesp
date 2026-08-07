@@ -73,6 +73,13 @@ const char *hint(InteractionState state) {
     return "";
 }
 
+const char *status(InteractionState state) {
+    if (state == InteractionState::booting) {
+        return "CHAT ESP";
+    }
+    return state_name(state);
+}
+
 void copy_bounded(
     std::string_view source,
     char *destination,
@@ -342,7 +349,7 @@ void show_state(InteractionState state) {
         state == InteractionState::sleep_pending) {
         set_content({}, kMaximumAnswerBytes);
     }
-    set_static_text(status_label, state_name(state));
+    set_static_text(status_label, status(state));
     set_static_text(hint_label, hint(state));
     show_activity(
         false);

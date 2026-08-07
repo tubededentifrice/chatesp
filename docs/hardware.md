@@ -53,14 +53,19 @@ before making a battery-life claim.
 
 The connected V2 board must pass these checks for this control change:
 
+- each cold start, software reset, or watchdog reset first shows the black
+  `CHAT ESP` and `STARTING` splash without a white frame;
+- the splash changes to `READY` as soon as the runtime can accept input, with
+  no added minimum delay;
+- an in-session display wake shows the current state and not the boot splash;
 - a held bottom PWR press shows `LISTENING`, and release shows `TRANSCRIBING`;
 - a held PWR press longer than six seconds does not stop the board during a
   recording;
 - a short PWR press from idle turns the screen off and requests system-off;
 - 30 seconds without input turns the screen off and requests system-off;
-- a held PWR-button cold start enters `LISTENING` directly;
+- a held PWR-button cold start replaces the splash with `LISTENING` at the
+  normal hold threshold;
 - the top BOOT button does not change application state;
-- cold start does not show a white frame.
 - the footer shows Wi-Fi connection state and a valid battery percentage, or a
   clear unavailable value;
 - model text grows on the display before the complete answer is available;

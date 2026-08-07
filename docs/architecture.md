@@ -6,6 +6,13 @@ The firmware uses one bounded state machine:
 
 `idle -> recording -> transcribing -> thinking -> tool work -> speaking -> idle`
 
+Each `app_main` start shows a full-boot splash with `CHAT ESP` and `STARTING`.
+Power-button setup and the initial button sample occur first. The display then
+flushes the splash while the AMOLED is off and raises the brightness only after
+the complete black frame is ready. The runtime replaces the splash as soon as
+its task and button queue can accept input. It does not use a minimum splash
+timer. An in-session display wake shows the current interaction state instead.
+
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short, useful message. Sleep stays available after a
 failure.

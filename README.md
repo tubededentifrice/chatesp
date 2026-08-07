@@ -19,6 +19,10 @@ The interface is black, high-contrast, and similar to a small terminal. The
 bottom line shows Wi-Fi state and battery level. Status motion has a purpose:
 recording level, network work, tool work, or speech.
 
+Each full power-on or reset shows `CHAT ESP` and `STARTING` as soon as the
+display is ready. The splash stays on only while the voice runtime starts. An
+in-session display wake does not show the splash.
+
 ## Cloud defaults
 
 - Chat: `deepseek/deepseek-v4-flash` through OpenRouter.
