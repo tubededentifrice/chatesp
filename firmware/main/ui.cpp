@@ -1,5 +1,7 @@
 #include "ui.hpp"
 
+#include <algorithm>
+
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
 
@@ -8,6 +10,7 @@ namespace {
 
 lv_obj_t *status_label = nullptr;
 lv_obj_t *hint_label = nullptr;
+lv_obj_t *level_bar = nullptr;
 
 lv_obj_t *active_screen() {
 #if LVGL_VERSION_MAJOR >= 9
@@ -61,6 +64,19 @@ void create_screen() {
     lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(hint_label, 1, LV_PART_MAIN);
     lv_obj_align(hint_label, LV_ALIGN_TOP_LEFT, 16, 142);
+
+    level_bar = lv_bar_create(screen);
+    lv_obj_set_size(level_bar, 336, 3);
+    lv_obj_align(level_bar, LV_ALIGN_TOP_LEFT, 16, 176);
+    lv_obj_set_style_bg_color(
+        level_bar, lv_color_hex(0x202020), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(level_bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(
+        level_bar, lv_color_hex(0xffffff), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(level_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_bar_set_range(level_bar, 0, 100);
+    lv_bar_set_value(level_bar, 0, LV_ANIM_OFF);
+    lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
 }
 
 }  // namespace
@@ -86,6 +102,22 @@ void show_state(InteractionState state) {
     }
     lv_label_set_text(status_label, state_name(state));
     lv_label_set_text(hint_label, hint(state));
+    if (level_bar != nullptr) {
+        if (state == InteractionState::recording) {
+            lv_bar_set_value(level_bar, 0, LV_ANIM_OFF);
+            lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void show_recording_level(std::uint8_t percent) {
+    if (level_bar == nullptr) {
+        return;
+    }
+    lv_bar_set_value(
+        level_bar, std::min<int>(percent, 100), LV_ANIM_ON);
 }
 
 esp_err_t sleep() { return bsp_display_backlight_off(); }

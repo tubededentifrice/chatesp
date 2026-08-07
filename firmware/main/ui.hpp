@@ -7,6 +7,7 @@ namespace chatesp::ui {
 
 bool start();
 void show_state(InteractionState state);
+void show_recording_level(std::uint8_t percent);
 esp_err_t sleep();
 esp_err_t wake(InteractionState state);
 

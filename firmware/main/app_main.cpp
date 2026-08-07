@@ -1,6 +1,10 @@
+#include <cstddef>
 #include <cstdint>
 
+#include "audio_capture.hpp"
+#include "audio_playback.hpp"
 #include "bsp/esp-bsp.h"
+#include "chatesp/audio_level.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -13,6 +17,7 @@ namespace {
 
 constexpr char kTag[] = "chatesp";
 constexpr std::uint32_t kVoicePlaceholderMs = 800;
+constexpr std::uint32_t kLevelRefreshMs = 80;
 
 #ifndef CHATESP_DEVELOPMENT_MODE
 #define CHATESP_DEVELOPMENT_MODE 0
@@ -33,6 +38,8 @@ extern "C" void app_main() {
         kDevelopmentMode ? "development" : "production");
 
     chatesp::InteractionStateMachine interaction;
+    chatesp::AudioCapture audio_capture;
+    chatesp::AudioPlayback audio_playback;
     if (chatesp::power::initialize() != ESP_OK) {
         ESP_LOGE(kTag, "Power button start failed");
         return;
@@ -60,6 +67,7 @@ extern "C" void app_main() {
 
     chatesp::InteractionState previous = interaction.state();
     std::uint32_t transcribing_at_ms = 0;
+    std::uint32_t level_refreshed_at_ms = 0;
     while (true) {
         const std::uint32_t now_ms = monotonic_ms();
         chatesp::ButtonEdges edges;
@@ -67,6 +75,12 @@ extern "C" void app_main() {
             interaction.fail(now_ms);
         } else {
             if (edges.pressed) {
+                audio_playback.cancel();
+                audio_playback.stop();
+                if (!audio_capture.active() &&
+                    audio_capture.samples() != nullptr) {
+                    audio_capture.discard();
+                }
                 interaction.button_down(now_ms);
             }
             if (edges.released) {
@@ -74,6 +88,24 @@ extern "C" void app_main() {
             }
         }
         interaction.tick(now_ms);
+        if (interaction.state() == chatesp::InteractionState::recording &&
+            audio_capture.active()) {
+            const esp_err_t capture_result = audio_capture.capture_chunk();
+            if (capture_result != ESP_OK) {
+                audio_capture.discard();
+                interaction.fail(monotonic_ms());
+            } else if (now_ms - level_refreshed_at_ms >= kLevelRefreshMs) {
+                level_refreshed_at_ms = now_ms;
+                if (bsp_display_lock(20)) {
+                    chatesp::ui::show_recording_level(
+                        chatesp::pcm_peak_percent(
+                            audio_capture.samples(),
+                            audio_capture.sample_count(),
+                            chatesp::AudioCapture::kChunkSamples));
+                    bsp_display_unlock();
+                }
+            }
+        }
         if (kDevelopmentMode &&
             interaction.state() == chatesp::InteractionState::sleep_pending) {
             interaction.ready(now_ms);
@@ -82,9 +114,11 @@ extern "C" void app_main() {
         if (previous == chatesp::InteractionState::transcribing &&
             interaction.state() == chatesp::InteractionState::transcribing &&
             now_ms - transcribing_at_ms >= kVoicePlaceholderMs) {
+            audio_capture.discard();
             interaction.fail(now_ms);
         }
         if (interaction.state() != previous) {
+            const chatesp::InteractionState prior = previous;
             previous = interaction.state();
             ESP_LOGI(kTag, "State: %s", chatesp::state_name(previous));
             if (bsp_display_lock(100)) {
@@ -94,7 +128,34 @@ extern "C" void app_main() {
             if (previous == chatesp::InteractionState::transcribing) {
                 transcribing_at_ms = now_ms;
             }
+            if (previous == chatesp::InteractionState::recording) {
+                if (audio_capture.start() != ESP_OK) {
+                    interaction.fail(now_ms);
+                    previous = interaction.state();
+                    if (bsp_display_lock(100)) {
+                        chatesp::ui::show_state(previous);
+                        bsp_display_unlock();
+                    }
+                } else {
+                    level_refreshed_at_ms = now_ms;
+                }
+            } else if (prior == chatesp::InteractionState::recording) {
+                const esp_err_t stop_result = audio_capture.stop();
+                if (stop_result != ESP_OK) {
+                    audio_capture.discard();
+                    interaction.fail(now_ms);
+                    previous = interaction.state();
+                    ESP_LOGE(kTag, "Microphone stop failed");
+                    if (bsp_display_lock(100)) {
+                        chatesp::ui::show_state(previous);
+                        bsp_display_unlock();
+                    }
+                }
+            }
             if (previous == chatesp::InteractionState::sleep_pending) {
+                audio_playback.cancel();
+                audio_playback.stop();
+                audio_capture.discard();
                 vTaskDelay(pdMS_TO_TICKS(250));
                 esp_err_t result = chatesp::ui::sleep();
                 if (result == ESP_OK) {
