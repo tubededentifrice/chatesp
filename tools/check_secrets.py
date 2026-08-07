@@ -78,7 +78,21 @@ def candidate_blobs(root: Path) -> list[Candidate]:
             check=True,
             capture_output=True,
         )
-        candidates.append(Candidate(relative, result.stdout))
+        index_data = result.stdout
+        candidates.append(Candidate(relative, index_data))
+
+        # Inspect unstaged edits too. The index is the commit candidate, but
+        # this check normally runs before staging and must not miss a secret
+        # in a modified tracked file.
+        path = root / relative
+        if os.path.lexists(path):
+            worktree_data = (
+                os.fsencode(os.readlink(path))
+                if path.is_symlink()
+                else path.read_bytes()
+            )
+            if worktree_data != index_data:
+                candidates.append(Candidate(relative, worktree_data))
 
     for relative in git_names(
         root, ["ls-files", "--others", "--exclude-standard"]

@@ -50,11 +50,17 @@ struct RequestPolicy {
     std::uint8_t max_attempts = 2;
 };
 
-constexpr RequestPolicy chat_policy() { return {}; }
-constexpr RequestPolicy transcription_policy() { return {}; }
-constexpr RequestPolicy speech_policy() { return {}; }
+constexpr RequestPolicy chat_policy() {
+    return {20'000, 30'000, 15'000, 75'000, 2};
+}
+constexpr RequestPolicy transcription_policy() {
+    return {20'000, 30'000, 15'000, 75'000, 2};
+}
+constexpr RequestPolicy speech_policy() {
+    return {20'000, 40'000, 25'000, 90'000, 2};
+}
 constexpr RequestPolicy search_policy() {
-    return {5'000, 8'000, 5'000, 10'000, 2};
+    return {10'000, 12'000, 8'000, 20'000, 2};
 }
 constexpr RequestPolicy image_fetch_policy() {
     return {5'000, 8'000, 5'000, 20'000, 2};

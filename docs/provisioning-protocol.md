@@ -134,6 +134,9 @@ writes the changed settings and metadata to encrypted NVS as one logical
 transaction. It must verify durable storage before it sends `applied`. A repeat
 with the same revision and fingerprint sends `unchanged` and causes no NVS
 write. A validation or storage error must not make a partial setting set active.
+The production profile uses the ESP32-S3 HMAC NVS security provider. ESP-IDF
+creates or reads its HMAC security configuration before BLE provisioning can
+start. The development profile does not claim durable provisioning.
 
 ## Application acknowledgement
 

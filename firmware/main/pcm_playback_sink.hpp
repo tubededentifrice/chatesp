@@ -24,7 +24,7 @@ public:
     agent::Error finish() override;
 
     // This operation is safe from the button task.
-    void cancel();
+    void cancel() override;
     // Call this operation only from the playback owner task.
     agent::Error cancel_and_stop();
 

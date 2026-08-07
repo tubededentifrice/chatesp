@@ -8,6 +8,8 @@ Error AgentLoop::run(
     FixedText<Limits::max_answer_bytes> &answer,
     CancellationToken &cancellation) {
     answer.clear();
+    turn_.clear();
+    tool_result_.clear();
     answer_pending_speech_ = false;
     if (user_text == nullptr || size == 0 ||
         size > Limits::max_transcript_bytes) {
@@ -24,6 +26,8 @@ Error AgentLoop::run(
     history_.make_room_for_turn();
     const std::size_t checkpoint = history_.size();
     const auto fail = [this, checkpoint](Error failure) {
+        turn_.clear();
+        tool_result_.clear();
         history_.truncate(checkpoint);
         return failure;
     };
@@ -40,20 +44,25 @@ Error AgentLoop::run(
         if (cancellation.cancelled()) {
             return fail(Error::cancelled);
         }
-        ChatTurn turn;
-        error = chat_.complete(history_, turn, cancellation);
+        turn_.clear();
+        NullChatTextSink null_text_sink;
+        ChatTextSink &text_sink =
+            text_sink_ == nullptr ? static_cast<ChatTextSink &>(null_text_sink)
+                                  : *text_sink_;
+        error = chat_.complete_streaming(
+            history_, turn_, text_sink, cancellation);
         if (error != Error::none) {
             return fail(error);
         }
         if (cancellation.cancelled()) {
             return fail(Error::cancelled);
         }
-        if (turn.kind == ChatTurnKind::answer) {
-            if (turn.answer.empty()) {
+        if (turn_.kind == ChatTurnKind::answer) {
+            if (turn_.answer.empty()) {
                 return fail(Error::malformed_response);
             }
             error = history_.append_text(
-                MessageRole::assistant, turn.answer.data(), turn.answer.size());
+                MessageRole::assistant, turn_.answer.data(), turn_.answer.size());
             if (error != Error::none) {
                 return fail(error);
             }
@@ -61,7 +70,9 @@ Error AgentLoop::run(
             if (cancellation.cancelled()) {
                 return fail(Error::cancelled);
             }
-            answer = turn.answer;
+            answer = turn_.answer;
+            turn_.clear();
+            tool_result_.clear();
             answer_pending_speech_ = true;
             return Error::none;
         }
@@ -69,25 +80,27 @@ Error AgentLoop::run(
             return fail(Error::limit_exceeded);
         }
 
-        error = history_.append_tool_call(turn.tool_call);
+        error = history_.append_tool_call(turn_.tool_call);
         if (error != Error::none) {
             return fail(error);
         }
-        FixedText<Limits::max_tool_result_bytes> result;
+        tool_result_.clear();
         notify(AgentProgressEvent::tool_start);
         if (cancellation.cancelled()) {
             return fail(Error::cancelled);
         }
-        error = tools_.execute(turn.tool_call, result, cancellation);
+        error = tools_.execute(
+            turn_.tool_call, tool_result_, cancellation);
         if (error == Error::cancelled || cancellation.cancelled()) {
             return fail(Error::cancelled);
         }
         if (error != Error::none &&
-            !result.assign("{\"error\":\"Tool is unavailable.\"}")) {
+            !tool_result_.assign(
+                "{\"error\":\"requested_data_temporarily_unavailable\"}")) {
             return fail(Error::limit_exceeded);
         }
         error = history_.append_tool_result(
-            turn.tool_call, result.data(), result.size());
+            turn_.tool_call, tool_result_.data(), tool_result_.size());
         if (error != Error::none) {
             return fail(error);
         }

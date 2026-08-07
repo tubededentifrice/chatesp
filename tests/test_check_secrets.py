@@ -78,6 +78,18 @@ class SecretScanTests(unittest.TestCase):
             findings = scan_candidates(candidate_blobs(root))
             self.assertEqual("OpenRouter API key", findings[0].reason)
 
+    def test_reads_unstaged_tracked_content_from_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            path = root / "config.txt"
+            path.write_text("safe index value")
+            subprocess.run(["git", "add", "config.txt"], cwd=root, check=True)
+            key = "sk-or-v1-" + "x" * 48
+            path.write_text(key)
+            findings = scan_candidates(candidate_blobs(root))
+            self.assertEqual("OpenRouter API key", findings[0].reason)
+
 
 if __name__ == "__main__":
     unittest.main()

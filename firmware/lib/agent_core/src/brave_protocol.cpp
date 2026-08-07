@@ -228,7 +228,7 @@ Error build_brave_image_search_target(
 
 Error parse_brave_web_response(
     const char *json, std::size_t size, WebResults &results) {
-    results = {};
+    results.clear();
     if (json == nullptr || size == 0 || size > Limits::max_web_response_bytes) {
         return Error::limit_exceeded;
     }
@@ -256,7 +256,7 @@ Error parse_brave_web_response(
 
 Error parse_brave_image_response(
     const char *json, std::size_t size, ImageResults &results) {
-    results = {};
+    results.clear();
     if (json == nullptr || size == 0 ||
         size > Limits::max_image_search_response_bytes) {
         return Error::limit_exceeded;

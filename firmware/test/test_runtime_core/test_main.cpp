@@ -5,7 +5,9 @@
 
 #include <unity.h>
 
+#include "chatesp/byte_ring.hpp"
 #include "chatesp/pcm16_stream.hpp"
+#include "chatesp/pcm_start_policy.hpp"
 #include "chatesp/runtime_control.hpp"
 
 namespace {
@@ -134,6 +136,141 @@ void test_stream_validates_input_and_keeps_output_failure() {
         static_cast<int>(stream.finish()));
 }
 
+void test_byte_ring_wraps_and_wipes_consumed_bytes() {
+    std::array<std::uint8_t, 8> storage{};
+    chatesp::runtime::ByteRing ring;
+    TEST_ASSERT_TRUE(ring.reset(storage.data(), storage.size()));
+
+    const std::uint8_t first[] = {1, 2, 3, 4, 5, 6};
+    TEST_ASSERT_EQUAL_size_t(
+        sizeof(first), ring.write(first, sizeof(first)));
+    std::array<std::uint8_t, 4> output{};
+    TEST_ASSERT_EQUAL_size_t(
+        output.size(), ring.read(output.data(), output.size()));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(first, output.data(), output.size());
+    TEST_ASSERT_EQUAL_UINT8(0, storage[0]);
+    TEST_ASSERT_EQUAL_UINT8(0, storage[3]);
+
+    const std::uint8_t second[] = {7, 8, 9, 10, 11, 12};
+    TEST_ASSERT_EQUAL_size_t(
+        sizeof(second), ring.write(second, sizeof(second)));
+    TEST_ASSERT_EQUAL_size_t(storage.size(), ring.size());
+    std::array<std::uint8_t, 8> wrapped{};
+    TEST_ASSERT_EQUAL_size_t(
+        wrapped.size(), ring.read(wrapped.data(), wrapped.size()));
+    const std::uint8_t expected[] = {5, 6, 7, 8, 9, 10, 11, 12};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, wrapped.data(), wrapped.size());
+    for (std::uint8_t value : storage) {
+        TEST_ASSERT_EQUAL_UINT8(0, value);
+    }
+}
+
+void test_byte_ring_bounds_writes_and_discards_private_data() {
+    std::array<std::uint8_t, 4> storage{};
+    chatesp::runtime::ByteRing ring;
+    TEST_ASSERT_FALSE(ring.reset(nullptr, storage.size()));
+    TEST_ASSERT_TRUE(ring.reset(storage.data(), storage.size()));
+    const std::uint8_t input[] = {1, 2, 3, 4, 5};
+    TEST_ASSERT_EQUAL_size_t(
+        storage.size(), ring.write(input, sizeof(input)));
+    TEST_ASSERT_EQUAL_size_t(0, ring.free_size());
+    ring.discard();
+    TEST_ASSERT_EQUAL_size_t(0, ring.size());
+    TEST_ASSERT_EQUAL_size_t(storage.size(), ring.free_size());
+    for (std::uint8_t value : storage) {
+        TEST_ASSERT_EQUAL_UINT8(0, value);
+    }
+}
+
+void test_byte_ring_does_not_write_outside_its_storage() {
+    std::array<std::uint8_t, 10> guarded{};
+    guarded.front() = 0xA5;
+    guarded.back() = 0x5A;
+    chatesp::runtime::ByteRing ring;
+    TEST_ASSERT_TRUE(ring.reset(guarded.data() + 1, guarded.size() - 2));
+
+    const std::uint8_t first[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    TEST_ASSERT_EQUAL_size_t(8, ring.write(first, sizeof(first)));
+    std::array<std::uint8_t, 5> output{};
+    TEST_ASSERT_EQUAL_size_t(
+        output.size(), ring.read(output.data(), output.size()));
+    const std::uint8_t second[] = {10, 11, 12, 13, 14, 15};
+    TEST_ASSERT_EQUAL_size_t(5, ring.write(second, sizeof(second)));
+    ring.discard();
+
+    TEST_ASSERT_EQUAL_HEX8(0xA5, guarded.front());
+    TEST_ASSERT_EQUAL_HEX8(0x5A, guarded.back());
+}
+
+void test_pcm_start_policy_waits_for_its_prebuffer() {
+    chatesp::runtime::AdaptivePcmStartPolicy policy;
+    policy.observe(2'048, 1'000);
+    policy.observe(9'599, 1'100);
+
+    TEST_ASSERT_FALSE(policy.decided());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::PcmStartDecision::wait),
+        static_cast<int>(policy.decision(false)));
+}
+
+void test_pcm_start_policy_streams_only_with_safe_headroom() {
+    chatesp::runtime::AdaptivePcmStartPolicy fast;
+    fast.observe(2'048, 1'000);
+    fast.observe(9'600, 1'100);
+    TEST_ASSERT_TRUE(fast.decided());
+    TEST_ASSERT_TRUE(fast.streams_early());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::PcmStartDecision::stream_now),
+        static_cast<int>(fast.decision(false)));
+
+    chatesp::runtime::AdaptivePcmStartPolicy playback_rate;
+    playback_rate.observe(2'048, 2'000);
+    playback_rate.observe(9'600, 2'200);
+    TEST_ASSERT_TRUE(playback_rate.decided());
+    TEST_ASSERT_FALSE(playback_rate.streams_early());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::PcmStartDecision::wait),
+        static_cast<int>(playback_rate.decision(false)));
+
+    chatesp::runtime::AdaptivePcmStartPolicy below_headroom;
+    below_headroom.observe(2'048, 3'000);
+    below_headroom.observe(9'600, 3'134);
+    TEST_ASSERT_FALSE(below_headroom.streams_early());
+
+    chatesp::runtime::AdaptivePcmStartPolicy above_headroom;
+    above_headroom.observe(2'048, 4'000);
+    above_headroom.observe(9'600, 4'133);
+    TEST_ASSERT_TRUE(above_headroom.streams_early());
+}
+
+void test_pcm_start_policy_keeps_a_slow_decision_until_complete() {
+    chatesp::runtime::AdaptivePcmStartPolicy policy;
+    policy.observe(2'048, 1'000);
+    policy.observe(9'600, 2'000);
+    policy.observe(100'000, 2'001);
+
+    TEST_ASSERT_FALSE(policy.streams_early());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::PcmStartDecision::wait),
+        static_cast<int>(policy.decision(false)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            chatesp::runtime::PcmStartDecision::start_complete),
+        static_cast<int>(policy.decision(true)));
+}
+
+void test_pcm_start_policy_handles_millisecond_wrap() {
+    chatesp::runtime::AdaptivePcmStartPolicy policy;
+    policy.observe(
+        2'048, std::numeric_limits<std::uint32_t>::max() - 49);
+    policy.observe(9'600, 50);
+
+    TEST_ASSERT_TRUE(policy.streams_early());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::PcmStartDecision::stream_now),
+        static_cast<int>(policy.decision(false)));
+}
+
 void test_poweroff_gate_routes_a_cold_wake_press() {
     chatesp::runtime::PoweroffGate gate;
     gate.begin_sleep();
@@ -187,6 +324,13 @@ int main(int, char **) {
     RUN_TEST(test_stream_rejects_an_incomplete_final_sample);
     RUN_TEST(test_stream_bounds_each_output_chunk);
     RUN_TEST(test_stream_validates_input_and_keeps_output_failure);
+    RUN_TEST(test_byte_ring_wraps_and_wipes_consumed_bytes);
+    RUN_TEST(test_byte_ring_bounds_writes_and_discards_private_data);
+    RUN_TEST(test_byte_ring_does_not_write_outside_its_storage);
+    RUN_TEST(test_pcm_start_policy_waits_for_its_prebuffer);
+    RUN_TEST(test_pcm_start_policy_streams_only_with_safe_headroom);
+    RUN_TEST(test_pcm_start_policy_keeps_a_slow_decision_until_complete);
+    RUN_TEST(test_pcm_start_policy_handles_millisecond_wrap);
     RUN_TEST(test_poweroff_gate_routes_a_cold_wake_press);
     RUN_TEST(test_poweroff_gate_cancels_a_sleep_boundary);
     RUN_TEST(test_poweroff_gate_keeps_development_sleep_out_of_poweroff);

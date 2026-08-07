@@ -51,8 +51,9 @@ Some files can be absent during initial setup. Read them when they exist.
   current display start supports V2 only. Keep an original-board SH8601 path in
   the board adapter. Do not copy pin values into many modules.
 - The display is 368 by 448. The original board uses SH8601 and FT3168. The V2
-  board uses CO5300 and CST820. Detect the revision in the board adapter. Use
-  the BSP hardware helpers after detection.
+  board uses CO5300 and CST820. The ESP-IDF component uses its compatible
+  CST816S driver-family API. Detect the revision in the board adapter. Use the
+  BSP hardware helpers after detection.
 - The board has an ES8311 audio codec, QMI8658 IMU, AXP2101 PMU, PCF85063A RTC,
   16 MB flash, and 8 MB PSRAM.
 - Use bounded network operations. One failed optional service must not block
@@ -66,6 +67,9 @@ Some files can be absent during initial setup. Read them when they exist.
   secrets in that record.
 - Never put API keys, Wi-Fi credentials, Apple team IDs, personal paths, names,
   email addresses, device identifiers, or signing data in tracked files.
+- Do not upload `watch_prod` unless the user approves the first-start HMAC
+  eFuse operation. The PlatformIO wrapper must block an unapproved production
+  upload. A production build does not need this approval.
 
 ## Tooling and dependency policy
 

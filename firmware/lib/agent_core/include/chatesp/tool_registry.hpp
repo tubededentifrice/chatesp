@@ -52,6 +52,8 @@ public:
 
 private:
     WebSearchProvider &provider_;
+    WebResults results_{};
+    FixedText<Limits::max_tool_result_bytes> item_scratch_;
 };
 
 class SearchImagesTool final : public Tool {
@@ -69,11 +71,18 @@ public:
     [[nodiscard]] const ImageResults &last_results() const {
         return last_results_;
     }
-    void clear_results() { last_results_ = {}; }
+    [[nodiscard]] bool take_selected(ImageResult &result);
+    [[nodiscard]] bool take_selected_or_first(ImageResult &result);
+    [[nodiscard]] bool has_pending_image() const;
+    void clear_results();
 
 private:
     ImageSearchProvider &provider_;
     ImageResults last_results_{};
+    ImageResult selected_result_{};
+    FixedText<Limits::max_tool_result_bytes> item_scratch_;
+    bool selection_ready_ = false;
+    bool fallback_ready_ = false;
 };
 
 }  // namespace agent

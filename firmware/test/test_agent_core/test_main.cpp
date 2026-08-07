@@ -38,6 +38,25 @@ public:
     }
 };
 
+class ChatTextRecorder final : public ChatTextSink {
+public:
+    std::array<FixedText<Limits::max_answer_bytes>, 4> updates{};
+    std::size_t size = 0;
+    TestCancellation *cancellation = nullptr;
+
+    Error write_chat_text(const char *text, std::size_t text_size) override {
+        if (size >= updates.size() ||
+            !updates[size].assign(text, text_size)) {
+            return Error::limit_exceeded;
+        }
+        ++size;
+        if (cancellation != nullptr) {
+            cancellation->value = true;
+        }
+        return Error::none;
+    }
+};
+
 class EchoTool final : public Tool {
 public:
     int calls = 0;
@@ -108,15 +127,49 @@ public:
 
 class TestImageSearch final : public ImageSearchProvider {
 public:
+    int calls = 0;
+
     Error search(
-        const char *, std::size_t, ImageResults &results,
+        const char *query, std::size_t size, ImageResults &results,
         CancellationToken &) override {
+        ++calls;
+        if (size != 5 || std::memcmp(query, "Dubai", 5) != 0) {
+            return Error::invalid_argument;
+        }
         results.size = 1;
         results.items[0].id.assign("img0");
         results.items[0].title.assign("A result");
         results.items[0].page_url.assign("https://example.test/page");
         results.items[0].thumbnail_url.assign("https://example.test/thumb.jpg");
         results.items[0].image_url.assign("https://example.test/full.jpg");
+        return Error::none;
+    }
+};
+
+class ImageSelectionChat final : public ChatProvider {
+public:
+    int calls = 0;
+
+    Error complete(
+        const ConversationHistory &, ChatTurn &turn,
+        CancellationToken &) override {
+        ++calls;
+        if (calls == 1) {
+            turn.kind = ChatTurnKind::tool_call;
+            turn.tool_call.id.assign("call_1");
+            turn.tool_call.name.assign("search_images");
+            turn.tool_call.arguments.assign("{\"query\":\"Dubai\"}");
+            return Error::none;
+        }
+        if (calls == 2) {
+            turn.kind = ChatTurnKind::tool_call;
+            turn.tool_call.id.assign("call_2");
+            turn.tool_call.name.assign("search_images");
+            turn.tool_call.arguments.assign("{\"select\":\"img0\"}");
+            return Error::none;
+        }
+        turn.kind = ChatTurnKind::answer;
+        turn.answer.assign("Here is the image.");
         return Error::none;
     }
 };
@@ -141,6 +194,11 @@ void test_fixed_text_stops_at_capacity() {
 void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "one to three short"));
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "Write for speech"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "select one current"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "Never select a URL"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "Reply in English"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(system_prompt, "Never claim that search is unsupported"));
     TEST_ASSERT_NULL(std::strstr(system_prompt, "chain of thought"));
 }
 
@@ -246,7 +304,7 @@ void test_agent_loop_gives_model_a_sanitized_tool_error() {
     assert_error(
         Error::none, loop.run("Question", 8, answer, cancellation));
     TEST_ASSERT_EQUAL_STRING(
-        "{\"error\":\"Tool is unavailable.\"}",
+        "{\"error\":\"requested_data_temporarily_unavailable\"}",
         loop.history().at(2).content.c_str());
 }
 
@@ -338,6 +396,42 @@ void test_agent_loop_cancels_before_a_reported_tool_starts() {
         static_cast<int>(progress.events[2]));
 }
 
+void test_agent_loop_nonstream_provider_publishes_only_final_answer() {
+    EchoTool tool;
+    ToolRegistry registry;
+    registry.add(tool);
+    SequenceChat chat;
+    chat.tool_turns = 1;
+    ChatTextRecorder text;
+    AgentLoop loop(chat, registry, nullptr, &text);
+    FixedText<Limits::max_answer_bytes> answer;
+    TestCancellation cancellation;
+
+    assert_error(
+        Error::none, loop.run("Question", 8, answer, cancellation));
+    TEST_ASSERT_EQUAL_UINT32(1, text.size);
+    TEST_ASSERT_EQUAL_STRING("A short answer.", text.updates[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("A short answer.", answer.c_str());
+}
+
+void test_agent_loop_rolls_back_when_text_callback_cancels() {
+    EchoTool tool;
+    ToolRegistry registry;
+    registry.add(tool);
+    SequenceChat chat;
+    ChatTextRecorder text;
+    TestCancellation cancellation;
+    text.cancellation = &cancellation;
+    AgentLoop loop(chat, registry, nullptr, &text);
+    FixedText<Limits::max_answer_bytes> answer;
+
+    assert_error(
+        Error::cancelled, loop.run("Question", 8, answer, cancellation));
+    TEST_ASSERT_EQUAL_UINT32(1, text.size);
+    TEST_ASSERT_EQUAL_UINT32(0, loop.history().size());
+    TEST_ASSERT_TRUE(answer.empty());
+}
+
 void test_search_tools_validate_query_and_bound_result() {
     TestCancellation cancellation;
     TestWebSearch web_provider;
@@ -359,10 +453,131 @@ void test_search_tools_validate_query_and_bound_result() {
     assert_error(
         Error::none,
         image_tool.execute(args, sizeof(args) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, image_provider.calls);
     TEST_ASSERT_EQUAL_UINT32(1, image_tool.last_results().size);
     TEST_ASSERT_NOT_NULL(std::strstr(result.c_str(), "thumbnail_url"));
     image_tool.clear_results();
     TEST_ASSERT_EQUAL_UINT32(0, image_tool.last_results().size);
+}
+
+void test_image_tool_selects_only_a_current_result_id_once() {
+    TestCancellation cancellation;
+    TestImageSearch provider;
+    SearchImagesTool tool(provider);
+    FixedText<Limits::max_tool_result_bytes> result;
+    const char query[] = "{\"query\":\"Dubai\"}";
+    assert_error(
+        Error::none,
+        tool.execute(query, sizeof(query) - 1, result, cancellation));
+
+    result.clear();
+    const char url_selection[] =
+        "{\"select\":\"https://example.test/full.jpg\"}";
+    assert_error(
+        Error::invalid_argument,
+        tool.execute(
+            url_selection, sizeof(url_selection) - 1, result, cancellation));
+    const char both[] = "{\"query\":\"Dubai\",\"select\":\"img0\"}";
+    assert_error(
+        Error::invalid_argument,
+        tool.execute(both, sizeof(both) - 1, result, cancellation));
+
+    const char selection[] = "{\"select\":\"img0\"}";
+    while (result.push_back('x')) {
+    }
+    assert_error(
+        Error::limit_exceeded,
+        tool.execute(
+            selection, sizeof(selection) - 1, result, cancellation));
+    ImageResult selected;
+    TEST_ASSERT_FALSE(tool.take_selected(selected));
+
+    result.clear();
+    assert_error(
+        Error::none,
+        tool.execute(
+            selection, sizeof(selection) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_STRING("{\"selected\":\"img0\"}", result.c_str());
+    TEST_ASSERT_NULL(std::strstr(result.c_str(), "https://"));
+
+    TEST_ASSERT_TRUE(tool.take_selected(selected));
+    TEST_ASSERT_EQUAL_STRING("img0", selected.id.c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "https://example.test/full.jpg", selected.image_url.c_str());
+    TEST_ASSERT_FALSE(tool.take_selected(selected));
+    TEST_ASSERT_TRUE(selected.id.empty());
+}
+
+void test_image_tool_clears_selection_on_search_and_clear() {
+    TestCancellation cancellation;
+    TestImageSearch provider;
+    SearchImagesTool tool(provider);
+    FixedText<Limits::max_tool_result_bytes> result;
+    const char query[] = "{\"query\":\"Dubai\"}";
+    const char selection[] = "{\"select\":\"img0\"}";
+    ImageResult selected;
+
+    assert_error(
+        Error::none,
+        tool.execute(query, sizeof(query) - 1, result, cancellation));
+    result.clear();
+    assert_error(
+        Error::none,
+        tool.execute(
+            selection, sizeof(selection) - 1, result, cancellation));
+    result.clear();
+    assert_error(
+        Error::none,
+        tool.execute(query, sizeof(query) - 1, result, cancellation));
+    TEST_ASSERT_FALSE(tool.take_selected(selected));
+
+    result.clear();
+    assert_error(
+        Error::none,
+        tool.execute(
+            selection, sizeof(selection) - 1, result, cancellation));
+    tool.clear_results();
+    TEST_ASSERT_FALSE(tool.take_selected(selected));
+    TEST_ASSERT_EQUAL_UINT32(0, tool.last_results().size);
+}
+
+void test_image_tool_can_use_one_fallback_after_a_search() {
+    TestCancellation cancellation;
+    TestImageSearch provider;
+    SearchImagesTool tool(provider);
+    FixedText<Limits::max_tool_result_bytes> result;
+    const char query[] = "{\"query\":\"Dubai\"}";
+    ImageResult selected;
+
+    assert_error(
+        Error::none,
+        tool.execute(query, sizeof(query) - 1, result, cancellation));
+    TEST_ASSERT_TRUE(tool.take_selected_or_first(selected));
+    TEST_ASSERT_EQUAL_STRING("img0", selected.id.c_str());
+    TEST_ASSERT_FALSE(tool.take_selected_or_first(selected));
+    TEST_ASSERT_TRUE(selected.id.empty());
+}
+
+void test_agent_loop_searches_selects_and_then_answers() {
+    TestImageSearch provider;
+    SearchImagesTool tool(provider);
+    ToolRegistry registry;
+    assert_error(Error::none, registry.add(tool));
+    ImageSelectionChat chat;
+    AgentLoop loop(chat, registry);
+    FixedText<Limits::max_answer_bytes> answer;
+    TestCancellation cancellation;
+
+    assert_error(
+        Error::none, loop.run("Show Dubai", 10, answer, cancellation));
+    TEST_ASSERT_EQUAL_STRING("Here is the image.", answer.c_str());
+    TEST_ASSERT_EQUAL_INT(3, chat.calls);
+    TEST_ASSERT_EQUAL_INT(1, provider.calls);
+    TEST_ASSERT_EQUAL_UINT32(6, loop.history().size());
+
+    ImageResult selected;
+    TEST_ASSERT_TRUE(tool.take_selected(selected));
+    TEST_ASSERT_EQUAL_STRING("img0", selected.id.c_str());
 }
 
 void test_openrouter_chat_builder_has_bounded_contract() {
@@ -436,6 +651,73 @@ void test_openrouter_sse_parser_handles_split_input_and_comments() {
     assert_error(Error::none, parser.finish());
     TEST_ASSERT_TRUE(parser.done());
     TEST_ASSERT_EQUAL_STRING("Hello watch.", parser.turn().answer.c_str());
+}
+
+void test_openrouter_sse_publishes_cumulative_complete_lines() {
+    ChatTextRecorder text;
+    OpenRouterSseParser parser(&text);
+    const char first[] =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"},"
+        "\"finish_reason\":null}]}";
+    assert_error(Error::none, parser.feed(first, sizeof(first) - 1));
+    TEST_ASSERT_EQUAL_UINT32(0, text.size);
+    assert_error(Error::none, parser.feed("\n\n", 2));
+    TEST_ASSERT_EQUAL_UINT32(1, text.size);
+    TEST_ASSERT_EQUAL_STRING("Hello ", text.updates[0].c_str());
+
+    const char final[] =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"watch.\"},"
+        "\"finish_reason\":\"stop\"}]}\n\n"
+        "data: [DONE]\n\n";
+    assert_error(Error::none, parser.feed(final, sizeof(final) - 1));
+    assert_error(Error::none, parser.finish());
+    TEST_ASSERT_EQUAL_UINT32(2, text.size);
+    TEST_ASSERT_EQUAL_STRING("Hello watch.", text.updates[1].c_str());
+}
+
+void test_openrouter_sse_never_publishes_tool_calls() {
+    ChatTextRecorder text;
+    OpenRouterSseParser parser(&text);
+    const char stream[] =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"draft\","
+        "\"tool_calls\":[{\"id\":\"call_1\",\"function\":{"
+        "\"name\":\"search_web\","
+        "\"arguments\":\"{\\\"query\\\":\\\"now\\\"}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}\n\n"
+        "data: [DONE]\n\n";
+
+    assert_error(Error::none, parser.feed(stream, sizeof(stream) - 1));
+    assert_error(Error::none, parser.finish());
+    TEST_ASSERT_EQUAL_UINT32(0, text.size);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(ChatTurnKind::tool_call),
+        static_cast<int>(parser.turn().kind));
+    TEST_ASSERT_TRUE(parser.turn().answer.empty());
+}
+
+void test_openrouter_sse_clears_draft_when_later_event_calls_tool() {
+    ChatTextRecorder text;
+    OpenRouterSseParser parser(&text);
+    const char draft[] =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"draft\"},"
+        "\"finish_reason\":null}]}\n\n";
+    const char tool[] =
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{"
+        "\"id\":\"call_1\",\"function\":{\"name\":\"search_web\","
+        "\"arguments\":\"{\\\"query\\\":\\\"now\\\"}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}\n\n"
+        "data: [DONE]\n\n";
+
+    assert_error(Error::none, parser.feed(draft, sizeof(draft) - 1));
+    TEST_ASSERT_EQUAL_UINT32(1, text.size);
+    TEST_ASSERT_EQUAL_STRING("draft", text.updates[0].c_str());
+    assert_error(Error::none, parser.feed(tool, sizeof(tool) - 1));
+    assert_error(Error::none, parser.finish());
+    TEST_ASSERT_EQUAL_UINT32(2, text.size);
+    TEST_ASSERT_TRUE(text.updates[1].empty());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(ChatTurnKind::tool_call),
+        static_cast<int>(parser.turn().kind));
 }
 
 void test_openrouter_transcription_and_speech_protocols() {
@@ -538,6 +820,23 @@ void test_retry_policy_never_retries_after_output() {
     TEST_ASSERT_FALSE(retry_allowed(Error::server_error, 2, false, policy));
 }
 
+void test_cloud_timeouts_allow_weak_wifi_without_unbounded_waits() {
+    const RequestPolicy chat = chat_policy();
+    const RequestPolicy transcription = transcription_policy();
+    const RequestPolicy speech = speech_policy();
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(20'000, chat.connect_timeout_ms);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(
+        20'000, transcription.connect_timeout_ms);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(20'000, speech.connect_timeout_ms);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(75'000, chat.total_timeout_ms);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(
+        75'000, transcription.total_timeout_ms);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(90'000, speech.total_timeout_ms);
+    TEST_ASSERT_EQUAL_UINT8(2, chat.max_attempts);
+    TEST_ASSERT_EQUAL_UINT8(2, transcription.max_attempts);
+    TEST_ASSERT_EQUAL_UINT8(2, speech.max_attempts);
+}
+
 void test_image_fetch_contract_requires_https_and_hard_caps() {
     ImageFetchRequest request;
     request.url = "https://example.test/image.jpg";
@@ -565,14 +864,24 @@ int main(int, char **) {
     RUN_TEST(test_agent_loop_reports_bounded_progress_in_order);
     RUN_TEST(test_agent_loop_stops_when_progress_observer_sees_cancellation);
     RUN_TEST(test_agent_loop_cancels_before_a_reported_tool_starts);
+    RUN_TEST(test_agent_loop_nonstream_provider_publishes_only_final_answer);
+    RUN_TEST(test_agent_loop_rolls_back_when_text_callback_cancels);
     RUN_TEST(test_search_tools_validate_query_and_bound_result);
+    RUN_TEST(test_image_tool_selects_only_a_current_result_id_once);
+    RUN_TEST(test_image_tool_clears_selection_on_search_and_clear);
+    RUN_TEST(test_image_tool_can_use_one_fallback_after_a_search);
+    RUN_TEST(test_agent_loop_searches_selects_and_then_answers);
     RUN_TEST(test_openrouter_chat_builder_has_bounded_contract);
     RUN_TEST(test_openrouter_parses_answer_and_tool_call);
     RUN_TEST(test_openrouter_sse_parser_handles_split_input_and_comments);
+    RUN_TEST(test_openrouter_sse_publishes_cumulative_complete_lines);
+    RUN_TEST(test_openrouter_sse_never_publishes_tool_calls);
+    RUN_TEST(test_openrouter_sse_clears_draft_when_later_event_calls_tool);
     RUN_TEST(test_openrouter_transcription_and_speech_protocols);
     RUN_TEST(test_brave_builders_encode_query_and_set_safe_limits);
     RUN_TEST(test_brave_parsers_keep_only_narrow_fields);
     RUN_TEST(test_retry_policy_never_retries_after_output);
+    RUN_TEST(test_cloud_timeouts_allow_weak_wifi_without_unbounded_waits);
     RUN_TEST(test_image_fetch_contract_requires_https_and_hard_caps);
     return UNITY_END();
 }

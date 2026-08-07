@@ -36,6 +36,10 @@ public:
     agent::Error complete(
         const agent::ConversationHistory &history, agent::ChatTurn &turn,
         agent::CancellationToken &cancellation) override;
+    agent::Error complete_streaming(
+        const agent::ConversationHistory &history, agent::ChatTurn &turn,
+        agent::ChatTextSink &text_sink,
+        agent::CancellationToken &cancellation) override;
     void set_connection(const OpenRouterConnectionView &connection) {
         connection_ = connection;
     }

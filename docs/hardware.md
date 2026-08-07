@@ -7,7 +7,8 @@ The target is the Waveshare ESP32-S3-Touch-AMOLED-1.8.
 - ESP32-S3, 16 MB flash, 8 MB PSRAM
 - 368 by 448 QSPI AMOLED
 - Original display and touch: SH8601 and FT3168
-- V2 display and touch: CO5300 and CST820
+- V2 display and touch: CO5300 and CST820. The ESP-IDF touch component uses
+  the compatible CST816S driver-family API for this controller.
 - ES8311 codec with microphone input and speaker amplifier
 - AXP2101 power management
 - QMI8658 six-axis IMU
@@ -60,6 +61,24 @@ The connected V2 board must pass these checks for this control change:
 - a held PWR-button cold start enters `LISTENING` directly;
 - the top BOOT button does not change application state;
 - cold start does not show a white frame.
+- the footer shows Wi-Fi connection state and a valid battery percentage, or a
+  clear unavailable value;
+- model text grows on the display before the complete answer is available;
+- speech starts while PCM data is still arriving when the transfer is faster
+  than playback. A slow transfer buffers before playback so that audio stays
+  clear. A new held press stops it and starts recording.
+
+The full-screen image path must pass these checks on the V2 AMOLED:
+
+- a selected baseline JPEG fills the screen with a centered cover crop;
+- red, green, and blue test areas have the correct color and byte order;
+- wide and tall images have a centered crop with the correct rotation;
+- a new PWR-button press removes the image and starts `LISTENING` without a
+  visible delay;
+- a BLE passkey stays visible above an image;
+- a short press and the inactivity timer remove the image before sleep;
+- an unsupported or large image leaves the text answer available;
+- repeated image requests do not cause a reset or a PSRAM leak.
 
 The current USB-power checks do not verify battery sleep current.
 
@@ -70,6 +89,8 @@ The current USB-power checks do not verify battery sleep current.
 - Verify AMOLED black level, rotation, touch mapping, and full-screen image.
 - Record and replay speech through the ES8311 path without clipping.
 - Verify Wi-Fi connection and TLS requests.
+- Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
+  the station connects.
 - Verify encrypted BLE provisioning and acknowledgement with a physical iPhone.
 - Measure idle, recording, Wi-Fi, playback, and deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,

@@ -47,13 +47,20 @@ Error validate_openrouter_pcm_content_type(const char *content_type);
 
 class OpenRouterSseParser {
 public:
+    explicit OpenRouterSseParser(ChatTextSink *text_sink = nullptr)
+        : text_sink_(text_sink) {}
+
     Error feed(const char *data, std::size_t size);
     Error finish();
     void reset();
+    void set_text_sink(ChatTextSink *text_sink) { text_sink_ = text_sink; }
 
     [[nodiscard]] bool done() const { return done_; }
     [[nodiscard]] const ChatTurn &turn() const { return turn_; }
     [[nodiscard]] Error error() const { return error_; }
+    [[nodiscard]] bool output_started() const {
+        return published_size_ != 0;
+    }
 
 private:
     Error process_line();
@@ -61,6 +68,8 @@ private:
     FixedText<Limits::max_sse_line_bytes> line_;
     ChatTurn turn_;
     Error error_ = Error::none;
+    ChatTextSink *text_sink_ = nullptr;
+    std::size_t published_size_ = 0;
     bool saw_finish_ = false;
     bool done_ = false;
 };

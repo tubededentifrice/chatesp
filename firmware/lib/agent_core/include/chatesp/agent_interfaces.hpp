@@ -20,6 +20,7 @@ public:
     virtual Error begin(const ImageMetadata &metadata) = 0;
     virtual Error write(const std::uint8_t *data, std::size_t size) = 0;
     virtual Error finish() = 0;
+    virtual void abort() = 0;
 };
 
 class PcmSink {
@@ -30,6 +31,23 @@ public:
         std::uint8_t bits_per_sample) = 0;
     virtual Error write(const std::uint8_t *data, std::size_t size) = 0;
     virtual Error finish() = 0;
+    virtual void cancel() {}
+};
+
+class ChatTextSink {
+public:
+    virtual ~ChatTextSink() = default;
+
+    // Text is private user content. The sink must not log or retain it after
+    // the active request. Each update is the complete answer received so far.
+    virtual Error write_chat_text(const char *text, std::size_t size) = 0;
+};
+
+class NullChatTextSink final : public ChatTextSink {
+public:
+    Error write_chat_text(const char *, std::size_t) override {
+        return Error::none;
+    }
 };
 
 class ChatProvider {
@@ -38,6 +56,20 @@ public:
     virtual Error complete(
         const ConversationHistory &history, ChatTurn &turn,
         CancellationToken &cancellation) = 0;
+
+    // A provider without a streaming implementation uses this safe fallback.
+    // It publishes only a complete answer and never publishes a tool call.
+    virtual Error complete_streaming(
+        const ConversationHistory &history, ChatTurn &turn,
+        ChatTextSink &text_sink, CancellationToken &cancellation) {
+        const Error error = complete(history, turn, cancellation);
+        if (error != Error::none || cancellation.cancelled() ||
+            turn.kind != ChatTurnKind::answer || turn.answer.empty()) {
+            return cancellation.cancelled() ? Error::cancelled : error;
+        }
+        return text_sink.write_chat_text(
+            turn.answer.data(), turn.answer.size());
+    }
 };
 
 class TranscriptionProvider {

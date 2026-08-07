@@ -28,8 +28,10 @@ class AgentLoop {
 public:
     AgentLoop(
         ChatProvider &chat, const ToolRegistry &tools,
-        AgentProgressObserver *observer = nullptr)
-        : chat_(chat), tools_(tools), observer_(observer) {}
+        AgentProgressObserver *observer = nullptr,
+        ChatTextSink *text_sink = nullptr)
+        : chat_(chat), tools_(tools), observer_(observer),
+          text_sink_(text_sink) {}
 
     Error run(
         const char *user_text, std::size_t size,
@@ -38,6 +40,8 @@ public:
     void report_speech_start();
     void clear_thread() {
         history_.clear();
+        turn_.clear();
+        tool_result_.clear();
         answer_pending_speech_ = false;
     }
     [[nodiscard]] const ConversationHistory &history() const {
@@ -50,7 +54,10 @@ private:
     ChatProvider &chat_;
     const ToolRegistry &tools_;
     AgentProgressObserver *observer_ = nullptr;
+    ChatTextSink *text_sink_ = nullptr;
     ConversationHistory history_;
+    ChatTurn turn_;
+    FixedText<Limits::max_tool_result_bytes> tool_result_;
     bool answer_pending_speech_ = false;
 };
 

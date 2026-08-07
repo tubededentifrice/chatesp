@@ -30,6 +30,11 @@ void show_start_error(const char *message) {
     }
 }
 
+void request_failure_sleep() {
+    (void)chatesp::ui::sleep();
+    (void)chatesp::power::power_off();
+}
+
 }  // namespace
 
 extern "C" void app_main() {
@@ -65,15 +70,15 @@ extern "C" void app_main() {
             const std::uint32_t now_ms = monotonic_ms();
             if (chatesp::power::poll(now_ms, &edges) == ESP_OK) {
                 failure_press_seen = failure_press_seen || edges.pressed;
-                if (failure_press_seen && edges.released) {
-                    (void)chatesp::power::power_off();
+                if (!kDevelopmentMode && failure_press_seen &&
+                    edges.released) {
+                    request_failure_sleep();
                 }
             }
-            if (!automatic_sleep_requested &&
+            if (!kDevelopmentMode && !automatic_sleep_requested &&
                 now_ms - failure_started_ms >= 30'000) {
                 automatic_sleep_requested = true;
-                (void)chatesp::ui::sleep();
-                (void)chatesp::power::power_off();
+                request_failure_sleep();
             }
             vTaskDelay(pdMS_TO_TICKS(15));
         }
@@ -104,8 +109,31 @@ extern "C" void app_main() {
                 ESP_LOGE(kTag, "System off failed");
                 runtime.poweroff_failed();
             } else {
-                while (true) {
-                    vTaskDelay(pdMS_TO_TICKS(1'000));
+                // If AXP2101 system-off succeeds, execution stops. USB power
+                // can keep the MCU alive, so recover instead of becoming inert.
+                const std::uint32_t off_requested_at_ms = monotonic_ms();
+                while (monotonic_ms() - off_requested_at_ms < 1'000) {
+                    chatesp::ButtonEdges recovery_edges;
+                    const std::uint32_t recovery_now_ms = monotonic_ms();
+                    if (chatesp::power::poll(
+                            recovery_now_ms, &recovery_edges) == ESP_OK) {
+                        if (recovery_edges.pressed) {
+                            runtime.action_button_edge(
+                                true, recovery_now_ms);
+                        }
+                        if (recovery_edges.released) {
+                            runtime.action_button_edge(
+                                false, recovery_now_ms);
+                        }
+                    }
+                    if (!runtime.poweroff_ready()) {
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(15));
+                }
+                if (runtime.poweroff_ready()) {
+                    ESP_LOGE(kTag, "System off did not remove power");
+                    runtime.poweroff_failed();
                 }
             }
         }

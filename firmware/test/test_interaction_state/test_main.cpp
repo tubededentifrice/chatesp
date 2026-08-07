@@ -72,6 +72,43 @@ void test_inactivity_sleeps_only_from_idle() {
         static_cast<int>(machine.state()));
 }
 
+void test_build_modes_use_distinct_idle_boundaries() {
+    InteractionStateMachine production{
+        chatesp::interaction_config_for_mode(false)};
+    production.ready(0);
+    production.tick(29'999);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(production.state()));
+    production.tick(30'000);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::sleep_pending),
+        static_cast<int>(production.state()));
+
+    InteractionStateMachine development{
+        chatesp::interaction_config_for_mode(true)};
+    development.ready(0);
+    development.tick(299'999);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(development.state()));
+    development.tick(300'000);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::sleep_pending),
+        static_cast<int>(development.state()));
+}
+
+void test_development_short_press_still_requests_sleep() {
+    InteractionStateMachine machine{
+        chatesp::interaction_config_for_mode(true)};
+    machine.ready(0);
+    machine.button_down(100);
+    machine.button_up(200);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::sleep_pending),
+        static_cast<int>(machine.state()));
+}
+
 void test_inactivity_handles_millisecond_wrap() {
     InteractionStateMachine machine;
     const std::uint32_t start = std::numeric_limits<std::uint32_t>::max() - 99;
@@ -202,6 +239,8 @@ int main(int, char **) {
     RUN_TEST(test_hold_records_until_release);
     RUN_TEST(test_release_at_hold_threshold_without_tick_requests_sleep);
     RUN_TEST(test_inactivity_sleeps_only_from_idle);
+    RUN_TEST(test_build_modes_use_distinct_idle_boundaries);
+    RUN_TEST(test_development_short_press_still_requests_sleep);
     RUN_TEST(test_inactivity_handles_millisecond_wrap);
     RUN_TEST(test_idle_activity_extends_the_sleep_timer);
     RUN_TEST(test_busy_flow_returns_to_fresh_idle_timer);

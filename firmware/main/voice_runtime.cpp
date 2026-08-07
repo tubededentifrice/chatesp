@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <optional>
 #include <string_view>
+#include <utility>
 
 #include "audio_capture.hpp"
 #include "audio_playback.hpp"
@@ -25,8 +27,11 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "http_transport.hpp"
+#include "image_fetch_provider.hpp"
+#include "jpeg_image_sink.hpp"
 #include "network_manager.hpp"
 #include "pcm_playback_sink.hpp"
+#include "power_control.hpp"
 #include "settings_store.hpp"
 #include "ui.hpp"
 
@@ -41,9 +46,15 @@ constexpr bool kDevelopmentMode = CHATESP_DEVELOPMENT_MODE != 0;
 constexpr char kTag[] = "voice_runtime";
 constexpr std::uint32_t kLevelRefreshMs = 80;
 constexpr std::uint32_t kSettingsRefreshMs = 500;
+constexpr std::uint32_t kEarlyConnectRetryMs = 10'000;
+constexpr std::uint32_t kDisplayWakeRetryMs = 100;
+constexpr std::uint32_t kDisplaySleepRetryMs = 100;
+constexpr std::uint32_t kFooterRefreshMs = 100;
+constexpr std::uint32_t kBatteryRefreshMs = 30'000;
+constexpr std::uint32_t kAnswerStreamRefreshMs = 60;
 constexpr std::uint32_t kTranscriptVisibleMs = 450;
 constexpr std::uint32_t kPoweroffGraceMs = 250;
-constexpr std::uint32_t kInteractionTimeoutMs = 90'000;
+constexpr std::uint32_t kInteractionTimeoutMs = 180'000;
 constexpr std::size_t kMinimumRecordingSamples =
     AudioCapture::kSampleRateHz / 10;
 constexpr UBaseType_t kRuntimePriority = 5;
@@ -75,6 +86,16 @@ private:
     agent::FixedText<Capacity> &text_;
 };
 
+struct RequestScratch {
+    agent::FixedText<agent::Limits::max_transcript_bytes> transcript;
+    agent::FixedText<agent::Limits::max_answer_bytes> answer;
+
+    void clear() {
+        transcript.clear();
+        answer.clear();
+    }
+};
+
 class SpeechStartSink final : public agent::PcmSink {
 public:
     SpeechStartSink(PcmPlaybackSink &sink, agent::AgentLoop &agent_loop)
@@ -97,6 +118,7 @@ public:
     }
 
     agent::Error finish() override { return sink_.finish(); }
+    void cancel() override { sink_.cancel(); }
 
 private:
     PcmPlaybackSink &sink_;
@@ -138,6 +160,31 @@ public:
 private:
     AtomicCancellation &source_;
     runtime::MonotonicDeadline deadline_;
+};
+
+class NetworkRequestGuard {
+public:
+    explicit NetworkRequestGuard(network::NetworkManager &network)
+        : network_(network), active_(network_.set_request_active(true) == ESP_OK) {}
+
+    ~NetworkRequestGuard() {
+        if (active_) {
+            const esp_err_t error = network_.set_request_active(false);
+            if (error != ESP_OK) {
+                ESP_LOGW(
+                    kTag,
+                    "Wi-Fi modem-save restore failed (category %s)",
+                    esp_err_to_name(error));
+            }
+        }
+    }
+
+    NetworkRequestGuard(const NetworkRequestGuard &) = delete;
+    NetworkRequestGuard &operator=(const NetworkRequestGuard &) = delete;
+
+private:
+    network::NetworkManager &network_;
+    bool active_ = false;
 };
 
 template <std::size_t Capacity>
@@ -304,10 +351,12 @@ std::size_t bounded_speech_size(const char *text, std::size_t size) {
 
 }  // namespace
 
-class VoiceRuntime::Impl final : public agent::AgentProgressObserver {
+class VoiceRuntime::Impl final : public agent::AgentProgressObserver,
+                                 public agent::ChatTextSink {
 public:
     Impl()
-        : openrouter_connection_(settings_.openrouter()),
+        : image_fetch_provider_(transport_),
+          openrouter_connection_(settings_.openrouter()),
           brave_key_(settings_.brave()),
           web_provider_(transport_, network_, brave_key_),
           image_provider_(transport_, network_, brave_key_),
@@ -318,16 +367,23 @@ public:
           transcription_provider_(
               transport_, network_, openrouter_connection_),
           speech_provider_(transport_, network_, openrouter_connection_),
-          pcm_sink_(playback_) {
+          pcm_sink_(playback_),
+          interaction_(interaction_config_for_mode(kDevelopmentMode)) {
         tools_ready_ = tools_.add(web_tool_) == agent::Error::none &&
             tools_.add(image_tool_) == agent::Error::none;
         void *agent_memory = heap_caps_malloc(
             sizeof(agent::AgentLoop), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (agent_memory != nullptr) {
             agent_loop_ = new (agent_memory)
-                agent::AgentLoop(chat_provider_, tools_, this);
+                agent::AgentLoop(chat_provider_, tools_, this, this);
         }
-        tools_ready_ = tools_ready_ && agent_loop_ != nullptr;
+        void *scratch_memory = heap_caps_malloc(
+            sizeof(RequestScratch), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (scratch_memory != nullptr) {
+            request_scratch_ = new (scratch_memory) RequestScratch();
+        }
+        tools_ready_ = tools_ready_ && agent_loop_ != nullptr &&
+            request_scratch_ != nullptr;
     }
 
     ~Impl() override {
@@ -345,6 +401,13 @@ public:
             heap_caps_free(agent_loop_);
             agent_loop_ = nullptr;
         }
+        if (request_scratch_ != nullptr) {
+            request_scratch_->clear();
+            request_scratch_->~RequestScratch();
+            secure_wipe(request_scratch_, sizeof(RequestScratch));
+            heap_caps_free(request_scratch_);
+            request_scratch_ = nullptr;
+        }
     }
 
     [[nodiscard]] bool started() const {
@@ -354,6 +417,12 @@ public:
     esp_err_t start(bool startup_button_down, std::uint32_t startup_at_ms) {
         if (!tools_ready_) {
             return ESP_FAIL;
+        }
+        // Start NVS through the settings layer before Wi-Fi or NimBLE can use
+        // it. In production, this is the controlled HMAC security start.
+        const esp_err_t settings_result = settings_store_.initialize();
+        if (settings_result != ESP_OK) {
+            return settings_result;
         }
         command_queue_ = xQueueCreate(16, sizeof(Command));
         passkey_queue_ = xQueueCreate(1, sizeof(PasskeyEvent));
@@ -383,6 +452,14 @@ public:
             passkey_queue_ = nullptr;
             return ESP_ERR_NO_MEM;
         }
+        if (startup_button_down) {
+            button_pressed_.store(true, std::memory_order_release);
+            voice_priority_.store(true, std::memory_order_release);
+            cancellation_.cancel();
+            const Command command{
+                CommandKind::wake_button_down, startup_at_ms};
+            queue_command(command);
+        }
         const BaseType_t task_result = xTaskCreatePinnedToCore(
             task_entry,
             "voice_runtime",
@@ -402,14 +479,6 @@ public:
         }
 
         started_.store(true, std::memory_order_release);
-        if (startup_button_down) {
-            button_pressed_.store(true, std::memory_order_release);
-            voice_priority_.store(true, std::memory_order_release);
-            cancellation_.cancel();
-            const Command command{
-                CommandKind::wake_button_down, startup_at_ms};
-            queue_command(command);
-        }
         return ESP_OK;
     }
 
@@ -473,6 +542,31 @@ public:
         }
     }
 
+    agent::Error write_chat_text(
+        const char *text, std::size_t size) override {
+        if (cancellation_.cancelled()) {
+            return agent::Error::cancelled;
+        }
+        if ((size != 0 && text == nullptr) ||
+            size > agent::Limits::max_answer_bytes) {
+            return agent::Error::invalid_argument;
+        }
+
+        const std::uint32_t now_ms = monotonic_ms();
+        if (size == 0 || !stream_text_shown_ ||
+            now_ms - stream_text_refreshed_at_ms_ >=
+                kAnswerStreamRefreshMs) {
+            if (display_available_.load(std::memory_order_acquire) &&
+                bsp_display_lock(10)) {
+                ui::show_answer_stream({text, size});
+                bsp_display_unlock();
+            }
+            stream_text_shown_ = true;
+            stream_text_refreshed_at_ms_ = now_ms;
+        }
+        return agent::Error::none;
+    }
+
 private:
     static void task_entry(void *context) {
         static_cast<Impl *>(context)->run();
@@ -498,11 +592,14 @@ private:
     }
 
     template <typename Callback>
-    void with_display(Callback callback) {
+    bool with_display(Callback callback) {
         if (bsp_display_lock(100)) {
             callback();
+            lv_refr_now(nullptr);
             bsp_display_unlock();
+            return true;
         }
+        return false;
     }
 
     void show_state(InteractionState state) {
@@ -516,6 +613,63 @@ private:
     void show_model_progress(const char *message) {
         with_display(
             [message]() { ui::show_model_progress(message); });
+    }
+
+    void hide_image() {
+        with_display([]() { ui::hide_fullscreen_image(); });
+    }
+
+    static ui::WifiIndicator wifi_indicator(
+        network::NetworkState state, bool configured) {
+        if (!configured) {
+            return ui::WifiIndicator::setup;
+        }
+        switch (state) {
+            case network::NetworkState::off:
+                return ui::WifiIndicator::off;
+            case network::NetworkState::connecting:
+                return ui::WifiIndicator::connecting;
+            case network::NetworkState::connected:
+                return ui::WifiIndicator::online;
+            case network::NetworkState::failed:
+                return ui::WifiIndicator::failed;
+        }
+        return ui::WifiIndicator::failed;
+    }
+
+    void draw_footer(ui::WifiIndicator wifi) {
+        if (!display_available_.load(std::memory_order_acquire)) {
+            return;
+        }
+        if (!with_display([this, wifi]() {
+            ui::show_footer(
+                wifi,
+                battery_percent_.has_value(),
+                battery_percent_.value_or(0));
+        })) {
+            return;
+        }
+        shown_wifi_ = wifi;
+        shown_battery_percent_ = battery_percent_;
+        footer_shown_ = true;
+    }
+
+    void refresh_footer(std::uint32_t now_ms, bool force) {
+        const bool battery_due = force || !battery_checked_ ||
+            now_ms - battery_checked_at_ms_ >= kBatteryRefreshMs;
+        if (battery_due &&
+            !button_pressed_.load(std::memory_order_acquire) &&
+            !voice_priority_.load(std::memory_order_acquire)) {
+            battery_percent_ = power::battery_percent();
+            battery_checked_ = true;
+            battery_checked_at_ms_ = now_ms;
+        }
+        const ui::WifiIndicator wifi = wifi_indicator(
+            network_.state(), settings_.configured);
+        if (force || !footer_shown_ || wifi != shown_wifi_ ||
+            battery_percent_ != shown_battery_percent_) {
+            draw_footer(wifi);
+        }
     }
 
     void queue_command(const Command &command) {
@@ -554,7 +708,19 @@ private:
     void run() {
         interaction_.ready(monotonic_ms());
         previous_state_ = interaction_.state();
-        show_state(previous_state_);
+        if (button_pressed_.load(std::memory_order_acquire)) {
+            Command startup_command;
+            if (xQueueReceive(
+                    command_queue_, &startup_command, 0) == pdTRUE) {
+                process_command(startup_command);
+            } else {
+                wake_for_button(monotonic_ms());
+            }
+        } else {
+            show_state(previous_state_);
+            refresh_footer(monotonic_ms(), true);
+            start_network_early(true);
+        }
 
         while (true) {
             if (queue_overflow_.exchange(false, std::memory_order_acq_rel)) {
@@ -570,17 +736,33 @@ private:
             const std::uint32_t now_ms = monotonic_ms();
             interaction_.tick(now_ms);
             process_state_change(now_ms);
-            if (interaction_.state() == InteractionState::recording) {
+            const bool recording =
+                interaction_.state() == InteractionState::recording;
+            if (recording) {
                 capture_audio(now_ms);
-            } else if (interaction_.state() == InteractionState::idle &&
-                       now_ms - settings_checked_at_ms_ >=
-                           kSettingsRefreshMs) {
+            }
+            if (!voice_priority_.load(std::memory_order_acquire)) {
+                retry_display_wake(now_ms);
+            }
+            retry_display_sleep(now_ms);
+            if (!voice_priority_.load(std::memory_order_acquire) &&
+                now_ms - footer_checked_at_ms_ >= kFooterRefreshMs) {
+                footer_checked_at_ms_ = now_ms;
+                refresh_footer(now_ms, false);
+            }
+            if (!recording &&
+                interaction_.state() == InteractionState::idle &&
+                now_ms - settings_checked_at_ms_ >=
+                    kSettingsRefreshMs) {
                 settings_checked_at_ms_ = now_ms;
                 if (!interaction_.button_is_down() && !ble_started_ &&
                     !ble_start_attempted_) {
                     ensure_ble_started();
                 }
                 refresh_settings();
+                if (!interaction_.button_is_down()) {
+                    start_network_early(false);
+                }
             }
         }
     }
@@ -598,12 +780,22 @@ private:
             command.kind == CommandKind::wake_from_poweroff ||
             (command.kind == CommandKind::button_down &&
              interaction_.state() == InteractionState::sleep_pending)) {
+            ESP_LOGI(kTag, "Action button requested display wake");
             wake_for_button(command.at_ms);
             return;
         }
         if (command.kind == CommandKind::button_down) {
+            ESP_LOGI(kTag, "Action button started a voice hold");
             interaction_.button_down(command.at_ms);
+            // Reassert only the panel command here. Full display work must not
+            // delay the button state machine or microphone capture.
+            const esp_err_t panel_error = ui::reassert_panel();
+            if (panel_error != ESP_OK) {
+                display_wake_pending_ = true;
+                display_wake_attempted_at_ms_ = command.at_ms;
+            }
         } else if (command.kind == CommandKind::button_up) {
+            ESP_LOGI(kTag, "Action button was released");
             interaction_.button_up(command.at_ms);
             if (interaction_.state() == InteractionState::idle) {
                 voice_priority_.store(false, std::memory_order_release);
@@ -611,13 +803,82 @@ private:
         }
     }
 
+    void start_network_early(bool force) {
+        if (!settings_.configured || network_.connected() ||
+            network_.connecting()) {
+            return;
+        }
+        const std::uint32_t now_ms = monotonic_ms();
+        if (!force && early_connect_attempted_at_ms_ != 0 &&
+            now_ms - early_connect_attempted_at_ms_ <
+                kEarlyConnectRetryMs) {
+            return;
+        }
+        early_connect_attempted_at_ms_ = now_ms;
+        if (!network_initialized_) {
+            const esp_err_t initialize_error = network_.initialize();
+            if (initialize_error != ESP_OK) {
+                ESP_LOGE(
+                    kTag,
+                    "Early Wi-Fi initialize failed (category %s)",
+                    esp_err_to_name(initialize_error));
+                return;
+            }
+            network_initialized_ = true;
+        }
+        const agent::Error connect_error =
+            network_.start_connect(settings_.wifi());
+        if (connect_error != agent::Error::none) {
+            ESP_LOGW(
+                kTag,
+                "Early Wi-Fi connect did not start (category %u)",
+                static_cast<unsigned>(connect_error));
+        }
+    }
+
     void wake_for_button(std::uint32_t now_ms) {
         display_available_.store(true, std::memory_order_release);
+        display_sleep_pending_ = false;
         poweroff_gate_.recover();
-        ui::wake(InteractionState::idle);
         interaction_.ready(now_ms);
         interaction_.wake_button_down(now_ms);
         previous_state_ = interaction_.state();
+        request_display_wake(now_ms);
+    }
+
+    void request_display_wake(std::uint32_t now_ms) {
+        const esp_err_t result = ui::wake(interaction_.state());
+        display_wake_pending_ = result != ESP_OK;
+        display_wake_attempted_at_ms_ = now_ms;
+        if (display_wake_pending_) {
+            ESP_LOGW(
+                kTag,
+                "Display wake will retry (category %s)",
+                esp_err_to_name(result));
+        } else {
+            footer_shown_ = false;
+            refresh_footer(now_ms, true);
+        }
+    }
+
+    void retry_display_wake(std::uint32_t now_ms) {
+        if (!display_wake_pending_ ||
+            now_ms - display_wake_attempted_at_ms_ < kDisplayWakeRetryMs) {
+            return;
+        }
+        request_display_wake(now_ms);
+    }
+
+    void retry_display_sleep(std::uint32_t now_ms) {
+        if (!display_sleep_pending_ ||
+            now_ms - display_sleep_attempted_at_ms_ <
+                kDisplaySleepRetryMs) {
+            return;
+        }
+        display_sleep_attempted_at_ms_ = now_ms;
+        if (ui::sleep() == ESP_OK) {
+            display_sleep_pending_ = false;
+        }
     }
 
     void process_state_change(std::uint32_t now_ms) {
@@ -627,17 +888,31 @@ private:
         const InteractionState prior = previous_state_;
         previous_state_ = interaction_.state();
         if (previous_state_ == InteractionState::sleep_pending) {
+            if (request_active_) {
+                ESP_LOGW(kTag, "Sleep was blocked during active work");
+                interaction_.ready(now_ms);
+                previous_state_ = interaction_.state();
+                return;
+            }
             poweroff_gate_.begin_sleep();
+            enter_sleep();
+            return;
         }
-        show_state(previous_state_);
 
         if (previous_state_ == InteractionState::recording) {
             begin_recording(now_ms);
-        } else if (prior == InteractionState::recording &&
-                   previous_state_ == InteractionState::transcribing) {
+            if (interaction_.state() == InteractionState::recording) {
+                show_state(previous_state_);
+            }
+            return;
+        }
+
+        show_state(previous_state_);
+        if (prior == InteractionState::recording &&
+            previous_state_ == InteractionState::transcribing) {
+            request_active_ = true;
             finish_recording_and_request();
-        } else if (previous_state_ == InteractionState::sleep_pending) {
-            enter_sleep();
+            request_active_ = false;
         }
     }
 
@@ -649,6 +924,9 @@ private:
             fail("MICROPHONE COULD NOT START");
             return;
         }
+        // Do not start radio work between microphone start and audio reads.
+        // A held cold start connects after release. Normal awake sessions
+        // already have an asynchronous connection.
         level_refreshed_at_ms_ = now_ms;
     }
 
@@ -696,18 +974,26 @@ private:
         DeadlineCancellation request_cancellation(
             cancellation_, monotonic_ms(), kInteractionTimeoutMs);
 
-        with_display([]() { ui::show_wifi_progress("CONNECTING"); });
         if (!network_initialized_) {
             const esp_err_t network_result = network_.initialize();
             if (network_result != ESP_OK) {
+                ESP_LOGE(
+                    kTag,
+                    "Wi-Fi initialize failed (category %s)",
+                    esp_err_to_name(network_result));
                 capture_.discard();
                 fail("WI-FI COULD NOT START");
                 return;
             }
             network_initialized_ = true;
         }
+        NetworkRequestGuard network_request(network_);
+        if (!network_.connected()) {
+            draw_footer(ui::WifiIndicator::connecting);
+        }
         agent::Error error = network_.connect(
             settings_.wifi(), request_cancellation);
+        refresh_footer(monotonic_ms(), true);
         error = request_cancellation.normalize(error);
         if (error != agent::Error::none) {
             capture_.discard();
@@ -716,7 +1002,8 @@ private:
         }
         show_state(InteractionState::transcribing);
 
-        agent::FixedText<agent::Limits::max_transcript_bytes> transcript;
+        auto &transcript = request_scratch_->transcript;
+        transcript.clear();
         SecureTextGuard transcript_guard(transcript);
         const agent::AudioView audio{
             reinterpret_cast<const std::uint8_t *>(capture_.samples()),
@@ -749,7 +1036,10 @@ private:
             return;
         }
 
-        agent::FixedText<agent::Limits::max_answer_bytes> answer;
+        auto &answer = request_scratch_->answer;
+        answer.clear();
+        stream_text_shown_ = false;
+        stream_text_refreshed_at_ms_ = 0;
         SecureTextGuard answer_guard(answer);
         error = agent_loop_->run(
             transcript.data(), transcript.size(), answer,
@@ -774,16 +1064,39 @@ private:
             answer.data(), speech_size, speech_sink,
             request_cancellation);
         error = request_cancellation.normalize(error);
+        bool speech_failed = false;
         if (error != agent::Error::none) {
             pcm_sink_.cancel_and_stop();
-            finish_with_error(error);
+            if (error == agent::Error::cancelled ||
+                cancellation_.cancelled()) {
+                cancel_current();
+                return;
+            }
+            speech_failed = true;
+            ESP_LOGW(
+                kTag,
+                "Speech output failed (category %u)",
+                static_cast<unsigned>(error));
+            with_display([&answer]() {
+                ui::show_answer_notice(
+                    {answer.data(), answer.size()},
+                    "SPEECH TEMPORARILY UNAVAILABLE");
+            });
+        }
+
+        if (!show_selected_image(request_cancellation) &&
+            cancellation_.cancelled()) {
+            cancel_current();
             return;
         }
 
         interaction_.interaction_finished(monotonic_ms());
         previous_state_ = interaction_.state();
-        show_state(previous_state_);
+        if (!speech_failed) {
+            show_state(previous_state_);
+        }
         voice_priority_.store(false, std::memory_order_release);
+        ESP_LOGI(kTag, "Interaction complete; idle timer started");
         ESP_LOGI(
             kTag,
             "Runtime stack minimum free bytes: %u",
@@ -803,9 +1116,58 @@ private:
         return true;
     }
 
+    bool show_selected_image(DeadlineCancellation &cancellation) {
+        agent::ImageResult selected;
+        if (!image_tool_.take_selected_or_first(selected)) {
+            return true;
+        }
+
+        ESP_LOGI(kTag, "A bounded image result was selected");
+
+        show_model_progress("GETTING THE IMAGE");
+        image::JpegImageSink sink(cancellation);
+        const agent::ImageFetchRequest request{
+            selected.thumbnail_url.c_str(),
+            agent::Limits::max_image_download_bytes,
+            agent::Limits::max_image_dimension,
+            0,
+            agent::image_fetch_policy(),
+        };
+        agent::Error error = image_fetch_provider_.fetch(
+            request, sink, cancellation);
+        error = cancellation.normalize(error);
+        if (cancellation_.cancelled()) {
+            return false;
+        }
+        if (error != agent::Error::none || !sink.ready()) {
+            ESP_LOGW(
+                kTag,
+                "Optional image was not available (category %u)",
+                static_cast<unsigned>(error));
+            return true;
+        }
+
+        image::Rgb565Frame frame = sink.take_frame();
+        bool shown = false;
+        with_display([&frame, &shown]() {
+            shown = ui::show_fullscreen_image(std::move(frame));
+        });
+        if (!shown) {
+            ESP_LOGW(kTag, "Optional image could not be shown");
+        } else {
+            ESP_LOGI(kTag, "The bounded image is on the display");
+        }
+        return true;
+    }
+
     void finish_with_error(agent::Error error) {
         if (error == agent::Error::cancelled || cancellation_.cancelled()) {
             cancel_current();
+        } else if (
+            (error == agent::Error::connect_timeout ||
+             error == agent::Error::disconnected) &&
+            network_.connected()) {
+            fail("SERVICE CONNECTION FAILED");
         } else {
             fail(error_message(error));
         }
@@ -815,6 +1177,7 @@ private:
         capture_.discard();
         pcm_sink_.cancel_and_stop();
         image_tool_.clear_results();
+        hide_image();
         interaction_.ready(monotonic_ms());
         previous_state_ = interaction_.state();
         show_state(previous_state_);
@@ -854,22 +1217,47 @@ private:
         }
         agent_loop_->clear_thread();
         image_tool_.clear_results();
+        hide_image();
         show_state(interaction_.state());
+        if (!interaction_.button_is_down()) {
+            start_network_early(true);
+        }
     }
 
     void enter_sleep() {
+        display_available_.store(false, std::memory_order_release);
+        display_wake_pending_ = false;
+        footer_shown_ = false;
+        // Turn the AMOLED off before network and peripheral cleanup.
+        esp_err_t display_sleep_result = ESP_ERR_TIMEOUT;
+        for (std::uint8_t attempt = 0;
+             attempt < 3 && display_sleep_result != ESP_OK;
+             ++attempt) {
+            display_sleep_result = ui::sleep();
+            if (display_sleep_result != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+        if (display_sleep_result != ESP_OK) {
+            ESP_LOGE(
+                kTag,
+                "Display sleep failed (category %s)",
+                esp_err_to_name(display_sleep_result));
+        }
+        display_sleep_pending_ = display_sleep_result != ESP_OK;
+        display_sleep_attempted_at_ms_ = monotonic_ms();
         cancellation_.cancel();
         transport_.cancel_active();
         capture_.discard();
         pcm_sink_.cancel_and_stop();
         agent_loop_->clear_thread();
         image_tool_.clear_results();
+        hide_image();
         if (network_initialized_) {
             network_.shutdown();
             network_initialized_ = false;
         }
-        display_available_.store(false, std::memory_order_release);
-
+        early_connect_attempted_at_ms_ = 0;
         const std::uint32_t grace_started_ms = monotonic_ms();
         while (monotonic_ms() - grace_started_ms < kPoweroffGraceMs) {
             if (button_pressed_.load(std::memory_order_acquire)) {
@@ -881,13 +1269,11 @@ private:
         stop_ble_for_sleep();
 
         if (kDevelopmentMode) {
-            ui::sleep();
             if (!poweroff_gate_.mark_soft_sleep()) {
                 display_available_.store(true, std::memory_order_release);
             }
             return;
         }
-        ui::sleep();
         if (!poweroff_gate_.mark_poweroff_ready()) {
             display_available_.store(true, std::memory_order_release);
         }
@@ -921,10 +1307,11 @@ private:
 
     void recover_poweroff(std::uint32_t now_ms) {
         display_available_.store(true, std::memory_order_release);
+        display_sleep_pending_ = false;
         ensure_ble_started();
         interaction_.fail(now_ms);
         previous_state_ = interaction_.state();
-        ui::wake(previous_state_);
+        request_display_wake(now_ms);
         show_error("THE WATCH COULD NOT TURN OFF");
     }
 
@@ -932,6 +1319,7 @@ private:
     SettingsStore settings_store_;
     network::NetworkManager network_;
     transport::HttpTransport transport_;
+    image::HttpImageFetchProvider image_fetch_provider_;
     AudioCapture capture_;
     AudioPlayback playback_;
     AtomicCancellation cancellation_;
@@ -946,6 +1334,7 @@ private:
     cloud::OpenRouterTranscriptionProvider transcription_provider_;
     cloud::OpenRouterSpeechProvider speech_provider_;
     agent::AgentLoop *agent_loop_ = nullptr;
+    RequestScratch *request_scratch_ = nullptr;
     PcmPlaybackSink pcm_sink_;
     InteractionStateMachine interaction_;
     InteractionState previous_state_ = InteractionState::booting;
@@ -961,11 +1350,26 @@ private:
     runtime::PoweroffGate poweroff_gate_;
     std::uint32_t level_refreshed_at_ms_ = 0;
     std::uint32_t settings_checked_at_ms_ = 0;
+    std::uint32_t early_connect_attempted_at_ms_ = 0;
+    std::uint32_t display_wake_attempted_at_ms_ = 0;
+    std::uint32_t display_sleep_attempted_at_ms_ = 0;
+    std::uint32_t footer_checked_at_ms_ = 0;
+    std::uint32_t battery_checked_at_ms_ = 0;
+    std::uint32_t stream_text_refreshed_at_ms_ = 0;
     std::uint32_t applied_revision_ = 0;
     bool tools_ready_ = false;
     bool ble_started_ = false;
     bool ble_start_attempted_ = false;
     bool network_initialized_ = false;
+    bool display_wake_pending_ = false;
+    bool display_sleep_pending_ = false;
+    bool battery_checked_ = false;
+    bool footer_shown_ = false;
+    bool stream_text_shown_ = false;
+    bool request_active_ = false;
+    ui::WifiIndicator shown_wifi_ = ui::WifiIndicator::off;
+    std::optional<std::uint8_t> battery_percent_;
+    std::optional<std::uint8_t> shown_battery_percent_;
 };
 
 VoiceRuntime::VoiceRuntime() = default;

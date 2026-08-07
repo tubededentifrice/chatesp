@@ -62,6 +62,14 @@ public:
         return true;
     }
 
+    bool pop_back() {
+        if (size_ == 0) {
+            return false;
+        }
+        data_[--size_] = '\0';
+        return true;
+    }
+
     void clear() {
         volatile char *cursor = data_.data();
         for (std::size_t index = 0; index < data_.size(); ++index) {

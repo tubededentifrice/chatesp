@@ -8,13 +8,16 @@ companion for secure BLE configuration.
 
 1. Hold the bottom PWR button and speak.
 2. Release it. The display shows the transcript.
-3. The device gets a concise answer, shows it, and speaks it.
+3. The device gets a concise answer. Text appears as the model sends it. Speech
+   starts after a short buffer on a fast link. A slow link buffers enough audio
+   to keep playback clear.
 4. Continue within 30 seconds to use the same thread.
 5. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
    starts a new thread.
 
-The interface is black, high-contrast, and similar to a small terminal. Status
-motion has a purpose: recording level, network work, tool work, or speech.
+The interface is black, high-contrast, and similar to a small terminal. The
+bottom line shows Wi-Fi state and battery level. Status motion has a purpose:
+recording level, network work, tool work, or speech.
 
 ## Cloud defaults
 
@@ -30,14 +33,20 @@ ScrapingDog without a change to the conversation state machine.
 
 ## Repository status
 
-The project is in active initial development. The connected V2 board now runs
-the black terminal interface. The bottom PWR button starts the hold-to-talk
-state sequence. A short press or 30 seconds of inactivity turns off the AMOLED
-and requests AXP2101 system-off. A PWR-button wake starts a new thread. A held
-wake starts the recording state directly. The top BOOT button has no app action.
-Native tests cover the interaction state machine and button filter. Voice,
-cloud, BLE, iOS, and battery-current measurements are not complete. Do not use
-this status as a claim that the full device workflow works.
+The project is in active development. The firmware implements the black
+terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
+Wi-Fi, HTTPS, streamed model text, streamed speech, search, BLE provisioning,
+and sleep paths. The iOS companion can store settings in Keychain and send them
+over encrypted BLE. A selected, bounded JPEG can appear full-screen after the
+spoken answer.
+
+Automated tests cover pure state, protocol, privacy, and bounded-buffer paths.
+The V2 development device has passed black-screen startup without a white
+frame, bottom-button hold-to-talk, streamed answer text, clear streamed speech,
+button preemption, strong-access-point selection, and modem power saving.
+Full-screen image color and crop, physical iPhone provisioning, battery current,
+production system-off, and long cycle tests are still acceptance gates. Do not
+use this status as a claim that these open physical checks passed.
 
 ## Development
 
@@ -63,19 +72,25 @@ uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run -e watch_dev
 ```
 
-Use development mode during normal firmware work. It keeps the device awake
-when the 30-second sleep timer expires. This keeps USB flashing available:
+Use development mode during normal firmware work. It uses a five-minute
+automatic idle timer and keeps USB flashing available. A short PWR-button press
+still turns off the display at once:
 
 ```sh
 uv run --locked python tools/pio.py run -e watch_dev -t upload
 ```
 
 Use production mode only for final power tests and release images. It enables
-AXP2101 system-off after a sleep request:
+encrypted persistent settings and AXP2101 system-off after a sleep request.
+You can build it without a device change:
 
 ```sh
-uv run --locked python tools/pio.py run -e watch_prod -t upload
+uv run --locked python tools/pio.py run -e watch_prod
 ```
+
+The first production start can write an HMAC key to an eFuse block. This
+operation cannot be reversed. The repository wrapper blocks production upload
+until the user gives explicit approval.
 
 See [development mode](docs/development-mode.md) for the mode contract and the
 recovery procedure.

@@ -4,13 +4,18 @@ idf_component_register(
         "audio_capture.cpp"
         "audio_playback.cpp"
         "ble_provisioning.cpp"
+        "chatesp_font_18.c"
         "cloud_providers.cpp"
         "device_settings.cpp"
         "http_transport.cpp"
+        "image_fetch_provider.cpp"
+        "image_frame.cpp"
+        "jpeg_image_sink.cpp"
         "network_manager.cpp"
         "power_control.cpp"
         "pcm_playback_sink.cpp"
         "settings_store.cpp"
+        "streaming_pcm_response_sink.cpp"
         "ui.cpp"
         "voice_runtime.cpp"
     INCLUDE_DIRS "."
@@ -23,6 +28,7 @@ idf_component_register(
         esp_hw_support
         esp_netif
         esp_partition
+        esp_rom
         esp_wifi
         heap
         mbedtls

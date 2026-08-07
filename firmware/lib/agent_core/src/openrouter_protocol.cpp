@@ -464,13 +464,7 @@ Error OpenRouterSseParser::feed(const char *data, std::size_t size) {
 
 Error OpenRouterSseParser::process_line() {
     while (!line_.empty() && line_.data()[line_.size() - 1] == '\r') {
-        line_.data()[line_.size() - 1] = '\0';
-        // Rebuild a shorter bounded string without exposing a mutable size.
-        FixedText<Limits::max_sse_line_bytes> shorter;
-        if (!shorter.assign(line_.data(), line_.size() - 1)) {
-            return Error::limit_exceeded;
-        }
-        line_ = shorter;
+        line_.pop_back();
     }
     if (line_.empty() || line_.data()[0] == ':') return Error::none;
     constexpr char prefix[] = "data: ";
@@ -485,7 +479,33 @@ Error OpenRouterSseParser::process_line() {
         done_ = true;
         return Error::none;
     }
-    return parse_chat_json(payload, payload_size, turn_, true, saw_finish_);
+    const Error parse_error =
+        parse_chat_json(payload, payload_size, turn_, true, saw_finish_);
+    if (parse_error != Error::none) {
+        return parse_error;
+    }
+    if (turn_.kind == ChatTurnKind::tool_call) {
+        if (published_size_ != 0 && text_sink_ != nullptr) {
+            const Error sink_error = text_sink_->write_chat_text("", 0);
+            if (sink_error != Error::none) {
+                return sink_error;
+            }
+        }
+        return Error::none;
+    }
+    if (
+        turn_.answer.size() <= published_size_) {
+        return Error::none;
+    }
+    published_size_ = turn_.answer.size();
+    if (text_sink_ != nullptr) {
+        const Error sink_error = text_sink_->write_chat_text(
+            turn_.answer.data(), turn_.answer.size());
+        if (sink_error != Error::none) {
+            return sink_error;
+        }
+    }
+    return Error::none;
 }
 
 Error OpenRouterSseParser::finish() {
@@ -504,6 +524,7 @@ void OpenRouterSseParser::reset() {
     line_.clear();
     turn_.clear();
     error_ = Error::none;
+    published_size_ = 0;
     saw_finish_ = false;
     done_ = false;
 }

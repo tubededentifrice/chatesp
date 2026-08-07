@@ -85,7 +85,9 @@ struct ChatTurn {
     void clear() {
         kind = ChatTurnKind::answer;
         answer.clear();
-        tool_call = {};
+        tool_call.id.clear();
+        tool_call.name.clear();
+        tool_call.arguments.clear();
     }
 };
 
@@ -93,11 +95,24 @@ struct WebResult {
     FixedText<Limits::max_title_bytes> title;
     FixedText<Limits::max_url_bytes> url;
     FixedText<Limits::max_snippet_bytes> snippet;
+
+    void clear() {
+        title.clear();
+        url.clear();
+        snippet.clear();
+    }
 };
 
 struct WebResults {
     std::array<WebResult, Limits::max_web_results> items{};
     std::size_t size = 0;
+
+    void clear() {
+        for (auto &item : items) {
+            item.clear();
+        }
+        size = 0;
+    }
 };
 
 struct ImageResult {
@@ -108,11 +123,28 @@ struct ImageResult {
     FixedText<Limits::max_url_bytes> image_url;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+
+    void clear() {
+        id.clear();
+        title.clear();
+        page_url.clear();
+        thumbnail_url.clear();
+        image_url.clear();
+        width = 0;
+        height = 0;
+    }
 };
 
 struct ImageResults {
     std::array<ImageResult, Limits::max_image_results> items{};
     std::size_t size = 0;
+
+    void clear() {
+        for (auto &item : items) {
+            item.clear();
+        }
+        size = 0;
+    }
 };
 
 struct AudioView {

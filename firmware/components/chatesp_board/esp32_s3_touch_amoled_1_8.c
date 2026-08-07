@@ -34,6 +34,7 @@ sdmmc_card_t *bsp_sdcard = NULL; // Global uSD card handler
 static esp_lcd_touch_handle_t tp = NULL;
 static esp_lcd_panel_handle_t panel_handle = NULL; // LCD panel handle
 static esp_lcd_panel_io_handle_t io_handle = NULL;
+static bool panel_display_on = false;
 static uint16_t panel_x_gap = 0;
 
 static i2s_chan_handle_t i2s_tx_chan = NULL;
@@ -361,22 +362,47 @@ esp_err_t bsp_display_brightness_set(int brightness_percent)
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t brightness = (uint8_t)(brightness_percent * 255 / 100);
+    ESP_RETURN_ON_ERROR(
+        esp_lcd_panel_co5300_set_brightness(
+            panel_handle, (uint8_t)brightness_percent), TAG,
+        "Panel brightness command failed");
 
-    uint32_t lcd_cmd = 0x51;
-    lcd_cmd &= 0xff;
-    lcd_cmd <<= 8;
-    lcd_cmd |= 0x02 << 24;
-    uint8_t param = brightness;
-    esp_lcd_panel_io_tx_param(io_handle, lcd_cmd, &param, 1);
-
+    // Restore brightness while the AMOLED is still off. The CO5300 can ignore
+    // a brightness write sent immediately after display-on, which leaves a
+    // logically awake panel black after a zero-brightness sleep.
+    if (brightness_percent > 0)
+    {
+        ESP_RETURN_ON_ERROR(
+            esp_lcd_panel_disp_on_off(panel_handle, true), TAG,
+            "Panel wake failed");
+        if (!panel_display_on)
+        {
+            ESP_LOGI(TAG, "Panel on");
+        }
+        panel_display_on = true;
+    }
     return ESP_OK;
 }
 
 esp_err_t bsp_display_backlight_off(void)
 {
     ESP_LOGI(TAG, "Backlight off");
-    return bsp_display_brightness_set(0);
+    const esp_err_t brightness_error = bsp_display_brightness_set(0);
+    if (brightness_error != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Brightness zero command failed");
+    }
+    if (!panel_display_on)
+    {
+        return ESP_OK;
+    }
+    const esp_err_t panel_error =
+        esp_lcd_panel_disp_on_off(panel_handle, false);
+    if (panel_error == ESP_OK)
+    {
+        panel_display_on = false;
+    }
+    return panel_error;
 }
 
 esp_err_t bsp_display_backlight_on(void)
@@ -439,7 +465,10 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
                                                                  BSP_LCD_H_RES * BSP_LCD_V_RES * BSP_LCD_BITS_PER_PIXEL / 8);
     ESP_ERROR_CHECK(spi_bus_initialize(BSP_LCD_SPI_NUM, &buscfg, SPI_DMA_CH_AUTO));
 
-    const esp_lcd_panel_io_spi_config_t io_config = CO5300_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, NULL, NULL);
+    esp_lcd_panel_io_spi_config_t io_config = CO5300_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, NULL, NULL);
+    // LVGL uses one draw buffer and waits for each flush. A deep queue only
+    // keeps more temporary DMA copies alive and takes memory from TLS.
+    io_config.trans_queue_depth = 2;
 
     co5300_vendor_config_t vendor_config = {
         .init_cmds = lcd_init_cmds,
@@ -456,10 +485,13 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
         .vendor_config = &vendor_config,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_co5300(io_handle, &panel_config, &panel_handle));
-    esp_lcd_panel_reset(panel_handle);
-    esp_lcd_panel_init(panel_handle);
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel_handle, panel_x_gap, 0));
-    esp_lcd_panel_disp_on_off(panel_handle, true);
+    // Start the panel at zero brightness. LVGL can write the first black frame
+    // without a visible white frame, and the UI raises brightness afterward.
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+    panel_display_on = true;
 
     if (ret_panel)
     {
@@ -501,7 +533,10 @@ esp_err_t bsp_touch_new(const bsp_touch_config_t *config, esp_lcd_touch_handle_t
 
     esp_lcd_panel_io_i2c_config_t cst816s_config = ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG();
     if (ESP_OK == bsp_i2c_device_probe(cst816s_config.dev_addr)) {
-        ESP_LOGI(TAG, "Touch CST816S 0x%02X found", cst816s_config.dev_addr);
+        ESP_LOGI(
+            TAG,
+            "V2 CST820-compatible touch 0x%02X found",
+            cst816s_config.dev_addr);
         tp_io_config = cst816s_config;
         touch_new = esp_lcd_touch_new_i2c_cst816s;
         x_gap = BSP_LCD_CST816S_X_GAP;
@@ -538,23 +573,17 @@ esp_io_expander_handle_t bsp_io_expander_init(void)
     return io_expander;
 }
 
-static lv_display_t *bsp_display_lcd_init()
+static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
 {
     bsp_display_config_t disp_config = {0};
 
     BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new(&disp_config, &panel_handle, &io_handle));
 
-    int buffer_size = 0;
-#if CONFIG_BSP_DISPLAY_LVGL_AVOID_TEAR
-    buffer_size = BSP_LCD_H_RES * BSP_LCD_V_RES;
-#else
-    buffer_size = BSP_LCD_H_RES * LVGL_BUFFER_HEIGHT;
-#endif /* CONFIG_BSP_DISPLAY_LVGL_AVOID_TEAR */
-
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io_handle,
         .panel_handle = panel_handle,
-        .buffer_size = buffer_size,
+        .buffer_size = cfg->buffer_size,
+        .double_buffer = cfg->double_buffer,
 
         .monochrome = false,
         .hres = BSP_LCD_H_RES,
@@ -570,9 +599,9 @@ static lv_display_t *bsp_display_lcd_init()
         },
         .flags = {
             .sw_rotate = true,
-            .buff_dma = false,
+            .buff_dma = cfg->flags.buff_dma,
 #if CONFIG_BSP_DISPLAY_LVGL_PSRAM
-            .buff_spiram = false,
+            .buff_spiram = cfg->flags.buff_spiram,
 #endif
 #if CONFIG_BSP_DISPLAY_LVGL_FULL_REFRESH
             .full_refresh = 1,
@@ -583,25 +612,7 @@ static lv_display_t *bsp_display_lcd_init()
             .swap_bytes = true,
 #endif
         }};
-    const lvgl_port_display_rgb_cfg_t rgb_cfg = {
-        .flags = {
-#if CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_MODE
-            .bb_mode = 1,
-#else
-            .bb_mode = 0,
-#endif
-#if CONFIG_BSP_DISPLAY_LVGL_AVOID_TEAR
-            .avoid_tearing = true,
-#else
-            .avoid_tearing = false,
-#endif
-        }};
-
-#if CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_MODE
-    ESP_LOGW(TAG, "CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_MODE");
-#endif
-
-    lv_display_t *disp = lvgl_port_add_disp_rgb(&disp_cfg, &rgb_cfg);
+    lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
     if (!disp)
     {
         return NULL;
@@ -643,11 +654,11 @@ lv_display_t *bsp_display_start(void)
 {
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size = BSP_LCD_DRAW_BUFF_SIZE,
-        .double_buffer = BSP_LCD_DRAW_BUFF_DOUBLE,
+        .buffer_size = BSP_LCD_H_RES * LVGL_BUFFER_HEIGHT,
+        .double_buffer = false,
         .flags = {
             .buff_dma = false,
-            .buff_spiram = true,
+            .buff_spiram = false,
         }};
     return bsp_display_start_with_config(&cfg);
 }
@@ -659,7 +670,7 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
     assert(cfg != NULL);
     BSP_ERROR_CHECK_RETURN_NULL(lvgl_port_init(&cfg->lvgl_port_cfg));
 
-    BSP_NULL_CHECK(disp = bsp_display_lcd_init(), NULL);
+    BSP_NULL_CHECK(disp = bsp_display_lcd_init(cfg), NULL);
 
     BSP_NULL_CHECK(disp_indev = bsp_display_indev_init(disp), NULL);
 

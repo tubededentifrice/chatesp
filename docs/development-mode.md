@@ -6,9 +6,9 @@ normal firmware development.
 ## Development mode
 
 The `watch_dev` profile defines `CHATESP_DEVELOPMENT_MODE=1`. A sleep request
-returns the app to its ready state. It does not turn off the display or request
-AXP2101 system-off. USB stays available, so the next upload can reset and flash
-the board without a manual button sequence.
+turns off the display and radio work, but it does not request AXP2101
+system-off. USB stays available, so the next upload can reset and flash the
+board without a manual button sequence. A PWR-button press wakes the app.
 
 Build and upload development mode with one command:
 
@@ -35,22 +35,49 @@ the USB control lines while it opens the port and request the ROM loader. Pass
 the local port to the repository monitor on the command line. Do not write it
 to a tracked file.
 
-Development mode changes only the final sleep action. The button state machine,
-30-second timer, audio cancellation, network cancellation, and thread reset must
-stay equal to production behavior. Logs must show the selected mode but must not
-show credentials, chat text, audio, or a stable device identifier.
+Development mode uses a five-minute automatic idle timer. This keeps the ready
+screen visible during a test. A short PWR-button press still requests sleep at
+once. Production mode keeps the 30-second automatic idle timer. Audio
+cancellation, network cancellation, and thread reset stay equal in both modes.
+Logs must show the selected mode but must not show credentials, chat text,
+audio, or a stable device identifier.
+
+If the voice runtime cannot start, development mode keeps the error on the
+screen and keeps USB available. It does not enter a permanent black state.
+
+BLE-provisioned development settings stay in volatile memory. Local values
+from the ignored `.secrets/device.env` file are compiled into a local firmware
+image. They stay in device flash until an erase or a replacement image removes
+them. They must never enter a tracked file or a shared firmware artifact. The
+firmware also initializes NVS because the Wi-Fi and Bluetooth drivers use it
+for radio data. Development mode does not enable NVS encryption or persistent
+BLE bonds.
 
 ## Production mode
 
 The `watch_prod` profile defines `CHATESP_DEVELOPMENT_MODE=0`. It is the release
 profile. A sleep request stops active work, turns off the display, and requests
-AXP2101 system-off. USB can disconnect after system-off.
+AXP2101 system-off. USB can disconnect after system-off. This profile enables
+HMAC-protected NVS and persistent BLE bonds.
 
-Build and upload production mode with one command:
+Build production mode without a device change:
 
 ```sh
-uv run --locked python tools/pio.py run -e watch_prod -t upload
+uv run --locked python tools/pio.py run -e watch_prod
 ```
+
+On the first production start, ESP-IDF can create a random NVS HMAC key in the
+configured eFuse key block. An eFuse write cannot be reversed. Inspect the
+device eFuse use and get explicit user approval before this operation. The
+wrapper blocks the production upload unless the approval variable is set for
+that command:
+
+```sh
+CHATESP_ALLOW_PRODUCTION_EFUSE_PROVISION=1 uv run --locked python tools/pio.py run -e watch_prod -t upload
+```
+
+Do not put this variable in a shell profile or a tracked file. The variable is
+only an upload guard. It does not change the firmware security settings.
 
 Use production mode for final sleep, wake, and battery-current tests. Do not use
 a development-mode result as evidence for production power behavior.
