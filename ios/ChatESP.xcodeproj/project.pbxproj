@@ -16,6 +16,7 @@
 		A00000000000000000000007 /* BLEProvisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000007 /* BLEProvisioner.swift */; };
 		A00000000000000000000008 /* ConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000008 /* ConfigurationView.swift */; };
 		A00000000000000000000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000C /* Assets.xcassets */; };
+		A0000000000000000000000A /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000E /* ModelCatalog.swift */; };
 		B00000000000000000000001 /* ProvisioningProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000009 /* ProvisioningProtocolTests.swift */; };
 		B00000000000000000000002 /* BLEProvisionerPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000D /* BLEProvisionerPolicyTests.swift */; };
 /* End PBXBuildFile section */
@@ -44,6 +45,7 @@
 		F0000000000000000000000B /* ChatESPTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ChatESPTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F0000000000000000000000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F0000000000000000000000D /* BLEProvisionerPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEProvisionerPolicyTests.swift; sourceTree = "<group>"; };
+		F0000000000000000000000E /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ModelCatalog.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +81,7 @@
 				F0000000000000000000000C /* Assets.xcassets */,
 				F00000000000000000000001 /* ChatESPApp.swift */,
 				F00000000000000000000002 /* AppPreferences.swift */,
+				F0000000000000000000000E /* ModelCatalog.swift */,
 				F00000000000000000000003 /* ConfigurationStore.swift */,
 				F00000000000000000000004 /* PreferencesStore.swift */,
 				F00000000000000000000005 /* KeychainStore.swift */,
@@ -186,6 +189,7 @@
 			files = (
 				A00000000000000000000001 /* ChatESPApp.swift in Sources */,
 				A00000000000000000000002 /* AppPreferences.swift in Sources */,
+				A0000000000000000000000A /* ModelCatalog.swift in Sources */,
 				A00000000000000000000003 /* ConfigurationStore.swift in Sources */,
 				A00000000000000000000004 /* PreferencesStore.swift in Sources */,
 				A00000000000000000000005 /* KeychainStore.swift in Sources */,
@@ -224,8 +228,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ChatESP/Info.plist;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your watch.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "ChatESP uses an approximate position to help the watch answer local questions such as weather.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your ChatESP device.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "ChatESP uses an approximate position to help the ChatESP device answer local questions such as weather.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
@@ -246,8 +250,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ChatESP/Info.plist;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your watch.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "ChatESP uses an approximate position to help the watch answer local questions such as weather.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your ChatESP device.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "ChatESP uses an approximate position to help the ChatESP device answer local questions such as weather.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;

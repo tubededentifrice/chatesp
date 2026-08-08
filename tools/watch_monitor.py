@@ -194,9 +194,9 @@ def monitor(
 
 def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Read the watch log without an open-time loader reset."
+        description="Read the ChatESP device log without an open-time loader reset."
     )
-    parser.add_argument("--port", required=True, help="Local watch serial port")
+    parser.add_argument("--port", required=True, help="Local ChatESP device serial port")
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument(
         "--latency-report",

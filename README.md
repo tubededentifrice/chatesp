@@ -18,7 +18,7 @@ companion for optional secure BLE configuration.
    sentences go to speech at once. One playback session joins up to four
    speech segments in order. Each model request includes the user's current
    local date and time at minute precision and an approximate location. The
-   app can supply this context. Without the app, the watch uses NTP and one
+   app can supply this context. Without the app, the ChatESP device uses NTP and one
    fast, bounded IP-location lookup.
 4. Pull down the small top handle to change brightness or volume on the
    device. The panel follows the finger. When released, it closes below half
@@ -69,10 +69,14 @@ voice features report the missing capability. Brightness
 and volume changes use a small persistent device-preference record. Up to ten
 short user-requested memories persist in plaintext NVS and enter each model
 request as untrusted context. A full list causes the model to compact the old
-facts before it saves the pending fact. The iOS companion can store
-settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
-can appear full-screen after the spoken answer. A restricted MicroPython tool
-can do short calculations and show a bounded line plot on the full screen.
+facts before it saves the pending fact. The iOS companion supports any number
+of ChatESP devices. It saves global settings, per-device overrides, and each
+edit as soon as it changes. Secrets stay in Keychain. A searchable model
+browser filters OpenRouter models for the required chat, transcription, or
+speech capabilities. The app sends one complete effective configuration over
+encrypted BLE. A selected, bounded JPEG can appear full-screen after the
+spoken answer. A restricted MicroPython tool can do short calculations and
+show a bounded line plot on the full screen.
 
 Automated tests cover pure state, protocol, privacy, and bounded-buffer paths.
 The V2 development device has passed black-screen startup without a white
@@ -118,7 +122,7 @@ uv run --locked python tools/pio.py run -e watch_dev -t upload
 ```
 
 For a black screen, or after each display or power change, use the device
-doctor with the explicit local watch port. It uploads the current development
+doctor with the explicit local ChatESP device port. It uploads the current development
 image and checks the version, board revision, two-step display wake, and voice
 runtime start:
 
@@ -143,7 +147,7 @@ Production does not enable encrypted NVS, flash encryption, or secure boot.
 These features can burn eFuses. Each device profile sets
 `CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. The build wrapper, CMake,
 reviewed SDK settings, and source checks each fail closed if the lock is
-missing, changed, duplicated, or replaced. Watch builds also reject project or
+missing, changed, duplicated, or replaced. ChatESP device builds also reject project or
 build-flag overrides. There is no user-approval or environment-variable bypass.
 
 See [development mode](docs/development-mode.md) for the mode contract and the
@@ -165,7 +169,7 @@ Add `--latency-report` to calculate p50 and p90 values from the privacy-safe
 audio, chat text, URLs, credentials, or device identifiers.
 
 Run all PlatformIO commands through `tools/pio.py`. The wrapper checks the
-dependency cooldown first. For the watch build, it also creates the ESP-IDF
+dependency cooldown first. For the ChatESP device build, it also creates the ESP-IDF
 Python environment from a hash-locked requirements file.
 
 For a user-requested task branch or a repeatable tooling failure, use the

@@ -102,16 +102,38 @@ struct ProvisioningSettings: Equatable {
     let speechModel: String
     let approximateLocation: String
 
-    init(preferences: AppPreferences, secrets: ProvisioningSecrets) {
-        chatEndpoint = preferences.chatEndpoint
+    init(
+        configuration: ChatESPConfiguration,
+        secrets: ProvisioningSecretValues
+    ) {
+        chatEndpoint = configuration.chatEndpoint
         openRouterKey = secrets.openRouterKey
         braveKey = secrets.braveKey
         wifiSSID = secrets.wifiSSID
         wifiPassword = secrets.wifiPassword
-        chatModel = preferences.chatModel
-        transcriptionModel = preferences.transcriptionModel
-        speechModel = preferences.speechModel
-        approximateLocation = preferences.approximateLocation ?? ""
+        chatModel = configuration.chatModel
+        transcriptionModel = configuration.transcriptionModel
+        speechModel = configuration.speechModel
+        approximateLocation = configuration.approximateLocation
+    }
+
+    var validationIssues: [ConfigurationValidationIssue] {
+        let candidates: [(UInt8, String, FieldRule)] = [
+            (1, chatEndpoint, .endpoint),
+            (2, openRouterKey, .openRouterKey),
+            (3, braveKey, .braveKey),
+            (4, wifiSSID, .wifiSSID),
+            (5, wifiPassword, .wifiPassword),
+            (6, chatModel, .model),
+            (7, transcriptionModel, .model),
+            (8, speechModel, .model),
+            (9, approximateLocation, .approximateLocation),
+        ]
+        return candidates.compactMap { id, text, rule in
+            (try? field(id: id, text: text, rule: rule)) == nil
+                ? ConfigurationValidationIssue(fieldID: id)
+                : nil
+        }
     }
 
     func contentFingerprint() throws -> Data {
@@ -233,6 +255,27 @@ struct ProvisioningSettings: Equatable {
     }
 }
 
+struct ConfigurationValidationIssue: Identifiable, Equatable {
+    let fieldID: UInt8
+
+    var id: UInt8 { fieldID }
+
+    var message: String {
+        switch fieldID {
+        case 1: return "Enter a valid HTTPS chat endpoint."
+        case 2: return "Enter an OpenRouter key with at least 8 characters."
+        case 3: return "The optional Brave key must contain visible characters."
+        case 4: return "Enter a Wi-Fi network name of 1 through 32 bytes."
+        case 5: return "Enter a Wi-Fi password of 8 through 63 bytes."
+        case 6: return "Select a chat and tool model."
+        case 7: return "Select a speech-to-text model."
+        case 8: return "Select a text-to-speech model."
+        case 9: return "Use a city-level location of 96 bytes or less."
+        default: return "This setting is not valid."
+        }
+    }
+}
+
 struct ProvisioningPacket: Equatable {
     let data: Data
     let revision: UInt32
@@ -345,7 +388,6 @@ struct ProvisioningTransfer {
 
 enum MemoryProtocolV1 {
     static let version: UInt8 = 1
-    // Keep these protocol limits together. Validation and user text use them.
     static let maximumFacts = 10
     static let maximumFactBytes = 128
     static let commandHeaderSize = 54
@@ -567,15 +609,15 @@ extension MemoryProtocolError: LocalizedError {
         case .invalidField:
             return "The memory fact is not valid."
         case .malformedResponse, .responseMismatch:
-            return "The watch returned an invalid memory response."
+            return "The ChatESP device returned an invalid memory response."
         case .unavailable:
-            return "Update the watch firmware to manage memories."
+            return "Update the ChatESP device firmware to manage memories."
         case .disconnected:
-            return "Connect the selected watch to manage memories."
+            return "Connect the selected ChatESP device to manage memories."
         case .timeout:
-            return "The watch did not confirm the memory request in time."
+            return "The ChatESP device did not confirm the memory request in time."
         case .rejected(let status):
-            return "The watch rejected the memory request (code \(status.rawValue))."
+            return "The ChatESP device rejected the memory request (code \(status.rawValue))."
         }
     }
 }
@@ -604,8 +646,8 @@ enum ProvisioningError: Error, Equatable {
 extension ProvisioningError: LocalizedError {
     var errorDescription: String? {
         switch self {
-        case .invalidField:
-            return "One setting is not valid. Check each value and try again."
+        case .invalidField(let fieldID):
+            return ConfigurationValidationIssue(fieldID: fieldID).message
         case .invalidRevision, .revisionExhausted:
             return "The settings revision is not valid."
         case .invalidDeviceContext:
@@ -613,7 +655,7 @@ extension ProvisioningError: LocalizedError {
         case .packetTooLarge:
             return "The settings are too large."
         case .acknowledgementMismatch, .malformedAcknowledgement:
-            return "The watch returned an invalid confirmation."
+            return "The ChatESP device returned an invalid confirmation."
         case .unsupportedPreferences:
             return "The saved settings use an unsupported version."
         case .keychain:
@@ -623,17 +665,17 @@ extension ProvisioningError: LocalizedError {
         case .bluetoothUnavailable:
             return "Bluetooth is not available."
         case .noDevice:
-            return "Select a watch first."
+            return "Select a ChatESP device first."
         case .disconnected:
-            return "The watch disconnected."
+            return "The ChatESP device disconnected."
         case .missingService, .missingCharacteristic:
-            return "The watch does not support this provisioning version."
+            return "The ChatESP device does not support this provisioning version."
         case .writeFailed:
-            return "The watch did not accept a transfer frame."
+            return "The ChatESP device did not accept a transfer frame."
         case .timeout:
-            return "The watch did not confirm the settings in time."
+            return "The ChatESP device did not confirm the settings in time."
         case .deviceRejected(let status):
-            return "The watch rejected the settings (code \(status.rawValue))."
+            return "The ChatESP device rejected the settings (code \(status.rawValue))."
         }
     }
 }

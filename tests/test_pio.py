@@ -154,11 +154,11 @@ class PlatformioWrapperTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "watch builds forbid the project override option: --project-dir",
+            "ChatESP device builds forbid the project override option: --project-dir",
             errors,
         )
         self.assertIn(
-            "watch builds forbid the project override variable: "
+            "ChatESP device builds forbid the project override variable: "
             "PLATFORMIO_BUILD_FLAGS",
             errors,
         )

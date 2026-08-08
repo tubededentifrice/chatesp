@@ -5,18 +5,20 @@ final class ProvisioningProtocolTests: XCTestCase {
     private let fixturePassword = ["PASS", "WORD", "_PLACEHOLDER"].joined()
 
     private func goldenSettings() -> ProvisioningSettings {
-        let preferences = AppPreferences(
+        let configuration = ChatESPConfiguration(
             chatEndpoint: "https://openrouter.ai/api/v1",
             chatModel: "~deepseek/deepseek-v4-flash-latest",
             transcriptionModel: "openai/whisper-large-v3-turbo",
             speechModel: "google/gemini-3.1-flash-tts-preview",
             approximateLocation: "Dubai, United Arab Emirates")
-        let secrets = ProvisioningSecrets(
+        let secrets = ProvisioningSecretValues(
             openRouterKey: "OPENROUTER_TOKEN_PLACEHOLDER",
             braveKey: "BRAVE_TOKEN_PLACEHOLDER",
             wifiSSID: "Test Network",
             wifiPassword: fixturePassword)
-        return ProvisioningSettings(preferences: preferences, secrets: secrets)
+        return ProvisioningSettings(
+            configuration: configuration,
+            secrets: secrets)
     }
 
     private func acknowledgement(
@@ -144,75 +146,75 @@ final class ProvisioningProtocolTests: XCTestCase {
     }
 
     func testInvalidFieldsAreRejectedBeforeTransfer() throws {
-        var preferences = AppPreferences()
-        let validSecrets = ProvisioningSecrets(
+        var configuration = ChatESPConfiguration()
+        let validSecrets = ProvisioningSecretValues(
             openRouterKey: "OPENROUTER_TOKEN_PLACEHOLDER",
             braveKey: "",
             wifiSSID: "Test Network",
             wifiPassword: fixturePassword)
 
-        preferences.chatEndpoint = "http://example.com"
+        configuration.chatEndpoint = "http://example.com"
         XCTAssertThrowsError(
-            try ProvisioningSettings(preferences: preferences, secrets: validSecrets).packet(revision: 1))
+            try ProvisioningSettings(configuration: configuration, secrets: validSecrets).packet(revision: 1))
 
-        preferences = AppPreferences()
-        preferences.chatModel = "model with spaces"
+        configuration = ChatESPConfiguration()
+        configuration.chatModel = "model with spaces"
         XCTAssertThrowsError(
-            try ProvisioningSettings(preferences: preferences, secrets: validSecrets).packet(revision: 1))
+            try ProvisioningSettings(configuration: configuration, secrets: validSecrets).packet(revision: 1))
 
-        preferences = AppPreferences()
-        preferences.approximateLocation = String(repeating: "L", count: 97)
+        configuration = ChatESPConfiguration()
+        configuration.approximateLocation = String(repeating: "L", count: 97)
         XCTAssertThrowsError(
-            try ProvisioningSettings(preferences: preferences, secrets: validSecrets).packet(revision: 1))
+            try ProvisioningSettings(configuration: configuration, secrets: validSecrets).packet(revision: 1))
 
-        preferences = AppPreferences()
-        preferences.approximateLocation = "Dubai\nUnited Arab Emirates"
+        configuration = ChatESPConfiguration()
+        configuration.approximateLocation = "Dubai\nUnited Arab Emirates"
         XCTAssertThrowsError(
-            try ProvisioningSettings(preferences: preferences, secrets: validSecrets).packet(revision: 1))
+            try ProvisioningSettings(configuration: configuration, secrets: validSecrets).packet(revision: 1))
 
         var invalidSecrets = validSecrets
         invalidSecrets.openRouterKey = "short"
         XCTAssertThrowsError(
-            try ProvisioningSettings(preferences: preferences, secrets: invalidSecrets).packet(revision: 1))
+            try ProvisioningSettings(configuration: configuration, secrets: invalidSecrets).packet(revision: 1))
 
         invalidSecrets = validSecrets
         invalidSecrets.wifiSSID = String(repeating: "S", count: 33)
         XCTAssertThrowsError(
-            try ProvisioningSettings(preferences: preferences, secrets: invalidSecrets).packet(revision: 1))
+            try ProvisioningSettings(configuration: configuration, secrets: invalidSecrets).packet(revision: 1))
 
         invalidSecrets = validSecrets
         invalidSecrets.wifiPassword = "short"
         XCTAssertThrowsError(
-            try ProvisioningSettings(preferences: preferences, secrets: invalidSecrets).packet(revision: 1))
+            try ProvisioningSettings(configuration: configuration, secrets: invalidSecrets).packet(revision: 1))
     }
 
     func testRevisionStaysStableUntilMatchingAcknowledgement() throws {
         let fingerprint = try goldenSettings().contentFingerprint()
-        var preferences = AppPreferences()
-        XCTAssertEqual(try preferences.revision(for: fingerprint), 1)
-        XCTAssertEqual(try preferences.revision(for: fingerprint), 1)
+        var state = ProvisioningVersionState()
+        XCTAssertEqual(try state.revision(for: fingerprint), 1)
+        XCTAssertEqual(try state.revision(for: fingerprint), 1)
 
         var other = fingerprint
         other[0] ^= 1
-        XCTAssertEqual(try preferences.revision(for: other), 2)
-        XCTAssertThrowsError(try preferences.acknowledge(revision: 1, fingerprint: fingerprint))
-        try preferences.acknowledge(revision: 2, fingerprint: other)
-        XCTAssertEqual(preferences.appliedRevision, 2)
-        XCTAssertEqual(try preferences.revision(for: other), 2)
-        try preferences.acknowledge(revision: 2, fingerprint: other)
-        XCTAssertEqual(try preferences.revision(for: fingerprint), 3)
+        XCTAssertEqual(try state.revision(for: other), 2)
+        XCTAssertThrowsError(try state.acknowledge(revision: 1, fingerprint: fingerprint))
+        try state.acknowledge(revision: 2, fingerprint: other)
+        XCTAssertEqual(state.appliedRevision, 2)
+        XCTAssertEqual(try state.revision(for: other), 2)
+        try state.acknowledge(revision: 2, fingerprint: other)
+        XCTAssertEqual(try state.revision(for: fingerprint), 3)
     }
 
     func testRevisionRecoveryHandlesMatchingAndChangedContent() throws {
         let current = try goldenSettings().contentFingerprint()
         let different = Data(repeating: 0x5a, count: 32)
 
-        var matching = AppPreferences()
+        var matching = ProvisioningVersionState()
         _ = try matching.revision(for: current)
         try matching.recoverActiveVersion(revision: 7, fingerprint: current)
         XCTAssertEqual(try matching.revision(for: current), 7)
 
-        var changed = AppPreferences()
+        var changed = ProvisioningVersionState()
         _ = try changed.revision(for: current)
         try changed.recoverActiveVersion(revision: 7, fingerprint: different)
         XCTAssertNil(changed.pendingRevision)
@@ -224,28 +226,169 @@ final class ProvisioningProtocolTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = PreferencesStore(defaults: defaults)
+        let deviceID = UUID()
         var preferences = AppPreferences()
-        preferences.chatModel = "example/model"
-        preferences.selectedWatchIdentifier = UUID()
+        preferences.global.chatModel = "example/model"
+        preferences.devices = [ChatESPDeviceRecord(id: deviceID, name: "Office")]
+        preferences.activeDeviceIdentifier = deviceID
         try store.save(preferences)
         let record = defaults.persistentDomain(forName: suite)
         XCTAssertEqual(record?.keys.count, 1)
         XCTAssertEqual(store.load(), preferences)
     }
 
-    func testPreferencesDecodeRecordWithoutSelectedWatch() throws {
+    func testPreferencesSaveAnIncompleteEditWithoutPacketValidation() throws {
+        let suite = "org.chatesp.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = PreferencesStore(defaults: defaults)
+        var preferences = AppPreferences()
+        preferences.global.chatEndpoint = "h"
+        try store.save(preferences)
+        XCTAssertEqual(store.load().global.chatEndpoint, "h")
+    }
+
+    func testPreferencesMigrateTheLegacySelectedDevice() throws {
         let suite = "org.chatesp.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = PreferencesStore(defaults: defaults)
         let recordKey = "org.chatesp.preferences.record"
-        let encoded = try JSONEncoder().encode(AppPreferences())
-        var object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        object.removeValue(forKey: "selectedWatchIdentifier")
-        defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: recordKey)
+        let deviceID = UUID()
+        let legacy: [String: Any] = [
+            "formatVersion": 1,
+            "chatEndpoint": "https://openrouter.ai/api/v1",
+            "chatModel": "example/chat",
+            "transcriptionModel": "example/transcription",
+            "speechModel": "example/speech",
+            "appliedRevision": 4,
+            "selectedWatchIdentifier": deviceID.uuidString,
+        ]
+        defaults.set(try JSONSerialization.data(withJSONObject: legacy), forKey: recordKey)
 
-        XCTAssertNil(store.load().selectedWatchIdentifier)
+        let migrated = store.load()
+        XCTAssertEqual(migrated.formatVersion, 2)
+        XCTAssertEqual(migrated.activeDeviceIdentifier, deviceID)
+        XCTAssertEqual(migrated.devices.first?.provisioning.appliedRevision, 4)
+        XCTAssertEqual(migrated.global.chatModel, "example/chat")
+    }
+
+    func testDeviceOverridesInheritGlobalValues() throws {
+        let deviceID = UUID()
+        var preferences = AppPreferences()
+        preferences.global.chatModel = "global/chat"
+        preferences.global.approximateLocation = "Dubai, UAE"
+        preferences.devices = [
+            ChatESPDeviceRecord(
+                id: deviceID,
+                name: "Desk",
+                overrides: ChatESPConfigurationOverrides(
+                    speechModel: "device/speech",
+                    approximateLocation: ""))
+        ]
+        let effective = try XCTUnwrap(
+            preferences.effectiveConfiguration(for: deviceID))
+        XCTAssertEqual(effective.chatModel, "global/chat")
+        XCTAssertEqual(effective.speechModel, "device/speech")
+        XCTAssertEqual(effective.approximateLocation, "")
+    }
+
+    func testSecretOverridesInheritAndCanDisableSearch() {
+        let deviceID = UUID()
+        let secrets = ProvisioningSecrets(
+            global: ProvisioningSecretValues(
+                openRouterKey: "global-key",
+                braveKey: "global-search",
+                wifiSSID: "Global Wi-Fi",
+                wifiPassword: fixturePassword),
+            deviceOverrides: [
+                deviceID: ProvisioningSecretOverrides(braveKey: "")
+            ])
+        let effective = secrets.effectiveValues(for: deviceID)
+        XCTAssertEqual(effective.openRouterKey, "global-key")
+        XCTAssertEqual(effective.braveKey, "")
+        XCTAssertEqual(effective.wifiSSID, "Global Wi-Fi")
+    }
+
+    func testLegacySecretsBecomeGlobalSecrets() throws {
+        let legacy: [String: String] = [
+            "openRouterKey": "old-router-key",
+            "braveKey": "old-search-key",
+            "wifiSSID": "Old Wi-Fi",
+            "wifiPassword": fixturePassword,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: legacy)
+        let decoded = try JSONDecoder().decode(ProvisioningSecrets.self, from: data)
+        XCTAssertEqual(decoded.global.openRouterKey, "old-router-key")
+        XCTAssertEqual(decoded.global.wifiSSID, "Old Wi-Fi")
+        XCTAssertTrue(decoded.deviceOverrides.isEmpty)
+    }
+
+    func testValidationReportsEachIncompleteValue() {
+        let settings = ProvisioningSettings(
+            configuration: ChatESPConfiguration(),
+            secrets: ProvisioningSecretValues())
+        XCTAssertEqual(
+            settings.validationIssues.map(\.fieldID),
+            [2, 4, 5])
+        XCTAssertFalse(
+            settings.validationIssues.map(\.message).contains {
+                $0.contains("One setting")
+            })
+    }
+
+    func testModelCatalogFiltersRequiredCapabilities() throws {
+        let chatJSON = """
+        {
+          "id": "example/chat",
+          "name": "Chat",
+          "description": "",
+          "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["text"]
+          },
+          "supported_parameters": ["tools"]
+        }
+        """
+        let transcriptionJSON = """
+        {
+          "id": "example/transcription",
+          "name": "Transcription",
+          "description": "",
+          "architecture": {
+            "input_modalities": ["audio"],
+            "output_modalities": ["transcription"]
+          },
+          "supported_parameters": []
+        }
+        """
+        let speechJSON = """
+        {
+          "id": "example/speech",
+          "name": "Speech",
+          "description": "",
+          "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["speech"]
+          },
+          "supported_parameters": [],
+          "supported_voices": ["af_heart", "ff_siwis"]
+        }
+        """
+        let chat = try JSONDecoder().decode(
+            OpenRouterModel.self,
+            from: Data(chatJSON.utf8))
+        let transcription = try JSONDecoder().decode(
+            OpenRouterModel.self,
+            from: Data(transcriptionJSON.utf8))
+        let speech = try JSONDecoder().decode(
+            OpenRouterModel.self,
+            from: Data(speechJSON.utf8))
+        XCTAssertTrue(chat.supports(.chat))
+        XCTAssertTrue(transcription.supports(.transcription))
+        XCTAssertTrue(speech.supports(.speech))
+        XCTAssertFalse(chat.supports(.transcription))
+        XCTAssertFalse(transcription.supports(.speech))
     }
 
     func testMemoryFingerprintMatchesFirmwareVector() throws {

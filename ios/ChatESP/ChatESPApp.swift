@@ -10,7 +10,7 @@ struct ChatESPApp: App {
         _store = StateObject(wrappedValue: store)
         _provisioner = StateObject(
             wrappedValue: BLEProvisioner(
-                selectedWatchIdentifier: store.selectedWatchIdentifier))
+                selectedDeviceIdentifier: store.activeDeviceIdentifier))
     }
 
     var body: some Scene {

@@ -2,7 +2,7 @@ import CoreBluetooth
 import CoreLocation
 import Foundation
 
-struct DiscoveredWatch: Identifiable {
+struct DiscoveredDevice: Identifiable {
     let peripheral: CBPeripheral
     let name: String
 
@@ -26,8 +26,8 @@ enum ProvisioningPhase: Equatable {
         case .connecting: return "Connecting"
         case .pairing: return "Preparing the secure connection"
         case .transferring(let percent): return "Sending settings: \(percent)%"
-        case .waitingForConfirmation: return "Waiting for the watch"
-        case .complete: return "Settings saved on the watch"
+        case .waitingForConfirmation: return "Waiting for the ChatESP device"
+        case .complete: return "Settings saved on the ChatESP device"
         case .failed(let message): return message
         }
     }
@@ -42,7 +42,7 @@ enum BLEProvisionerError: Error, Equatable, LocalizedError {
         case .requestInProgress:
             return "A settings transfer is already in progress."
         case .stopped:
-            return "The watch connection was stopped."
+            return "The ChatESP device connection was stopped."
         }
     }
 }
@@ -91,17 +91,17 @@ struct BLEProvisionerPolicy {
 
 @MainActor
 final class BLEProvisioner: NSObject, ObservableObject {
-    @Published private(set) var watches: [DiscoveredWatch] = []
+    @Published private(set) var discoveredDevices: [DiscoveredDevice] = []
     @Published private(set) var selectedID: UUID?
     @Published private(set) var phase: ProvisioningPhase = .idle
     @Published private(set) var memories: [MemoryFact] = []
     @Published private(set) var memoryAvailable = false
     @Published private(set) var memoryMessage =
-        "Connect a watch to manage memories."
-    @Published private(set) var isWatchConnected = false
+        "Connect a ChatESP device to manage memories."
+    @Published private(set) var isDeviceConnected = false
     @Published private(set) var isProvisioning = false
 
-    var onSelectedWatchChanged: ((UUID?) -> Void)?
+    var onSelectedDeviceChanged: ((UUID?) -> Void)?
 
     private static let service = CBUUID(string: ProvisioningProtocolV2.serviceUUID)
     private static let control = CBUUID(string: ProvisioningProtocolV2.controlUUID)
@@ -163,8 +163,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var memoryListRestartCount = 0
     private var memoryRefreshNeeded = false
 
-    init(selectedWatchIdentifier: UUID? = nil) {
-        desiredSelectedID = selectedWatchIdentifier
+    init(selectedDeviceIdentifier: UUID? = nil) {
+        desiredSelectedID = selectedDeviceIdentifier
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
@@ -200,7 +200,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private func startScan() {
         scanTimeoutWork?.cancel()
         scanWhenReady = false
-        watches = []
+        discoveredDevices = []
         discovered = [:]
         phase = .scanning
         central.scanForPeripherals(
@@ -220,16 +220,16 @@ final class BLEProvisioner: NSObject, ObservableObject {
             execute: work)
     }
 
-    func select(_ watch: DiscoveredWatch) {
+    func select(_ device: DiscoveredDevice) {
         guard !isProvisioning else { return }
-        select(watch.peripheral, notifySelectionChange: true)
+        select(device.peripheral, notifySelectionChange: true)
     }
 
-    var selectedWatchIdentifier: UUID? {
+    var selectedDeviceIdentifier: UUID? {
         selectedID
     }
 
-    func restoreSelectedWatch(identifier: UUID?) {
+    func restoreSelectedDevice(identifier: UUID?) {
         desiredSelectedID = identifier
         guard let identifier else {
             for peripheral in restoredPeripherals.values where
@@ -250,7 +250,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
     }
 
-    func forgetSelectedWatch() {
+    func forgetSelectedDevice() {
         scanWhenReady = false
         central.stopScan()
         scanTimeoutWork?.cancel()
@@ -275,7 +275,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         selectedID = nil
         desiredSelectedID = nil
         restoredPeripherals = [:]
-        isWatchConnected = false
+        isDeviceConnected = false
         if pendingPacket != nil || completion != nil {
             finish(.failure(BLEProvisionerError.stopped), sendContext: false)
         }
@@ -289,7 +289,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
             oldSelection.delegate = nil
             central.cancelPeripheralConnection(oldSelection)
         }
-        onSelectedWatchChanged?(nil)
+        onSelectedDeviceChanged?(nil)
     }
 
     private func select(
@@ -312,14 +312,14 @@ final class BLEProvisioner: NSObject, ObservableObject {
             central.cancelPeripheralConnection(oldSelection)
         }
         reconnectAttempt = 0
-        isWatchConnected = peripheral.state == .connected
+        isDeviceConnected = peripheral.state == .connected
         clearMemoryConnectionState()
         clearCharacteristics()
         resetDeviceContextTransfer()
         startDeviceContextSync()
         peripheral.delegate = self
         if notifySelectionChange {
-            onSelectedWatchChanged?(peripheral.identifier)
+            onSelectedDeviceChanged?(peripheral.identifier)
         }
         if peripheral.state == .connected {
             lastDeviceContextSentAt = nil
@@ -392,15 +392,15 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func isActive(_ peripheral: CBPeripheral) -> Bool {
-        isSelected(peripheral) && isWatchConnected &&
+        isSelected(peripheral) && isDeviceConnected &&
             peripheral.state == .connected
     }
 
     func refreshMemories() {
         guard memoryAvailable else {
-            memoryMessage = isWatchConnected
-                ? "Update the watch firmware to manage memories."
-                : "Connect a watch to manage memories."
+            memoryMessage = isDeviceConnected
+                ? "Update the ChatESP device firmware to manage memories."
+                : "Connect a ChatESP device to manage memories."
             return
         }
         guard pendingMemoryCommand == nil else {
@@ -413,7 +413,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
 
     func addMemory(_ fact: String) {
         guard MemoryProtocolV1.validFact(fact) else {
-            memoryMessage = "Enter one fact of at most \(MemoryProtocolV1.maximumFactBytes) UTF-8 bytes."
+            memoryMessage = "Enter one fact of at most 128 UTF-8 bytes."
             return
         }
         runMemoryMutation(operation: .add, fact: fact)
@@ -439,9 +439,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
         memories = []
         memoryAvailable = false
         memoryRefreshNeeded = false
-        memoryMessage = isWatchConnected
-            ? "Update the watch firmware to manage memories."
-            : "Connect a watch to manage memories."
+        memoryMessage = isDeviceConnected
+            ? "Update the ChatESP device firmware to manage memories."
+            : "Connect a ChatESP device to manage memories."
     }
 
     private func allocateMemoryRequestID() -> UInt32 {
@@ -549,7 +549,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
             memoryRevision = memoryListRevision
             memoryFingerprint = memoryListFingerprint
             memoryMessage = memories.isEmpty
-                ? "The watch has no saved memories."
+                ? "The ChatESP device has no saved memories."
                 : "Memories are current."
         } catch {
             memories = []
@@ -563,9 +563,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
         fact: String = ""
     ) {
         guard memoryAvailable else {
-            memoryMessage = isWatchConnected
-                ? "Update the watch firmware to manage memories."
-                : "Connect a watch to manage memories."
+            memoryMessage = isDeviceConnected
+                ? "Update the ChatESP device firmware to manage memories."
+                : "Connect a ChatESP device to manage memories."
             return
         }
         guard pendingMemoryCommand == nil else {
@@ -596,7 +596,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
                             "Ask ChatESP to compact memories, or remove a fact."
                     case .revisionConflict:
                         self.memoryMessage =
-                            "Memories changed on the watch. The list was reloaded."
+                            "Memories changed on the ChatESP device. The list was reloaded."
                         self.refreshMemories()
                     default:
                         self.memoryMessage = self.memoryStatusText(response.status)
@@ -612,7 +612,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         _ command: MemoryCommand,
         completion: @escaping (Result<MemoryResponse, Error>) -> Void
     ) {
-        guard isWatchConnected,
+        guard isDeviceConnected,
               let selected,
               selected.state == .connected,
               let memoryCommandCharacteristic,
@@ -628,7 +628,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         pendingMemoryCommand = command
         pendingMemoryAttempt = 1
         memoryCompletion = completion
-        memoryMessage = "Waiting for the watch."
+        memoryMessage = "Waiting for the ChatESP device."
         selected.writeValue(
             command.data, for: memoryCommandCharacteristic, type: .withResponse)
         startMemoryTimeout()
@@ -682,19 +682,19 @@ final class BLEProvisioner: NSObject, ObservableObject {
         case .full:
             return "Ask ChatESP to compact memories, or remove a fact."
         case .notFound:
-            return "That memory is no longer on the watch. Refresh the list."
+            return "That memory is no longer on the ChatESP device. Refresh the list."
         case .revisionConflict:
-            return "Memories changed on the watch. Refresh the list."
+            return "Memories changed on the ChatESP device. Refresh the list."
         case .authenticationRequired:
-            return "Pair with the watch before you manage memories."
+            return "Pair with the ChatESP device before you manage memories."
         case .busy:
-            return "The watch is busy. Try again."
+            return "The ChatESP device is busy. Try again."
         case .unsupportedVersion:
-            return "Update the app or watch firmware to manage memories."
+            return "Update the app or ChatESP device firmware to manage memories."
         case .storageFailure:
-            return "The watch could not save the memory change."
+            return "The ChatESP device could not save the memory change."
         case .invalidField:
-            return "The watch rejected an invalid memory field."
+            return "The ChatESP device rejected an invalid memory field."
         case .applied, .unchanged:
             return "Memories are current."
         }
@@ -829,7 +829,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 attempt: reconnectAttempt) else {
             if selectedID != nil, reconnectAttempt >=
                 BLEProvisionerPolicy.reconnectDelays.count {
-                phase = .failed("The watch did not reconnect.")
+                phase = .failed("The ChatESP device did not reconnect.")
             }
             return
         }
@@ -857,7 +857,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         switch selected.state {
         case .connected:
             lastDeviceContextSentAt = nil
-            isWatchConnected = true
+            isDeviceConnected = true
             prepareCharacteristics(on: selected)
         case .connecting:
             startConnectionTimeout(for: selected)
@@ -1017,7 +1017,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
             }
             if central.state == .poweredOn,
                self.selected != nil,
-               !self.isWatchConnected,
+               !self.isDeviceConnected,
                self.pendingPacket == nil {
                 self.scheduleReconnect()
             }
@@ -1030,7 +1030,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
                 self.connectionTimeoutWork = nil
                 self.reconnectWork?.cancel()
                 self.reconnectWork = nil
-                self.isWatchConnected = false
+                self.isDeviceConnected = false
                 self.clearMemoryConnectionState()
                 self.resetDeviceContextTransfer()
                 if self.pendingPacket != nil || self.completion != nil {
@@ -1071,8 +1071,8 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         Task { @MainActor in
             guard central.isScanning else { return }
             self.discovered[peripheral.identifier] = peripheral
-            self.watches = self.discovered.values
-                .map { DiscoveredWatch(peripheral: $0, name: $0.name ?? "ChatESP") }
+            self.discoveredDevices = self.discovered.values
+                .map { DiscoveredDevice(peripheral: $0, name: $0.name ?? "ChatESP") }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             if self.selected == nil,
                self.desiredSelectedID == peripheral.identifier {
@@ -1095,7 +1095,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
             self.connectionTimeoutWork = nil
             self.reconnectAttempt = 0
             self.lastDeviceContextSentAt = nil
-            self.isWatchConnected = true
+            self.isDeviceConnected = true
             self.prepareCharacteristics(on: peripheral)
         }
     }
@@ -1109,7 +1109,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
             guard self.isSelected(peripheral) else { return }
             self.connectionTimeoutWork?.cancel()
             self.connectionTimeoutWork = nil
-            self.isWatchConnected = false
+            self.isDeviceConnected = false
             self.clearMemoryConnectionState()
             if self.pendingPacket != nil {
                 self.finish(.failure(error ?? ProvisioningError.disconnected))
@@ -1129,7 +1129,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
             guard self.isSelected(peripheral) else { return }
             self.connectionTimeoutWork?.cancel()
             self.connectionTimeoutWork = nil
-            self.isWatchConnected = false
+            self.isDeviceConnected = false
             self.clearMemoryConnectionState()
             if self.pendingPacket != nil {
                 self.finish(.failure(error ?? ProvisioningError.disconnected))
@@ -1198,7 +1198,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 self.memoryAvailable = false
                 self.memories = []
                 self.memoryMessage =
-                    "Update the watch firmware to manage memories."
+                    "Update the ChatESP device firmware to manage memories."
             }
             if self.pendingPacket != nil {
                 self.beginAttempt()

@@ -2,7 +2,7 @@
 
 This document defines ChatESP BLE provisioning protocol version 2. All integer
 values use network byte order. All text uses UTF-8. A length is a byte count.
-The companion and this protocol are optional at runtime. The watch uses an
+The companion and this protocol are optional at runtime. The ChatESP device uses an
 ignored local configuration in development or the last valid stored record in
 production. Local Clock and controls do not require a provisioning record.
 Cloud voice needs Wi-Fi and service credentials from one of these sources.
@@ -35,8 +35,8 @@ write can cause the system pairing prompt.
 
 ## Transfer
 
-The watch can stop BLE after a voice recording to release internal memory for
-the cloud TLS request. This closes an active phone connection. The watch starts
+The ChatESP device can stop BLE after a voice recording to release internal memory for
+the cloud TLS request. This closes an active phone connection. The ChatESP device starts
 advertising again when it returns to idle. The iOS app must treat this as a
 normal, recoverable disconnect. It must not report a completed settings write
 unless it received the application acknowledgement before the disconnect.
@@ -165,9 +165,19 @@ settings. iOS must reject a flagged zero revision. A response without the flag
 is not recovery metadata. This rule prevents a response from old firmware from
 being used as active metadata.
 
-The selected Core Bluetooth watch identifier is an optional, non-secret field
-in the same versioned iOS preferences record. A record from an earlier app can
-omit this field. Credentials stay in Keychain.
+The iOS app keeps one non-secret device record for each added Core Bluetooth
+identifier. Each record has a user-visible name, non-secret overrides, and its
+own acknowledged and pending revision state. The same versioned preferences
+record contains the global non-secret values, all device records, and the
+active-device identifier. A prior single-device record migrates to this form.
+Credentials stay in Keychain. Keychain contains the global secret values and
+optional secret overrides for each device.
+
+The app saves each field edit to its local store at once. It does not validate
+the complete settings packet before it saves another field. The app combines
+the current global values and device overrides before provisioning. It lists
+each incomplete or invalid effective field and does not start a transfer until
+the complete effective packet is valid.
 
 The firmware validates the complete packet before a persistent write. It then
 writes the changed settings and metadata to plaintext NVS as one logical
@@ -183,13 +193,13 @@ The development profile does not claim durable provisioning.
 
 ## Live device context
 
-The iOS app sends live context when the watch connects. It sends it again no
+The iOS app sends live context when the ChatESP device connects. It sends it again no
 more than once per hour while the same connection stays active. The app uses
 significant-location monitoring and requests one current location when it
 connects. It rounds latitude and longitude to 0.1 degree before transfer. If
 location permission is not available, the location is empty and the firmware
 uses field 9 as the fallback. The firmware keeps live context in RAM. A context
-sync does not write NVS and does not reset the watch idle timer.
+sync does not write NVS and does not reset the ChatESP device idle timer.
 
 The context packet is 49 through 145 bytes:
 
@@ -238,9 +248,9 @@ epoch and fingerprint match.
 
 ## Memory protocol version 1
 
-The watch stores at most ten ordered facts. Each fact has a stable nonzero
+The ChatESP device stores at most ten ordered facts. Each fact has a stable nonzero
 32-bit ID and 1 through 128 valid UTF-8 bytes without control characters. The
-watch is the source of truth. iOS shows the list only while the selected watch
+ChatESP device is the source of truth. iOS shows the list only while the selected ChatESP device
 is connected and does not save a mirror.
 
 The 54-byte memory command header can have up to 128 fact bytes:
@@ -261,7 +271,7 @@ The 54-byte memory command header can have up to 128 fact bytes:
 Operations are `1` list page, `2` add, `3` delete, and `4` clear. An initial
 list command has revision zero, a zero fingerprint, cursor zero, and no fact.
 Each later page uses the revision and fingerprint from the first response. Its
-cursor is the prior fact ID. The watch returns the first fact with a larger ID.
+cursor is the prior fact ID. The ChatESP device returns the first fact with a larger ID.
 Add has a zero memory ID and one fact. Delete has one nonzero ID and no fact.
 Clear has a zero ID and no fact.
 
@@ -288,7 +298,7 @@ Status values are `0x00` `applied`, `0x01` `unchanged`, `0x02` `full`, `0x03`
 `storage_failure`, `0x12` `authentication_required`, `0x13` `busy`, and `0x14`
 `unsupported_version`. A GATT write response is not success. iOS waits up to
 10 seconds and makes at most two attempts. A retry uses the exact same request
-ID and bytes. The watch returns its cached response without another write.
+ID and bytes. The ChatESP device returns its cached response without another write.
 
 The content fingerprint is:
 

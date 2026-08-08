@@ -97,7 +97,7 @@ def _contains_path_alias(value: object, root: Path) -> bool:
 def remove_aliased_watch_builds(
     project: Path, root: Path, arguments: list[str]
 ) -> list[str]:
-    """Remove generated watch data that contains an aliased project path."""
+    """Remove generated ChatESP device data that contains an aliased project path."""
     root = root.resolve()
     removed: list[str] = []
     for profile in sorted(requested_watch_environments(arguments)):
@@ -203,7 +203,7 @@ def requires_idf_python(arguments: list[str]) -> bool:
 
 
 def requested_watch_environments(arguments: list[str]) -> set[str]:
-    """Return selected watch profiles, including the PlatformIO default."""
+    """Return selected ChatESP device profiles, including the PlatformIO default."""
     selected = selected_environments(arguments)
     if not selected:
         return {"watch_dev"}
@@ -213,7 +213,7 @@ def requested_watch_environments(arguments: list[str]) -> set[str]:
 def invocation_policy_errors(
     arguments: list[str], environment: Mapping[str, str]
 ) -> list[str]:
-    """Reject options that can replace the reviewed watch project policy."""
+    """Reject options that can replace the reviewed ChatESP device project policy."""
     errors: list[str] = []
     selected = selected_environments(arguments)
     for profile in sorted(selected - KNOWN_ENVIRONMENTS):
@@ -226,13 +226,13 @@ def invocation_policy_errors(
         for option in PROJECT_OVERRIDE_OPTIONS:
             if argument == option or argument.startswith(f"{option}="):
                 errors.append(
-                    f"watch builds forbid the project override option: {option}"
+                    f"ChatESP device builds forbid the project override option: {option}"
                 )
                 break
     for name in PROJECT_OVERRIDE_ENVIRONMENT:
         if environment.get(name):
             errors.append(
-                f"watch builds forbid the project override variable: {name}"
+                f"ChatESP device builds forbid the project override variable: {name}"
             )
     return errors
 
@@ -318,7 +318,7 @@ def device_write_policy_errors(project: Path) -> list[str]:
 
 
 def profile_sdkconfig_text(project: Path, profile: str) -> str:
-    """Create one deterministic SDK configuration seed for a watch profile."""
+    """Create one deterministic SDK configuration seed for a ChatESP device profile."""
     common = (project / "sdkconfig.defaults").read_text(encoding="utf-8")
     profile_path = project / "config" / f"{profile}.defaults"
     overlay = profile_path.read_text(encoding="utf-8")
@@ -330,7 +330,7 @@ def profile_sdkconfig_text(project: Path, profile: str) -> str:
 
 
 def prepare_profile_sdkconfigs(project: Path, arguments: list[str]) -> None:
-    """Replace stale ignored profile settings before each watch command."""
+    """Replace stale ignored profile settings before each ChatESP device command."""
     for profile in sorted(requested_watch_environments(arguments)):
         destination = project / f"sdkconfig.{profile}"
         expected = profile_sdkconfig_text(project, profile)

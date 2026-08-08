@@ -39,7 +39,7 @@ result can be two source files that incorrectly map to one object target.
 ## PlatformIO path recovery
 
 Always run PlatformIO through `tools/pio.py`. The wrapper gives PlatformIO a
-canonical `PWD` and cache path. It also removes only the generated watch-build
+canonical `PWD` and cache path. It also removes only the generated ChatESP device-build
 directory when stored build data contains a path alias. It does not remove
 source files or a complete tool cache.
 

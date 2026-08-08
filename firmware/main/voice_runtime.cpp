@@ -2272,7 +2272,7 @@ private:
         interaction_.fail(now_ms);
         previous_state_ = interaction_.state();
         request_display_wake(now_ms);
-        show_error("THE WATCH COULD NOT TURN OFF");
+        show_error("CHATESP COULD NOT TURN OFF");
     }
 
     RuntimeSettings settings_;

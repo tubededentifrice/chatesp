@@ -126,7 +126,7 @@ The connected V2 board must pass these checks for this control change:
   fills on even minutes, and drains on odd minutes;
 - Clock gets time from authenticated phone context or NTP, gets the UTC offset
   from the phone or the bounded IP fallback, and continues from monotonic time
-  while the watch stays powered;
+  while the ChatESP device stays powered;
 - Clock stays on for more than each ChatESP idle timeout, while a short bottom
   PWR press still requests sleep;
 - a bottom PWR press in Clock shows ChatESP without visible delay, and a held
@@ -222,7 +222,7 @@ encryption, and secure boot stay disabled. Each device profile must set
 this flag is absent, duplicated, or nonzero, or if an irreversible ESP-IDF
 feature is on. CMake must also require
 `CHATESP_PERMANENT_WRITE_POLICY=FORBID`. The build wrapper must reject project,
-environment, and build-flag overrides for watch builds. It must reject direct
+environment, and build-flag overrides for ChatESP device builds. It must reject direct
 first-party eFuse write APIs. There is no user request, environment variable,
 or approval flag that can bypass this rule.
 

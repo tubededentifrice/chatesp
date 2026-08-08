@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair a development watch and check its display start records."""
+"""Repair a development ChatESP device and check its display start records."""
 
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ def run_doctor(
     *,
     upload: bool,
 ) -> int:
-    """Repair the watch and check all automatic display start gates."""
+    """Repair the ChatESP device and check all automatic display start gates."""
     expected_version = current_git_version(root)
     if upload:
         print("Repair: build and upload the current development firmware.")
@@ -226,7 +226,7 @@ def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
             "Upload development firmware and check the display start records."
         )
     )
-    parser.add_argument("--port", required=True, help="Local watch serial port")
+    parser.add_argument("--port", required=True, help="Local ChatESP device serial port")
     parser.add_argument("--duration", type=float, default=12.0)
     parser.add_argument(
         "--no-upload",

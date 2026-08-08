@@ -88,7 +88,7 @@ After a recording ends, the runtime stops BLE before it starts the cloud
 request. This releases the Bluetooth controller memory for TLS. Provisioning
 starts again when the interaction ends and the runtime returns to idle. A phone
 connection can close at the end of a recording. The app must treat this as a
-normal disconnect and reconnect when the watch advertises again.
+normal disconnect and reconnect when the ChatESP device advertises again.
 
 When no live app location is available, the runtime also stops BLE for one
 short IP-context HTTPS lookup. This gives TLS the same controller-memory
@@ -132,11 +132,11 @@ registered device tool.
 Image search still needs a separate model-selected result ID. A relative
 brightness or volume request gets device status before it changes the value.
 After routing and tool work, the final model request has no tools.
-The iOS companion can send its clock and current UTC offset when the watch
+The iOS companion can send its clock and current UTC offset when the ChatESP device
 connects and at most once per hour while the connection stays active. The
 firmware also starts a non-blocking SNTP sync with `time.cloudflare.com` after
 Wi-Fi connects. It advances an accepted value with monotonic time while the
-watch stays powered. The successful transcription response and the IP-context
+ChatESP device stays powered. The successful transcription response and the IP-context
 response can also supply a standard HTTP `Date` header as a UTC fallback.
 Each route and final-answer prompt gets the user's local minute, such as
 `YYYY-MM-DD HH:MM UTC+04:00`. The prompt does not contain seconds, so requests
@@ -234,9 +234,30 @@ PWR-button wake causes a cold boot and creates a new thread.
 - `device preferences`: a small versioned brightness and volume record. It is
   separate from BLE settings and contains no secret data.
 - `memories`: a bounded versioned record, model tools, prompt context, and an
-  optional connected iOS BLE manager. The watch is the source of truth.
+  optional connected iOS BLE manager. The ChatESP device is the source of truth.
 - `power`: inactivity, PWR-button input, peripheral shutdown, AXP2101
   system-off, and cold-boot reset.
+
+## iOS settings model
+
+The companion keeps one global configuration and any number of ChatESP device
+records. A device record contains a display name, optional non-secret
+overrides, and independent provisioning revision state. Keychain contains the
+global credentials and optional credential overrides for each device. The app
+combines these two inheritance layers only when it builds a settings packet.
+
+Each UI edit writes only its local non-secret or Keychain store at once. An
+empty required value does not block another edit. The app reports exact
+incomplete fields and does not start BLE provisioning until the effective
+device configuration is complete. The firmware still receives one validated,
+atomic settings packet.
+
+The model browser gets a bounded OpenRouter catalog response. It filters chat
+models for text input, text output, and tool calling. It filters transcription
+models for audio input and transcription output. It filters speech models for
+text input, speech output, and both firmware-selected voices. Catalog or
+network failure does not remove the saved model IDs or block other settings
+edits. An invalid partial OpenRouter key falls back to the public catalog.
 
 ## Model contract
 
@@ -253,8 +274,8 @@ The system prompt tells the model to:
 - never expose tool protocol or hidden reasoning.
 
 The route and answer system messages also contain the approximate user location
-and the current user-local date and time at minute precision. After a watch is
-selected, the companion sends a location rounded to 0.1 degree when the watch
+and the current user-local date and time at minute precision. After a ChatESP device is
+selected, the companion sends a location rounded to 0.1 degree when the ChatESP device
 connects and at most once per hour while connected. Without live app context,
 the firmware makes one HTTPS request to `ipwho.is`. It requests only city,
 region, country code, and UTC offset, and has a three-second total limit. A

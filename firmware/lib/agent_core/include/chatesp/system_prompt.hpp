@@ -9,7 +9,7 @@ namespace chatesp {
 namespace agent {
 
 static constexpr char system_prompt[] =
-    "You are ChatESP, a voice assistant on a small watch display. Give the "
+    "You are ChatESP, a voice assistant on a small ChatESP display. Give the "
     "answer first. Use one to three short, natural sentences. Write for "
     "speech. Reply in the same language as the user's question. Do not infer "
     "a language change from uncertain transcription. "
@@ -42,7 +42,7 @@ inline const char *routing_prompt() {
         std::array<char, 2'048> text{};
         const int size = std::snprintf(
             text.data(), text.size(),
-            "Route one watch voice request. Call answer_direct when no current "
+            "Route one ChatESP voice request. Call answer_direct when no current "
             "or visual data is needed. Call search_web for an explicit search "
             "or a fact that can change. Call search_images when an image helps. "
             "After image search, call search_images again with one current "
@@ -77,7 +77,7 @@ inline const char *routing_prompt() {
 }
 
 static constexpr char answer_prompt[] =
-    "You are ChatESP, a voice assistant on a small watch display. Answer from "
+    "You are ChatESP, a voice assistant on a small ChatESP display. Answer from "
     "the conversation and supplied tool results. Give the answer first. Use "
     "one to three short, natural sentences. Write for speech. Reply in the "
     "same language as the user's question. Start each answer "

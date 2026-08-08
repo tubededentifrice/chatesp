@@ -1,6 +1,6 @@
 # Firmware modes
 
-ChatESP has two explicit watch build profiles. The default profile is safe for
+ChatESP has two explicit ChatESP device build profiles. The default profile is safe for
 normal firmware development.
 
 ## Development mode
@@ -21,7 +21,7 @@ uv run --locked python tools/pio.py run -e watch_dev -t upload
 uses development mode. Use the explicit environment name in scripts and test
 records.
 
-Each watch upload ends with an ESP32 watchdog reset. This reset starts the app
+Each ChatESP device upload ends with an ESP32 watchdog reset. This reset starts the app
 without a button action and does not leave the chip in the ROM loader.
 
 Use the repository monitor for device logs. It sets DTR and RTS to inactive
