@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import venv
+from collections.abc import Mapping
 from configparser import ConfigParser
 from pathlib import Path
 
@@ -19,12 +20,97 @@ IDF_ENV_VERSION = "1.0.0"
 IDF_FRAMEWORK_VERSION = "5.5.3"
 DEPENDENCY_CHECK_CACHE_SECONDS = 60 * 60
 WATCH_ENVIRONMENTS = {"watch_dev", "watch_prod"}
+KNOWN_ENVIRONMENTS = WATCH_ENVIRONMENTS | {"native"}
 REVERSIBLE_SDKCONFIG_VALUES = {
     "CONFIG_NVS_ENCRYPTION": "n",
     "CONFIG_SECURE_BOOT": "n",
     "CONFIG_SECURE_FLASH_ENC_ENABLED": "n",
+    "CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK": "n",
+    "CONFIG_BOOTLOADER_ANTI_ROLLBACK_ENABLE": "n",
+    "CONFIG_SECURE_FLASH_PSEUDO_ROUND_FUNC": "n",
+    "CONFIG_SECURE_DISABLE_ROM_DL_MODE": "n",
+    "CONFIG_SECURE_ENABLE_SECURE_ROM_DL_MODE": "n",
 }
+IRREVERSIBLE_WRITE_DEFINE = "-DCHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES"
 IRREVERSIBLE_WRITE_FLAG = "-DCHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0"
+PERMANENT_WRITE_POLICY_DEFINE = "-DCHATESP_PERMANENT_WRITE_POLICY"
+PERMANENT_WRITE_POLICY_FLAG = "-DCHATESP_PERMANENT_WRITE_POLICY=FORBID"
+PROJECT_OVERRIDE_OPTIONS = (
+    "-c",
+    "--project-conf",
+    "-d",
+    "--project-dir",
+    "-O",
+    "--project-option",
+)
+PROJECT_OVERRIDE_ENVIRONMENT = (
+    "PLATFORMIO_BUILD_FLAGS",
+    "PLATFORMIO_DEFAULT_ENVS",
+    "PLATFORMIO_PROJECT_CONF",
+    "PLATFORMIO_PROJECT_DIR",
+    "PLATFORMIO_SRC_BUILD_FLAGS",
+)
+FORBIDDEN_EFUSE_SOURCE_MARKERS = (
+    "EFUSE_",
+    "efuse_reg.h",
+    "esp_efuse_",
+    "esp_rom_efuse_",
+    "ets_efuse_",
+)
+SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".s"}
+
+
+def canonical_platformio_environment(
+    environment: Mapping[str, str], root: Path, project: Path
+) -> dict[str, str]:
+    """Return a PlatformIO environment with one physical path spelling."""
+    result = dict(environment)
+    configured_core = Path(
+        result.get("PLATFORMIO_CORE_DIR", str(root / ".platformio"))
+    ).expanduser()
+    if not configured_core.is_absolute():
+        configured_core = root / configured_core
+    result["PLATFORMIO_CORE_DIR"] = str(configured_core.resolve())
+    result["PWD"] = str(project.resolve())
+    result.setdefault("ESP_IDF_VERSION", IDF_FRAMEWORK_VERSION)
+    return result
+
+
+def _contains_path_alias(value: object, root: Path) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_path_alias(item, root) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_path_alias(item, root) for item in value)
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return False
+    canonical_root = root.resolve()
+    candidate = Path(value)
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    if resolved != canonical_root and canonical_root not in resolved.parents:
+        return False
+    return os.path.normpath(value) != str(resolved)
+
+
+def remove_aliased_watch_builds(
+    project: Path, root: Path, arguments: list[str]
+) -> list[str]:
+    """Remove generated watch data that contains an aliased project path."""
+    root = root.resolve()
+    removed: list[str] = []
+    for profile in sorted(requested_watch_environments(arguments)):
+        build_dir = project / ".pio" / "build" / profile
+        description = build_dir / "project_description.json"
+        try:
+            data = json.loads(description.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _contains_path_alias(data, root):
+            shutil.rmtree(build_dir)
+            removed.append(profile)
+    return removed
 
 
 def dependency_policy_digest(root: Path) -> str:
@@ -124,6 +210,66 @@ def requested_watch_environments(arguments: list[str]) -> set[str]:
     return selected & WATCH_ENVIRONMENTS
 
 
+def invocation_policy_errors(
+    arguments: list[str], environment: Mapping[str, str]
+) -> list[str]:
+    """Reject options that can replace the reviewed watch project policy."""
+    errors: list[str] = []
+    selected = selected_environments(arguments)
+    for profile in sorted(selected - KNOWN_ENVIRONMENTS):
+        errors.append(f"unknown PlatformIO environment: {profile}")
+
+    if not requested_watch_environments(arguments):
+        return errors
+
+    for argument in arguments:
+        for option in PROJECT_OVERRIDE_OPTIONS:
+            if argument == option or argument.startswith(f"{option}="):
+                errors.append(
+                    f"watch builds forbid the project override option: {option}"
+                )
+                break
+    for name in PROJECT_OVERRIDE_ENVIRONMENT:
+        if environment.get(name):
+            errors.append(
+                f"watch builds forbid the project override variable: {name}"
+            )
+    return errors
+
+
+def first_party_write_api_errors(project: Path) -> list[str]:
+    """Reject direct permanent-write APIs in first-party firmware sources."""
+    roots = [project / "main", project / "lib"]
+    components = project / "components"
+    if components.is_dir():
+        roots.extend(
+            path for path in components.iterdir()
+            if path.is_dir() and path.name.startswith("chatesp")
+        )
+
+    errors: list[str] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                errors.append(
+                    f"cannot inspect first-party source: {path.relative_to(project)}"
+                )
+                continue
+            for marker in FORBIDDEN_EFUSE_SOURCE_MARKERS:
+                if marker in text:
+                    errors.append(
+                        f"{path.relative_to(project)} uses a forbidden "
+                        f"eFuse source marker: {marker}"
+                    )
+    return errors
+
+
 def device_write_policy_errors(project: Path) -> list[str]:
     """Report a device profile that can permit an irreversible write."""
     errors: list[str] = []
@@ -132,8 +278,26 @@ def device_write_policy_errors(project: Path) -> list[str]:
     for profile in sorted(WATCH_ENVIRONMENTS):
         section = f"env:{profile}"
         flags = parser.get(section, "build_flags", fallback="").split()
-        if IRREVERSIBLE_WRITE_FLAG not in flags:
-            errors.append(f"{profile} lacks the zero irreversible-write flag")
+        policy_defines = [
+            flag for flag in flags
+            if flag.startswith(IRREVERSIBLE_WRITE_DEFINE)
+        ]
+        if policy_defines != [IRREVERSIBLE_WRITE_FLAG]:
+            errors.append(
+                f"{profile} must set the zero irreversible-write flag exactly once"
+            )
+
+        cmake_arguments = parser.get(
+            section, "board_build.cmake_extra_args", fallback=""
+        ).split()
+        cmake_policy_defines = [
+            argument for argument in cmake_arguments
+            if argument.startswith(PERMANENT_WRITE_POLICY_DEFINE)
+        ]
+        if cmake_policy_defines != [PERMANENT_WRITE_POLICY_FLAG]:
+            errors.append(
+                f"{profile} must set the CMake permanent-write lock exactly once"
+            )
 
         values: dict[str, str] = {}
         profile_path = project / "config" / f"{profile}.defaults"
@@ -149,6 +313,7 @@ def device_write_policy_errors(project: Path) -> list[str]:
         for key, expected in REVERSIBLE_SDKCONFIG_VALUES.items():
             if values.get(key) != expected:
                 errors.append(f"{profile} must set {key}={expected}")
+    errors.extend(first_party_write_api_errors(project))
     return errors
 
 
@@ -240,7 +405,8 @@ def main() -> int:
         print("The firmware directory does not exist.", file=sys.stderr)
         return 1
 
-    policy_errors = device_write_policy_errors(project)
+    policy_errors = invocation_policy_errors(sys.argv[1:], os.environ)
+    policy_errors.extend(device_write_policy_errors(project))
     if policy_errors:
         print(
             "The irreversible device-write policy failed: "
@@ -254,10 +420,16 @@ def main() -> int:
         print("PlatformIO is not in the locked uv environment.", file=sys.stderr)
         return 1
 
-    environment = os.environ.copy()
-    environment.setdefault("PLATFORMIO_CORE_DIR", str(root / ".platformio"))
-    environment.setdefault("ESP_IDF_VERSION", IDF_FRAMEWORK_VERSION)
+    environment = canonical_platformio_environment(
+        os.environ, root, project
+    )
     core_dir = Path(environment["PLATFORMIO_CORE_DIR"])
+    for profile in remove_aliased_watch_builds(
+        project, root, sys.argv[1:]
+    ):
+        print(
+            f"Removed {profile} build data that used a non-canonical path."
+        )
     verify_dependency_age(root, core_dir)
     if requires_idf_python(sys.argv[1:]):
         prepare_profile_sdkconfigs(project, sys.argv[1:])

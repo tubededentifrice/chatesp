@@ -96,8 +96,13 @@ uv run --locked python tools/pio.py run -e watch_prod
 
 Production and development both set
 `CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. Source checks reject a missing or
-nonzero flag. They also reject NVS encryption, flash encryption, and secure
-boot. These ESP-IDF features can burn eFuses. Never add an approval bypass.
+nonzero flag. The wrapper rejects a duplicate flag, an unreviewed environment,
+or a project and build-flag override. CMake separately requires
+`CHATESP_PERMANENT_WRITE_POLICY=FORBID`. SDK and source checks reject NVS
+encryption, flash encryption, secure boot, anti-rollback eFuse writes, permanent
+ROM download-mode changes, and direct first-party eFuse write APIs. These
+features can make permanent hardware changes. A user request does not bypass
+this policy.
 
 Production stores provisioned credentials and BLE bonds in plaintext flash.
 This is less secure than HMAC-protected NVS. A person with physical flash

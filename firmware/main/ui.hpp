@@ -18,9 +18,34 @@ enum class WifiIndicator : std::uint8_t {
     failed,
 };
 
+struct QuickControlsUpdate {
+    std::uint8_t brightness_percent = 65;
+    std::uint8_t volume_percent = 70;
+    bool brightness_changed = false;
+    bool volume_changed = false;
+    bool commit = false;
+};
+
+using QuickControlsCallback = void (*)(
+    const QuickControlsUpdate &update, void *context);
+
 // Start the display and show the full-boot splash. Do not use this function
 // for an in-session display wake.
 bool start(std::uint8_t brightness_percent);
+
+// Install the non-blocking control callback after the runtime can accept
+// updates. The callback runs from the LVGL task and must not block.
+bool enable_quick_controls(
+    std::uint8_t brightness_percent,
+    std::uint8_t volume_percent,
+    QuickControlsCallback callback,
+    void *context);
+void disable_quick_controls();
+
+// Update the visible values after the runtime applies or rejects an update.
+// The caller must own the BSP display lock.
+void sync_quick_controls(
+    std::uint8_t brightness_percent, std::uint8_t volume_percent);
 
 // The caller must own the BSP display lock for all show functions.
 void show_state(InteractionState state);

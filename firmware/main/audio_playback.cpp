@@ -56,6 +56,9 @@ esp_err_t AudioPlayback::start(int volume_percent) {
         release_session();
         return static_cast<esp_err_t>(volume_result);
     }
+    requested_volume_percent_.store(
+        volume_percent, std::memory_order_release);
+    applied_volume_percent_ = volume_percent;
 
     esp_codec_dev_sample_info_t format = {
         .bits_per_sample = kBitsPerSample,
@@ -95,6 +98,15 @@ esp_err_t AudioPlayback::play(
         }
         const std::size_t chunk_samples =
             std::min(kChunkSamples, sample_count - offset);
+        const int requested_volume = requested_volume_percent_.load(
+            std::memory_order_acquire);
+        if (requested_volume != applied_volume_percent_) {
+            (void)esp_codec_dev_set_out_vol(
+                codec_handle(codec_), requested_volume);
+            // One failed optional update must not retry for each PCM chunk or
+            // stop speech. A later user change gets one new attempt.
+            applied_volume_percent_ = requested_volume;
+        }
         std::memcpy(
             scratch.data(), samples + offset,
             chunk_samples * sizeof(std::int16_t));
@@ -111,6 +123,15 @@ esp_err_t AudioPlayback::play(
                : ESP_OK;
 }
 
+esp_err_t AudioPlayback::set_volume(int volume_percent) {
+    if (volume_percent < 0 || volume_percent > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    requested_volume_percent_.store(
+        volume_percent, std::memory_order_release);
+    return ESP_OK;
+}
+
 esp_err_t AudioPlayback::stop() {
     esp_err_t result = ESP_OK;
     if (active_) {
@@ -120,6 +141,7 @@ esp_err_t AudioPlayback::stop() {
         }
         active_ = false;
     }
+    applied_volume_percent_ = -1;
     release_session();
     return result;
 }

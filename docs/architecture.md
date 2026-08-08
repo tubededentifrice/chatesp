@@ -37,6 +37,29 @@ The button poll runs separately from cloud work. A button press cancels active
 audio and HTTPS work. A separate bounded task shows BLE passkeys, but a voice
 button press always hides the passkey view.
 
+The top edge of the touch display has a small control handle. A tap or a
+48-pixel downward swipe from the top 32 pixels opens a black control panel.
+The top touch target keeps control until release, so the swipe can continue
+beyond the small handle without losing the gesture.
+The panel position follows the finger during a pull. A short settle animation
+completes the movement after release. The display and touch refresh period is
+16 ms, and the internal draw buffer holds more than one tenth of the screen.
+The panel has one shared five-percent control component for brightness and
+volume. A press or a drag at any track position sets the value. An upward
+swipe, a tap outside the panel, or five seconds without touch closes it. The
+panel is not available during start, recording, sleep, or BLE passkey display.
+A PWR-button action keeps priority. Opening the panel or changing a control
+resets the idle timer only when the runtime is idle.
+
+Control movement sends the latest brightness and volume values through the
+same bounded callback. Volume uses safe atomic state at once, including during
+speech. The runtime sends the latest brightness command. It retries the command
+if a display refresh owns the display lock, and it does not move the visible
+control back for this temporary condition. The LVGL callback does not write
+flash, send a panel command, or wait for audio. The runtime saves the final
+preference pair after release. It defers that write while voice work or a
+PWR-button action has priority. It does not write NVS for each track position.
+
 When settings are available, the Wi-Fi station starts an asynchronous
 connection as soon as the runtime starts. This does not block the button or
 microphone path. A request waits for that connection or starts a bounded retry
@@ -138,7 +161,8 @@ creates a new thread.
 - `conversation`: system prompt, short in-memory history, tool loop, and thread
   lifetime.
 - `ui`: terminal layout, streamed text, Wi-Fi and battery footer, and
-  state-specific motion.
+  state-specific motion. It also owns the bounded top control panel and touch
+  gesture presentation.
 - `provisioning`: versioned BLE packets, authenticated encrypted transfer,
   acknowledgement, and NVS persistence.
 - `device preferences`: a small versioned brightness and volume record. It is
@@ -235,7 +259,12 @@ BLE bonds in plaintext NVS. This keeps settings after a restart, but a person
 with physical flash access can read the credentials. Development keeps BLE
 settings and bonds in memory. ChatESP never enables eFuse-backed NVS
 encryption, flash encryption, secure boot, or another irreversible device
-write. Each device build has an explicit zero policy flag and compile-time
-checks. Logs show only redacted error categories. Turn timing records contain
-phase durations and bounded counters only. They do not contain text, audio,
-URLs, credentials, stable identifiers, or precise location.
+write. Each device build has an explicit zero policy flag. The PlatformIO
+wrapper rejects unreviewed environments, project replacements, build-flag
+overrides, duplicated policy flags, unsafe SDK settings, and direct first-party
+eFuse write APIs. CMake requires a separate `FORBID` lock before configuration,
+and source checks reject unsafe compiled settings. No user request, environment
+variable, or approval flag can bypass this policy. Logs show only redacted
+error categories. Turn timing records contain phase durations and bounded
+counters only. They do not contain text, audio, URLs, credentials, stable
+identifiers, or precise location.

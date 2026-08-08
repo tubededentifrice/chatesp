@@ -58,6 +58,13 @@ before making a battery-life claim.
 
 The model can request device status, set display brightness from 5 through 100
 percent, set playback volume from 0 through 100 percent, and request power-off.
+The user can also open a top touch panel and change brightness or volume in
+five-percent steps. The panel follows a downward finger movement. A press or a
+drag on either track sets its value. Brightness changes during a drag. Volume
+changes during active playback. Firmware saves the final pair after release
+and does not write NVS for each input position. The LVGL refresh period is 16
+ms. Its internal draw buffer is 368 by 48 pixels to reduce transfers during
+panel motion.
 Brightness and volume persist across a restart when NVS is available. A model
 power-off first completes a short spoken confirmation. Production then uses the
 same system-off cleanup as the PWR button and inactivity timer. One bottom PWR
@@ -102,6 +109,21 @@ The connected V2 board must pass these checks for this control change:
   range;
 - volume commands mute at 0 percent, apply at 100 percent, and reject values
   outside the range;
+- a tap on the top handle and a downward top-edge swipe open the control panel;
+- the downward swipe stays captured after it moves below the top touch target;
+- the panel follows the finger during a downward pull without a visible jump;
+- a swipe that starts below the top edge or moves mainly sideways does not open
+  the control panel;
+- the panel closes after an upward swipe, a tap outside, five seconds without
+  touch, a recording start, a passkey display, or sleep;
+- the panel opens above a full-screen image and does not cover a BLE passkey;
+- a press at any position on either track sets the related value, and each
+  knob stays fully visible during a drag;
+- brightness changes during a drag and does not return to the old value after
+  a temporary display-lock conflict;
+- active speech volume changes without a restart, and one release causes at
+  most one preference write;
+- a PWR-button action keeps priority while the control panel is open;
 - changed brightness and volume values return after a reset;
 - an explicit model power-off gives one short confirmation and then sleeps;
 - a farewell, a hypothetical statement, or an uncertain transcript does not
@@ -146,8 +168,12 @@ ChatESP must never burn an eFuse or enable a feature that can burn one on first
 start. This rule also applies to production firmware. NVS encryption, flash
 encryption, and secure boot stay disabled. Each device profile must set
 `CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. Source checks must stop a build if
-this flag is absent or nonzero, or if an irreversible ESP-IDF feature is on.
-There is no approval flag that can bypass this rule.
+this flag is absent, duplicated, or nonzero, or if an irreversible ESP-IDF
+feature is on. CMake must also require
+`CHATESP_PERMANENT_WRITE_POLICY=FORBID`. The build wrapper must reject project,
+environment, and build-flag overrides for watch builds. It must reject direct
+first-party eFuse write APIs. There is no user request, environment variable,
+or approval flag that can bypass this rule.
 
 Production BLE settings and BLE bonds use normal plaintext NVS. This is less
 secure than eFuse-backed encrypted NVS, but it is reversible. An attacker with

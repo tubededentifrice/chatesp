@@ -94,6 +94,18 @@ Some files can be absent during initial setup. Read them when they exist.
 Other agents can work in this repository at the same time. Do not revert their
 changes. Adapt your work to the current worktree.
 
+- Work directly on `main`. Never create or switch to another branch unless the
+  user explicitly tells you to do so.
+- Commit task changes directly to `main` and push `main`.
+- Before you integrate existing branches, inspect all linked worktrees. Do not
+  switch, reset, stash, clean, or change a worktree that has another agent's
+  work. Use a separate clean `main` worktree when this is necessary.
+- Do not delete an integrated branch or its worktree unless the user explicitly
+  tells you to do so.
+- Use `tools/task_worktree.py` only when the user explicitly asks for a task
+  branch. Do not put a build worktree under a system temporary directory. See
+  `docs/agent-tooling.md`.
+
 1. Inspect Git status and preserve changes that do not belong to the task.
 2. Identify user-visible, hardware, protocol, privacy, and power effects.
 3. Update source, tests, and the authoritative documents together.
@@ -101,8 +113,8 @@ changes. Adapt your work to the current worktree.
    tests.
 5. Run `$selfreview autofix` as the last implementation step.
 6. Run the secret scan.
-7. Stage only task files. Commit one complete task with a short imperative
-   subject and push the commit to `main`.
+7. On `main`, stage only task files. Commit one complete task with a short
+   imperative subject and push `main`.
 
 The agent that finishes the task must complete the commit and push. Do not leave
 these steps for the user or a later agent. Do not report that the task is
@@ -127,7 +139,7 @@ is blocked, keep the verified local commit and report the exact blocker.
 
 ## Keep guidance current
 
-Correct a task-relevant instruction or local skill in the same task when
-evidence shows that it is wrong, stale, duplicated, or incomplete. Keep this
-file for stable repository rules. Keep detailed and changing facts in project
-documents. Keep task procedures in skills.
+Correct task-relevant guidance when evidence shows that it is wrong, stale,
+or incomplete. For a repeatable tool or workflow failure, add a narrow guard
+and a regression test when practical. See `docs/agent-tooling.md`. Keep this
+file concise. Put details in project documents and procedures in skills.

@@ -10,6 +10,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "chatesp/device_preferences.hpp"
+#include "chatesp/quick_controls.hpp"
 #include "lvgl.h"
 
 LV_FONT_DECLARE(chatesp_font_18);
@@ -22,6 +23,34 @@ constexpr std::size_t kMaximumAnswerBytes = 640;
 constexpr std::size_t kMaximumErrorBytes = 120;
 constexpr std::size_t kMaximumProgressBytes = 80;
 constexpr std::size_t kMaximumWifiStatusBytes = 20;
+constexpr std::int32_t kControlsPanelHeight = 280;
+constexpr std::int32_t kControlsPanelShownY = -12;
+constexpr std::int32_t kControlsPanelHiddenY = -288;
+constexpr std::uint32_t kControlsOpenAnimationMs = 180;
+constexpr std::uint32_t kControlsCloseAnimationMs = 140;
+constexpr std::int32_t kControlSliderWidth = 320;
+constexpr std::int32_t kControlSliderHeight = 44;
+constexpr std::int32_t kControlSliderTrackInset = 16;
+constexpr std::int32_t kControlSliderTrackWidth =
+    kControlSliderWidth - 2 * kControlSliderTrackInset;
+constexpr std::int32_t kControlSliderTrackHeight = 12;
+constexpr std::int32_t kControlSliderKnobSize = 32;
+
+enum class ControlKind : std::uint8_t {
+    brightness,
+    volume,
+};
+
+struct ControlSlider {
+    ControlKind kind = ControlKind::brightness;
+    lv_obj_t *touch_target = nullptr;
+    lv_obj_t *indicator = nullptr;
+    lv_obj_t *knob = nullptr;
+    lv_obj_t *value_label = nullptr;
+    std::array<char, 5> value_buffer{};
+    std::uint8_t minimum_percent = 0;
+    std::uint8_t value_percent = 0;
+};
 
 lv_obj_t *status_label = nullptr;
 lv_obj_t *hint_label = nullptr;
@@ -39,6 +68,14 @@ lv_obj_t *plot_y_range_label = nullptr;
 lv_chart_series_t *plot_series = nullptr;
 lv_obj_t *passkey_overlay = nullptr;
 lv_obj_t *passkey_label = nullptr;
+lv_obj_t *controls_edge_target = nullptr;
+lv_obj_t *controls_edge_handle = nullptr;
+lv_obj_t *controls_backdrop = nullptr;
+lv_obj_t *controls_panel = nullptr;
+lv_timer_t *controls_timer = nullptr;
+ControlSlider brightness_control;
+ControlSlider volume_control;
+ControlSlider *active_control = nullptr;
 
 image::Rgb565Frame image_frame;
 lv_image_dsc_t image_descriptor{};
@@ -48,12 +85,23 @@ std::array<char, kMaximumProgressBytes + 1> hint_buffer{};
 std::array<char, 7> passkey_buffer{};
 std::array<char, kMaximumWifiStatusBytes + 1> wifi_status_buffer{};
 std::array<char, 12> battery_status_buffer{};
+QuickControlsGesture controls_gesture;
+QuickControlsCallback controls_callback = nullptr;
+void *controls_callback_context = nullptr;
+std::uint8_t controls_brightness_percent =
+    runtime::DevicePreferences::default_brightness_percent;
+std::uint8_t controls_volume_percent =
+    runtime::DevicePreferences::default_volume_percent;
+bool controls_state_allowed = false;
+bool controls_close_animation_active = false;
+bool controls_drag_visible = false;
+std::int32_t controls_drag_panel_start_y = kControlsPanelHiddenY;
+bool passkey_visible = false;
 std::array<char, agent::Limits::max_plot_title_bytes + 1> plot_title_buffer{};
 std::array<char, 48> plot_x_range_buffer{};
 std::array<char, 48> plot_y_range_buffer{};
 std::array<std::int32_t, agent::Limits::max_plot_points> plot_x_values{};
 std::array<std::int32_t, agent::Limits::max_plot_points> plot_y_values{};
-
 
 void set_static_text(lv_obj_t *label, const char *text);
 
@@ -206,10 +254,357 @@ void show_activity(bool visible) {
     }
 }
 
+bool controls_allowed_for_state(InteractionState state) {
+    return state != InteractionState::booting &&
+        state != InteractionState::recording &&
+        state != InteractionState::sleep_pending;
+}
+
+void set_hidden(lv_obj_t *object, bool hidden) {
+    if (object == nullptr) {
+        return;
+    }
+    if (hidden) {
+        lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(object, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void update_controls_handle() {
+    const bool visible = controls_callback != nullptr &&
+        controls_gesture.allowed() && !controls_gesture.open() &&
+        !controls_close_animation_active && !passkey_visible;
+    set_hidden(controls_edge_target, !visible);
+}
+
+void format_percent(ControlSlider &control) {
+    std::snprintf(
+        control.value_buffer.data(), control.value_buffer.size(), "%u%%",
+        static_cast<unsigned>(control.value_percent));
+    set_static_text(control.value_label, control.value_buffer.data());
+}
+
+void set_control_value(ControlSlider &control, std::uint8_t percent) {
+    control.value_percent = percent;
+    const std::int32_t range = 100 - control.minimum_percent;
+    const std::int32_t relative = range == 0
+        ? 0
+        : (static_cast<std::int32_t>(percent) - control.minimum_percent) *
+            kControlSliderTrackWidth / range;
+    if (control.indicator != nullptr) {
+        lv_obj_set_width(control.indicator, std::max<std::int32_t>(1, relative));
+    }
+    if (control.knob != nullptr) {
+        lv_obj_set_x(
+            control.knob,
+            kControlSliderTrackInset + relative -
+                kControlSliderKnobSize / 2);
+    }
+    format_percent(control);
+}
+
+void sync_controls_values(
+    std::uint8_t brightness_percent, std::uint8_t volume_percent) {
+    controls_brightness_percent = brightness_percent;
+    controls_volume_percent = volume_percent;
+    set_control_value(brightness_control, brightness_percent);
+    set_control_value(volume_control, volume_percent);
+}
+
+void dispatch_controls_update(
+    bool brightness_changed, bool volume_changed, bool commit) {
+    controls_gesture.note_activity(lv_tick_get());
+    if (controls_callback == nullptr) {
+        return;
+    }
+    const QuickControlsUpdate update{
+        controls_brightness_percent,
+        controls_volume_percent,
+        brightness_changed,
+        volume_changed,
+        commit,
+    };
+    controls_callback(update, controls_callback_context);
+}
+
+void controls_panel_y_animation(void *object, std::int32_t value) {
+    lv_obj_set_y(static_cast<lv_obj_t *>(object), value);
+}
+
+void finish_controls_close_animation(lv_anim_t *) {
+    controls_close_animation_active = false;
+    controls_drag_visible = false;
+    set_hidden(controls_panel, true);
+    set_hidden(controls_backdrop, true);
+    update_controls_handle();
+}
+
+std::uint32_t controls_animation_duration(
+    std::int32_t from_y,
+    std::int32_t to_y,
+    std::uint32_t full_duration_ms) {
+    const std::int32_t distance = std::abs(to_y - from_y);
+    const std::int32_t travel =
+        kControlsPanelShownY - kControlsPanelHiddenY;
+    if (distance == 0 || travel <= 0) {
+        return 0;
+    }
+    return std::max<std::uint32_t>(
+        48, full_duration_ms * distance / travel);
+}
+
+void show_controls_layer() {
+    set_hidden(controls_backdrop, false);
+    set_hidden(controls_panel, false);
+    lv_obj_move_foreground(controls_backdrop);
+    lv_obj_move_foreground(controls_panel);
+}
+
+void settle_controls_open() {
+    if (controls_panel == nullptr) {
+        return;
+    }
+    controls_close_animation_active = false;
+    controls_drag_visible = false;
+    controls_gesture.set_open(true, lv_tick_get());
+    set_hidden(controls_edge_target, true);
+    show_controls_layer();
+    lv_anim_delete(controls_panel, controls_panel_y_animation);
+    const std::int32_t current_y = lv_obj_get_y(controls_panel);
+    const std::uint32_t duration = controls_animation_duration(
+        current_y, kControlsPanelShownY, kControlsOpenAnimationMs);
+    if (duration == 0) {
+        lv_obj_set_y(controls_panel, kControlsPanelShownY);
+        return;
+    }
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, controls_panel);
+    lv_anim_set_values(&animation, current_y, kControlsPanelShownY);
+    lv_anim_set_duration(&animation, duration);
+    lv_anim_set_exec_cb(&animation, controls_panel_y_animation);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_start(&animation);
+}
+
+void close_controls(bool animated) {
+    if (controls_panel == nullptr || controls_backdrop == nullptr) {
+        return;
+    }
+    active_control = nullptr;
+    controls_drag_visible = false;
+    controls_gesture.set_open(false, lv_tick_get());
+    lv_anim_delete(controls_panel, controls_panel_y_animation);
+    if (!animated) {
+        controls_close_animation_active = false;
+        lv_obj_set_y(controls_panel, kControlsPanelHiddenY);
+        set_hidden(controls_panel, true);
+        set_hidden(controls_backdrop, true);
+        update_controls_handle();
+        return;
+    }
+
+    controls_close_animation_active = true;
+    set_hidden(controls_edge_target, true);
+    const std::int32_t current_y = lv_obj_get_y(controls_panel);
+    const std::uint32_t duration = controls_animation_duration(
+        current_y, kControlsPanelHiddenY, kControlsCloseAnimationMs);
+    if (duration == 0) {
+        finish_controls_close_animation(nullptr);
+        return;
+    }
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, controls_panel);
+    lv_anim_set_values(
+        &animation, current_y, kControlsPanelHiddenY);
+    lv_anim_set_duration(&animation, duration);
+    lv_anim_set_exec_cb(&animation, controls_panel_y_animation);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_in);
+    lv_anim_set_completed_cb(&animation, finish_controls_close_animation);
+    lv_anim_start(&animation);
+}
+
+void open_controls() {
+    if (controls_panel == nullptr || controls_backdrop == nullptr ||
+        !controls_gesture.allowed() || controls_gesture.open()) {
+        return;
+    }
+    controls_close_animation_active = false;
+    // Opening is an activity event only. Do not run panel I/O from the LVGL
+    // event callback before the control panel becomes visible.
+    dispatch_controls_update(false, false, false);
+    lv_anim_delete(controls_panel, controls_panel_y_animation);
+    set_hidden(controls_edge_target, true);
+    show_controls_layer();
+    lv_obj_set_y(controls_panel, kControlsPanelHiddenY);
+    settle_controls_open();
+}
+
+bool touch_point(lv_event_t *event, lv_point_t &point) {
+    lv_indev_t *input = lv_event_get_indev(event);
+    if (input == nullptr) {
+        return false;
+    }
+    lv_indev_get_point(input, &point);
+    return true;
+}
+
+void controls_gesture_event(lv_event_t *event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    lv_point_t point{};
+    if ((code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING &&
+         code != LV_EVENT_RELEASED) ||
+        !touch_point(event, point)) {
+        return;
+    }
+    const std::uint32_t now_ms = lv_tick_get();
+    if (code == LV_EVENT_PRESSED) {
+        controls_gesture.press(point.x, point.y, now_ms);
+        controls_drag_panel_start_y = controls_panel == nullptr
+            ? kControlsPanelHiddenY
+            : lv_obj_get_y(controls_panel);
+        return;
+    }
+
+    if (code == LV_EVENT_PRESSING) {
+        const std::int32_t distance =
+            controls_gesture.drag_distance_y(point.y);
+        const bool moves_towards_open =
+            !controls_gesture.open() && distance > 0;
+        const bool moves_towards_closed =
+            controls_gesture.open() && distance < 0;
+        if (!moves_towards_open && !moves_towards_closed) {
+            return;
+        }
+        if (!controls_drag_visible) {
+            controls_drag_visible = true;
+            controls_close_animation_active = false;
+            lv_anim_delete(controls_panel, controls_panel_y_animation);
+            show_controls_layer();
+            dispatch_controls_update(false, false, false);
+        }
+        const std::int32_t next_y = std::clamp(
+            controls_drag_panel_start_y + distance,
+            kControlsPanelHiddenY,
+            kControlsPanelShownY);
+        lv_obj_set_y(controls_panel, next_y);
+        controls_gesture.note_activity(now_ms);
+        return;
+    }
+
+    const bool was_open = controls_gesture.open();
+    const QuickControlsAction action =
+        controls_gesture.release(point.x, point.y, now_ms);
+    if (action == QuickControlsAction::open) {
+        settle_controls_open();
+    } else if (action == QuickControlsAction::close) {
+        close_controls(true);
+    } else if (controls_drag_visible) {
+        if (was_open) {
+            settle_controls_open();
+        } else {
+            close_controls(true);
+        }
+    }
+}
+
+void controls_edge_event(lv_event_t *event) {
+    controls_gesture_event(event);
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED &&
+        controls_gesture.allowed() && !controls_gesture.open()) {
+        open_controls();
+    }
+}
+
+void controls_backdrop_event(lv_event_t *event) {
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        close_controls(true);
+    }
+}
+
+void update_control_from_touch(ControlSlider &control, lv_event_t *event) {
+    lv_point_t point{};
+    if (!touch_point(event, point) || control.touch_target == nullptr) {
+        return;
+    }
+    lv_area_t area{};
+    lv_obj_get_coords(control.touch_target, &area);
+    const std::uint8_t value =
+        QuickControlsGesture::percent_for_track_position(
+            static_cast<std::int32_t>(point.x) - area.x1 -
+                kControlSliderTrackInset,
+            kControlSliderTrackWidth,
+            control.minimum_percent);
+    if (control.value_percent == value) {
+        return;
+    }
+    set_control_value(control, value);
+    const bool brightness = control.kind == ControlKind::brightness;
+    if (brightness) {
+        controls_brightness_percent = value;
+    } else {
+        controls_volume_percent = value;
+    }
+    dispatch_controls_update(brightness, !brightness, false);
+}
+
+void controls_slider_event(lv_event_t *event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    auto *control = static_cast<ControlSlider *>(
+        lv_event_get_user_data(event));
+    if (control == nullptr ||
+        (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING &&
+         code != LV_EVENT_RELEASED)) {
+        return;
+    }
+    controls_gesture.note_activity(lv_tick_get());
+    if (code == LV_EVENT_PRESSED) {
+        active_control = control;
+        update_control_from_touch(*control, event);
+        return;
+    }
+    if (code == LV_EVENT_PRESSING) {
+        if (active_control == control) {
+            update_control_from_touch(*control, event);
+        }
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (active_control == control) {
+            update_control_from_touch(*control, event);
+        }
+        active_control = nullptr;
+        dispatch_controls_update(false, false, true);
+    }
+}
+
+void controls_timer_callback(lv_timer_t *) {
+    if (active_control == nullptr &&
+        controls_gesture.automatic_close_due(lv_tick_get())) {
+        close_controls(true);
+    }
+}
+
+void set_controls_state_allowed(bool allowed) {
+    controls_state_allowed = allowed;
+    const bool effective = controls_callback != nullptr &&
+        controls_state_allowed && !passkey_visible;
+    if (!effective && (controls_gesture.open() || controls_drag_visible)) {
+        close_controls(false);
+    }
+    controls_gesture.set_allowed(effective);
+    update_controls_handle();
+}
+
 void hide_passkey() {
     if (passkey_overlay != nullptr) {
         lv_obj_add_flag(passkey_overlay, LV_OBJ_FLAG_HIDDEN);
     }
+    passkey_visible = false;
+    set_controls_state_allowed(controls_state_allowed);
     std::fill(passkey_buffer.begin(), passkey_buffer.end(), '\0');
 }
 
@@ -219,6 +614,195 @@ void prepare_voice_view() {
     if (level_bar != nullptr) {
         lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+lv_obj_t *create_controls_text(
+    lv_obj_t *parent, const char *text, lv_color_t color,
+    const lv_font_t *font) {
+    lv_obj_t *label = lv_label_create(parent);
+    set_static_text(label, text);
+    lv_obj_set_style_text_color(label, color, LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, font, LV_PART_MAIN);
+    return label;
+}
+
+void create_control_slider(
+    lv_obj_t *parent,
+    ControlSlider &control,
+    ControlKind kind,
+    const char *title_text,
+    std::uint8_t minimum_percent,
+    std::int32_t title_y,
+    std::int32_t slider_y) {
+    control = {};
+    control.kind = kind;
+    control.minimum_percent = minimum_percent;
+
+    lv_obj_t *title = create_controls_text(
+        parent, title_text, lv_color_hex(0x8e8e93),
+        &lv_font_montserrat_14);
+    lv_obj_set_style_text_letter_space(title, 1, LV_PART_MAIN);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, title_y);
+
+    control.value_label = create_controls_text(
+        parent, "", lv_color_hex(0xffffff), &lv_font_montserrat_14);
+    lv_obj_set_width(control.value_label, 72);
+    lv_obj_set_style_text_align(
+        control.value_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_align(
+        control.value_label, LV_ALIGN_TOP_RIGHT, -24, title_y);
+
+    control.touch_target = lv_obj_create(parent);
+    lv_obj_remove_style_all(control.touch_target);
+    lv_obj_set_size(
+        control.touch_target, kControlSliderWidth, kControlSliderHeight);
+    lv_obj_align(control.touch_target, LV_ALIGN_TOP_MID, 0, slider_y);
+    lv_obj_set_style_bg_opa(
+        control.touch_target, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_add_flag(control.touch_target, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(control.touch_target, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(control.touch_target, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *track = lv_obj_create(control.touch_target);
+    lv_obj_remove_style_all(track);
+    lv_obj_clear_flag(track, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(
+        track, kControlSliderTrackWidth, kControlSliderTrackHeight);
+    lv_obj_align(track, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(
+        track, lv_color_hex(0x28282c), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(track, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(track, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+
+    control.indicator = lv_obj_create(track);
+    lv_obj_remove_style_all(control.indicator);
+    lv_obj_clear_flag(control.indicator, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(
+        control.indicator, 1, kControlSliderTrackHeight);
+    lv_obj_align(control.indicator, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_bg_color(
+        control.indicator, lv_color_hex(0xf2f2f7), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        control.indicator, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(
+        control.indicator, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+
+    control.knob = lv_obj_create(control.touch_target);
+    lv_obj_remove_style_all(control.knob);
+    lv_obj_clear_flag(control.knob, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(
+        control.knob, kControlSliderKnobSize, kControlSliderKnobSize);
+    lv_obj_set_y(
+        control.knob,
+        (kControlSliderHeight - kControlSliderKnobSize) / 2);
+    lv_obj_set_style_bg_color(
+        control.knob, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(control.knob, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(control.knob, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+
+    lv_obj_add_event_cb(
+        control.touch_target, controls_slider_event, LV_EVENT_ALL,
+        &control);
+}
+
+void create_quick_controls(lv_obj_t *screen) {
+    controls_backdrop = lv_obj_create(screen);
+    lv_obj_remove_style_all(controls_backdrop);
+    lv_obj_set_size(
+        controls_backdrop, image::kDisplayWidth, image::kDisplayHeight);
+    lv_obj_set_style_bg_color(
+        controls_backdrop, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(controls_backdrop, LV_OPA_60, LV_PART_MAIN);
+    lv_obj_add_flag(controls_backdrop, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(controls_backdrop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(
+        controls_backdrop, controls_backdrop_event, LV_EVENT_CLICKED,
+        nullptr);
+    lv_obj_add_flag(controls_backdrop, LV_OBJ_FLAG_HIDDEN);
+
+    controls_panel = lv_obj_create(screen);
+    lv_obj_remove_style_all(controls_panel);
+    lv_obj_set_size(
+        controls_panel, image::kDisplayWidth, kControlsPanelHeight);
+    lv_obj_set_pos(controls_panel, 0, kControlsPanelHiddenY);
+    lv_obj_set_style_bg_color(
+        controls_panel, lv_color_hex(0x101012), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(controls_panel, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(controls_panel, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(
+        controls_panel, lv_color_hex(0x38383d), LV_PART_MAIN);
+    lv_obj_set_style_radius(controls_panel, 28, LV_PART_MAIN);
+    lv_obj_add_flag(controls_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(controls_panel, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(controls_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(
+        controls_panel, controls_gesture_event, LV_EVENT_ALL, nullptr);
+    lv_obj_add_flag(controls_panel, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *panel_handle = lv_obj_create(controls_panel);
+    lv_obj_remove_style_all(panel_handle);
+    lv_obj_clear_flag(panel_handle, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(panel_handle, 44, 4);
+    lv_obj_set_style_bg_color(
+        panel_handle, lv_color_hex(0x6b6b70), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(panel_handle, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(panel_handle, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_align(panel_handle, LV_ALIGN_TOP_MID, 0, 22);
+
+    lv_obj_t *title = create_controls_text(
+        controls_panel, "CONTROLS", lv_color_hex(0xffffff),
+        &lv_font_montserrat_18);
+    lv_obj_set_style_text_letter_space(title, 2, LV_PART_MAIN);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, 42);
+
+    create_control_slider(
+        controls_panel,
+        brightness_control,
+        ControlKind::brightness,
+        "BRIGHTNESS",
+        runtime::DevicePreferences::minimum_brightness_percent,
+        82,
+        108);
+    create_control_slider(
+        controls_panel,
+        volume_control,
+        ControlKind::volume,
+        "VOLUME",
+        0,
+        176,
+        202);
+
+    controls_edge_target = lv_obj_create(screen);
+    lv_obj_remove_style_all(controls_edge_target);
+    lv_obj_set_size(controls_edge_target, image::kDisplayWidth, 34);
+    lv_obj_align(controls_edge_target, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_opa(
+        controls_edge_target, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_add_flag(controls_edge_target, LV_OBJ_FLAG_CLICKABLE);
+    // The required 48-pixel swipe ends below this 34-pixel target. Keep the
+    // original target pressed until release so LVGL delivers the full swipe.
+    lv_obj_add_flag(controls_edge_target, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(controls_edge_target, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(
+        controls_edge_target, controls_edge_event, LV_EVENT_ALL, nullptr);
+
+    controls_edge_handle = lv_obj_create(controls_edge_target);
+    lv_obj_remove_style_all(controls_edge_handle);
+    lv_obj_clear_flag(controls_edge_handle, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(controls_edge_handle, 44, 4);
+    lv_obj_set_style_bg_color(
+        controls_edge_handle, lv_color_hex(0x6b6b70), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        controls_edge_handle, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(
+        controls_edge_handle, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_align(controls_edge_handle, LV_ALIGN_TOP_MID, 0, 8);
+
+    sync_controls_values(
+        runtime::DevicePreferences::default_brightness_percent,
+        runtime::DevicePreferences::default_volume_percent);
+    set_hidden(controls_edge_target, true);
+    controls_timer = lv_timer_create(controls_timer_callback, 250, nullptr);
 }
 
 void create_screen() {
@@ -380,6 +964,7 @@ void create_screen() {
     lv_obj_align(plot_y_range_label, LV_ALIGN_BOTTOM_MID, 0, -22);
     hide_fullscreen_plot();
 
+    create_quick_controls(screen);
 
     passkey_overlay = lv_obj_create(screen);
     lv_obj_remove_style_all(passkey_overlay);
@@ -453,6 +1038,43 @@ bool start(std::uint8_t brightness_percent) {
     return bsp_display_brightness_set(brightness_percent) == ESP_OK;
 }
 
+bool enable_quick_controls(
+    std::uint8_t brightness_percent,
+    std::uint8_t volume_percent,
+    QuickControlsCallback callback,
+    void *context) {
+    const runtime::DevicePreferences preferences{
+        brightness_percent, volume_percent};
+    if (!preferences.valid() || callback == nullptr ||
+        controls_panel == nullptr || controls_edge_target == nullptr ||
+        controls_timer == nullptr) {
+        return false;
+    }
+    controls_callback = callback;
+    controls_callback_context = context;
+    sync_controls_values(brightness_percent, volume_percent);
+    set_controls_state_allowed(controls_state_allowed);
+    return true;
+}
+
+void disable_quick_controls() {
+    close_controls(false);
+    controls_callback = nullptr;
+    controls_callback_context = nullptr;
+    controls_gesture.set_allowed(false);
+    update_controls_handle();
+}
+
+void sync_quick_controls(
+    std::uint8_t brightness_percent, std::uint8_t volume_percent) {
+    const runtime::DevicePreferences preferences{
+        brightness_percent, volume_percent};
+    if (!preferences.valid()) {
+        return;
+    }
+    sync_controls_values(brightness_percent, volume_percent);
+}
+
 void show_state(InteractionState state) {
     if (status_label == nullptr || hint_label == nullptr) {
         return;
@@ -463,6 +1085,7 @@ void show_state(InteractionState state) {
     if (state != InteractionState::idle) {
         hide_fullscreen_visual();
     }
+    set_controls_state_allowed(controls_allowed_for_state(state));
     if (state == InteractionState::booting ||
         state == InteractionState::recording ||
         state == InteractionState::sleep_pending) {
@@ -559,6 +1182,8 @@ void show_ble_passkey(std::uint32_t passkey, bool visible) {
         passkey_buffer.size(),
         "%06lu",
         static_cast<unsigned long>(passkey));
+    passkey_visible = true;
+    set_controls_state_allowed(controls_state_allowed);
     set_static_text(passkey_label, passkey_buffer.data());
     show_activity(false);
     if (level_bar != nullptr) {
@@ -644,6 +1269,14 @@ bool show_fullscreen_image(image::Rgb565Frame &&frame) {
     lv_obj_center(image_overlay);
     lv_obj_clear_flag(image_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(image_overlay);
+    update_controls_handle();
+    if (controls_gesture.open() || controls_drag_visible) {
+        lv_obj_move_foreground(controls_backdrop);
+        lv_obj_move_foreground(controls_panel);
+    } else if (controls_edge_target != nullptr &&
+        !lv_obj_has_flag(controls_edge_target, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(controls_edge_target);
+    }
     if (passkey_overlay != nullptr &&
         !lv_obj_has_flag(passkey_overlay, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_move_foreground(passkey_overlay);
@@ -707,6 +1340,14 @@ bool show_fullscreen_plot(const agent::PlotData &plot) {
     lv_chart_refresh(plot_chart);
     lv_obj_clear_flag(plot_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(plot_overlay);
+    update_controls_handle();
+    if (controls_gesture.open() || controls_drag_visible) {
+        lv_obj_move_foreground(controls_backdrop);
+        lv_obj_move_foreground(controls_panel);
+    } else if (controls_edge_target != nullptr &&
+        !lv_obj_has_flag(controls_edge_target, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(controls_edge_target);
+    }
     if (passkey_overlay != nullptr &&
         !lv_obj_has_flag(passkey_overlay, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_move_foreground(passkey_overlay);
@@ -736,6 +1377,7 @@ esp_err_t sleep() {
     if (!bsp_display_lock(25)) {
         return ESP_ERR_TIMEOUT;
     }
+    close_controls(false);
     const esp_err_t result = bsp_display_backlight_off();
     bsp_display_unlock();
     return result;

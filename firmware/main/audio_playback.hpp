@@ -23,6 +23,7 @@ public:
 
     esp_err_t start(int volume_percent);
     esp_err_t play(const std::int16_t *samples, std::size_t sample_count);
+    esp_err_t set_volume(int volume_percent);
     esp_err_t stop();
     void cancel();
 
@@ -34,6 +35,8 @@ private:
 
     void *codec_ = nullptr;
     std::atomic<bool> cancelled_{false};
+    std::atomic<int> requested_volume_percent_{70};
+    int applied_volume_percent_ = -1;
     bool active_ = false;
     bool session_acquired_ = false;
 };

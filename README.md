@@ -17,7 +17,9 @@ companion for secure BLE configuration.
    companion.
    The app refreshes this context when the watch connects and at most once per
    hour while connected.
-4. Ask for device status, brightness, volume, or power-off when needed.
+4. Pull down the small top handle to change brightness or volume on the
+   device. The panel follows the finger. Tap or drag either control track to
+   set its value. The same controls are also available by voice.
 5. Continue within 30 seconds to use the same thread.
 6. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
    starts a new thread.
@@ -49,8 +51,9 @@ The project is in active development. The firmware implements the black
 terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
 Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
 parallel image download, search, BLE provisioning,
-device status and controls, and sleep paths. Brightness and volume changes use
-a small persistent device-preference record. The iOS companion can store
+device status and controls, touch quick controls, and sleep paths. Brightness
+and volume changes use a small persistent device-preference record. The iOS
+companion can store
 settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
 can appear full-screen after the spoken answer. A restricted MicroPython tool
 can do short calculations and show a bounded line plot on the full screen.
@@ -120,8 +123,10 @@ uv run --locked python tools/pio.py run -e watch_prod
 
 Production does not enable encrypted NVS, flash encryption, or secure boot.
 These features can burn eFuses. Each device profile sets
-`CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`, and source checks reject a build
-that can make one of these permanent changes. There is no approval bypass.
+`CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. The build wrapper, CMake,
+reviewed SDK settings, and source checks each fail closed if the lock is
+missing, changed, duplicated, or replaced. Watch builds also reject project or
+build-flag overrides. There is no user-approval or environment-variable bypass.
 
 See [development mode](docs/development-mode.md) for the mode contract and the
 recovery procedure.
@@ -141,6 +146,9 @@ audio, chat text, URLs, credentials, or device identifiers.
 Run all PlatformIO commands through `tools/pio.py`. The wrapper checks the
 dependency cooldown first. For the watch build, it also creates the ESP-IDF
 Python environment from a hash-locked requirements file.
+
+For an isolated agent task or a repeatable tooling failure, use the procedures
+in [agent tooling](docs/agent-tooling.md).
 
 Never put credentials in tracked files. Local development values belong in
 `.secrets/device.env`, which Git ignores. The iOS app will store secrets in

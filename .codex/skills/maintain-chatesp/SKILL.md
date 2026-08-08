@@ -61,6 +61,13 @@ checks. Validate every BLE and network boundary. Set fixed limits for recording
 length, JSON, images, conversation history, output, retries, and tool rounds.
 Avoid repeated NVS writes and unbounded heap growth.
 
+Work directly on `main`. Never create or switch to another branch unless the
+user explicitly tells you to do so. If another worktree has uncommitted work,
+do not switch, reset, stash, clean, or change it. Use a separate clean `main`
+worktree when this is necessary. Use `tools/task_worktree.py` only when the
+user explicitly requests a task branch. Follow `docs/agent-tooling.md` for that
+exception and for repeatable tool or workflow problems.
+
 Use the repository tools:
 
 ```sh
@@ -98,8 +105,9 @@ success does not prove pixel output. Record a visible AMOLED check separately.
 - Separate generic iOS build success from physical iPhone BLE success.
 - Run `$selfreview autofix` last. After it returns, run the secret scan. The
   agent that finishes the task must then stage only the task files, commit the
-  complete task, and push the commit to `main`. Do not leave publication for
-  the user or a later agent. Do not report completion before the push succeeds.
+  complete task directly on `main`, and push `main`. Do not leave publication
+  for the user or a later agent. Do not report completion before the push
+  succeeds.
 
 ## Maintain guidance
 

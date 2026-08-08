@@ -31,6 +31,15 @@ agent::Error DeviceControl::status(agent::DeviceStatus &status) {
 
 agent::Error DeviceControl::set_brightness(
     std::uint8_t percent, bool &persisted) {
+    const agent::Error error = preview_brightness(percent);
+    if (error != agent::Error::none) {
+        return error;
+    }
+    persisted = persist_preferences();
+    return agent::Error::none;
+}
+
+agent::Error DeviceControl::preview_brightness(std::uint8_t percent) {
     if (percent < runtime::DevicePreferences::minimum_brightness_percent ||
         percent > runtime::DevicePreferences::maximum_percent) {
         return agent::Error::invalid_argument;
@@ -39,20 +48,31 @@ agent::Error DeviceControl::set_brightness(
         return agent::Error::tool_failed;
     }
     brightness_percent_.store(percent, std::memory_order_release);
-    persisted = store_.store(current_preferences());
-    values_persisted_.store(persisted, std::memory_order_release);
     return agent::Error::none;
 }
 
 agent::Error DeviceControl::set_volume(
     std::uint8_t percent, bool &persisted) {
+    const agent::Error error = preview_volume(percent);
+    if (error != agent::Error::none) {
+        return error;
+    }
+    persisted = persist_preferences();
+    return agent::Error::none;
+}
+
+agent::Error DeviceControl::preview_volume(std::uint8_t percent) {
     if (percent > runtime::DevicePreferences::maximum_percent) {
         return agent::Error::invalid_argument;
     }
     volume_percent_.store(percent, std::memory_order_release);
-    persisted = store_.store(current_preferences());
-    values_persisted_.store(persisted, std::memory_order_release);
     return agent::Error::none;
+}
+
+bool DeviceControl::persist_preferences() {
+    const bool persisted = store_.store(current_preferences());
+    values_persisted_.store(persisted, std::memory_order_release);
+    return persisted;
 }
 
 agent::Error DeviceControl::schedule_power_off(agent::PowerOffMode &mode) {

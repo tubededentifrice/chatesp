@@ -30,3 +30,28 @@
     CONFIG_FLASH_ENCRYPTION_ENABLED
 #error "Flash encryption is forbidden because it can burn eFuses"
 #endif
+
+#if defined(CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK) && \
+    CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK
+#error "Application anti-rollback is forbidden because it can burn eFuses"
+#endif
+
+#if defined(CONFIG_BOOTLOADER_ANTI_ROLLBACK_ENABLE) && \
+    CONFIG_BOOTLOADER_ANTI_ROLLBACK_ENABLE
+#error "Bootloader anti-rollback is forbidden because it can burn eFuses"
+#endif
+
+#if defined(CONFIG_SECURE_FLASH_PSEUDO_ROUND_FUNC) && \
+    CONFIG_SECURE_FLASH_PSEUDO_ROUND_FUNC
+#error "Secure flash pseudo-round setup is forbidden because it can burn eFuses"
+#endif
+
+#if defined(CONFIG_SECURE_DISABLE_ROM_DL_MODE) && \
+    CONFIG_SECURE_DISABLE_ROM_DL_MODE
+#error "Permanent ROM download disable is forbidden"
+#endif
+
+#if defined(CONFIG_SECURE_ENABLE_SECURE_ROM_DL_MODE) && \
+    CONFIG_SECURE_ENABLE_SECURE_ROM_DL_MODE
+#error "Permanent secure ROM download mode is forbidden"
+#endif
