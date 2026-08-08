@@ -85,5 +85,73 @@ private:
     bool fallback_ready_ = false;
 };
 
+class GetDeviceStatusTool final : public Tool {
+public:
+    explicit GetDeviceStatusTool(DeviceControlProvider &provider)
+        : provider_(provider) {}
+
+    [[nodiscard]] const char *name() const override;
+    [[nodiscard]] const char *description() const override;
+    [[nodiscard]] const char *parameters_schema() const override;
+    Error execute(
+        const char *arguments, std::size_t size,
+        FixedText<Limits::max_tool_result_bytes> &result,
+        CancellationToken &cancellation) override;
+
+private:
+    DeviceControlProvider &provider_;
+};
+
+class SetBrightnessTool final : public Tool {
+public:
+    explicit SetBrightnessTool(DeviceControlProvider &provider)
+        : provider_(provider) {}
+
+    [[nodiscard]] const char *name() const override;
+    [[nodiscard]] const char *description() const override;
+    [[nodiscard]] const char *parameters_schema() const override;
+    Error execute(
+        const char *arguments, std::size_t size,
+        FixedText<Limits::max_tool_result_bytes> &result,
+        CancellationToken &cancellation) override;
+
+private:
+    DeviceControlProvider &provider_;
+};
+
+class SetVolumeTool final : public Tool {
+public:
+    explicit SetVolumeTool(DeviceControlProvider &provider)
+        : provider_(provider) {}
+
+    [[nodiscard]] const char *name() const override;
+    [[nodiscard]] const char *description() const override;
+    [[nodiscard]] const char *parameters_schema() const override;
+    Error execute(
+        const char *arguments, std::size_t size,
+        FixedText<Limits::max_tool_result_bytes> &result,
+        CancellationToken &cancellation) override;
+
+private:
+    DeviceControlProvider &provider_;
+};
+
+class PowerOffTool final : public Tool {
+public:
+    explicit PowerOffTool(DeviceControlProvider &provider)
+        : provider_(provider) {}
+
+    [[nodiscard]] const char *name() const override;
+    [[nodiscard]] const char *description() const override;
+    [[nodiscard]] const char *parameters_schema() const override;
+    Error execute(
+        const char *arguments, std::size_t size,
+        FixedText<Limits::max_tool_result_bytes> &result,
+        CancellationToken &cancellation) override;
+
+private:
+    DeviceControlProvider &provider_;
+};
+
 }  // namespace agent
 }  // namespace chatesp

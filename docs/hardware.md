@@ -51,6 +51,14 @@ peripherals. Turn the AMOLED off and request AXP2101 system-off. A PWR press
 then causes a cold boot and a new thread. Measure current on battery hardware
 before making a battery-life claim.
 
+The model can request device status, set display brightness from 5 through 100
+percent, set playback volume from 0 through 100 percent, and request power-off.
+Brightness and volume persist across a restart when NVS is available. A model
+power-off first completes a short spoken confirmation. Production then uses the
+same system-off cleanup as the PWR button and inactivity timer. One bottom PWR
+press starts the board again. Development firmware uses soft sleep so that USB
+upload stays available; one bottom PWR press wakes it.
+
 The connected V2 board must pass these checks for this control change:
 
 - each cold start, software reset, or watchdog reset first shows the black
@@ -77,6 +85,20 @@ The connected V2 board must pass these checks for this control change:
   buffers before playback so that audio stays clear;
 - a new held press returns to `LISTENING` within 250 ms and stops model, TTS,
   playback, search, and image work.
+- device status reports the current brightness and volume and reports a battery
+  value or a clear unavailable state;
+- brightness commands apply at 5 and 100 percent and reject values outside the
+  range;
+- volume commands mute at 0 percent, apply at 100 percent, and reject values
+  outside the range;
+- changed brightness and volume values return after a reset;
+- an explicit model power-off gives one short confirmation and then sleeps;
+- a farewell, a hypothetical statement, or an uncertain transcript does not
+  schedule power-off;
+- a new PWR-button action cancels a pending model power-off;
+- development model power-off enters soft sleep and a PWR press wakes it;
+- production model power-off requests AXP2101 system-off and a PWR press causes
+  a cold start.
 
 The full-screen image path must pass these checks on the V2 AMOLED:
 
@@ -102,6 +124,10 @@ The current USB-power checks do not verify battery sleep current.
 - Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
   the station connects.
 - Verify encrypted BLE provisioning and acknowledgement with a physical iPhone.
+- Verify model device controls at each brightness and volume limit, after a
+  reset, and with NVS write failure injection.
+- Verify model power-off confirmation, cancellation, production current, and
+  bottom-PWR wake.
 - Measure idle, recording, Wi-Fi, playback, and deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,
   stuck state, or unexpected NVS write.

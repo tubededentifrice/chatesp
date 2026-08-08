@@ -6,6 +6,8 @@
 
 namespace chatesp {
 
+class DevicePreferencesStore;
+
 class VoiceRuntime {
 public:
     VoiceRuntime();
@@ -14,7 +16,9 @@ public:
     VoiceRuntime(const VoiceRuntime &) = delete;
     VoiceRuntime &operator=(const VoiceRuntime &) = delete;
 
-    esp_err_t start(bool startup_button_down, std::uint32_t startup_at_ms);
+    esp_err_t start(
+        bool startup_button_down, std::uint32_t startup_at_ms,
+        DevicePreferencesStore &device_preferences_store);
     void action_button_edge(bool pressed, std::uint32_t at_ms);
 
     [[nodiscard]] bool poweroff_ready() const;

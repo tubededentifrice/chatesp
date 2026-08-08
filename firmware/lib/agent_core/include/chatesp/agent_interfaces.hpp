@@ -14,6 +14,17 @@ public:
     [[nodiscard]] virtual bool cancelled() const = 0;
 };
 
+class DeviceControlProvider {
+public:
+    virtual ~DeviceControlProvider() = default;
+    virtual Error status(DeviceStatus &status) = 0;
+    virtual Error set_brightness(
+        std::uint8_t percent, bool &persisted) = 0;
+    virtual Error set_volume(
+        std::uint8_t percent, bool &persisted) = 0;
+    virtual Error schedule_power_off(PowerOffMode &mode) = 0;
+};
+
 class ByteSink {
 public:
     virtual ~ByteSink() = default;

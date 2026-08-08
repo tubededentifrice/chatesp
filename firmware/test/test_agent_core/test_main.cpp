@@ -146,6 +146,51 @@ public:
     }
 };
 
+class TestDeviceControl final : public DeviceControlProvider {
+public:
+    Error status(DeviceStatus &output) override {
+        ++status_calls;
+        if (failure != Error::none) {
+            return failure;
+        }
+        output = status_value;
+        return Error::none;
+    }
+
+    Error set_brightness(
+        std::uint8_t percent, bool &persisted) override {
+        ++brightness_calls;
+        last_brightness = percent;
+        persisted = persist_changes;
+        return failure;
+    }
+
+    Error set_volume(
+        std::uint8_t percent, bool &persisted) override {
+        ++volume_calls;
+        last_volume = percent;
+        persisted = persist_changes;
+        return failure;
+    }
+
+    Error schedule_power_off(PowerOffMode &mode) override {
+        ++power_off_calls;
+        mode = power_mode;
+        return failure;
+    }
+
+    DeviceStatus status_value{};
+    PowerOffMode power_mode = PowerOffMode::system_off;
+    Error failure = Error::none;
+    int status_calls = 0;
+    int brightness_calls = 0;
+    int volume_calls = 0;
+    int power_off_calls = 0;
+    std::uint8_t last_brightness = 0;
+    std::uint8_t last_volume = 0;
+    bool persist_changes = true;
+};
+
 class ImageSelectionChat final : public ChatProvider {
 public:
     int calls = 0;
@@ -199,6 +244,10 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "Reply in English"));
     TEST_ASSERT_NOT_NULL(
         std::strstr(system_prompt, "Never claim that search is unsupported"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "get_device_status"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "explicitly asks"));
+    TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "power-off is scheduled"));
+    TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "bottom PWR-button"));
     TEST_ASSERT_NULL(std::strstr(system_prompt, "chain of thought"));
 }
 
@@ -247,20 +296,20 @@ void test_agent_loop_executes_one_tool_and_keeps_history() {
         static_cast<int>(loop.history().at(1).role));
 }
 
-void test_agent_loop_stops_after_two_tool_rounds() {
+void test_agent_loop_stops_after_three_tool_rounds() {
     EchoTool tool;
     ToolRegistry registry;
     registry.add(tool);
     SequenceChat chat;
-    chat.tool_turns = 3;
+    chat.tool_turns = 4;
     AgentLoop loop(chat, registry);
     FixedText<Limits::max_answer_bytes> answer;
     TestCancellation cancellation;
     assert_error(
         Error::limit_exceeded,
         loop.run("Question", 8, answer, cancellation));
-    TEST_ASSERT_EQUAL_INT(2, tool.calls);
-    TEST_ASSERT_EQUAL_INT(3, chat.calls);
+    TEST_ASSERT_EQUAL_INT(3, tool.calls);
+    TEST_ASSERT_EQUAL_INT(4, chat.calls);
 }
 
 void test_agent_loop_honors_cancellation_before_provider() {
@@ -460,6 +509,133 @@ void test_search_tools_validate_query_and_bound_result() {
     TEST_ASSERT_NOT_NULL(std::strstr(result.c_str(), "thumbnail_url"));
     image_tool.clear_results();
     TEST_ASSERT_EQUAL_UINT32(0, image_tool.last_results().size);
+}
+
+void test_device_status_tool_returns_bounded_status() {
+    TestDeviceControl provider;
+    provider.status_value = {
+        42, 17, 88, true, true, PowerOffMode::development_sleep};
+    GetDeviceStatusTool tool(provider);
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+
+    assert_error(
+        Error::none, tool.execute("{}", 2, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.status_calls);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"brightness_percent\":42,\"volume_percent\":17,"
+        "\"battery_percent\":88,\"settings_persistent\":true,"
+        "\"power_off_mode\":\"development_sleep\"}",
+        result.c_str());
+
+    provider.status_value.battery_available = false;
+    result.clear();
+    assert_error(
+        Error::none, tool.execute(" { } ", 5, result, cancellation));
+    TEST_ASSERT_NOT_NULL(std::strstr(result.c_str(), "\"battery_percent\":null"));
+    assert_error(
+        Error::invalid_argument,
+        tool.execute("{\"extra\":1}", 11, result, cancellation));
+}
+
+void test_device_setting_tools_validate_and_report_persistence() {
+    TestDeviceControl provider;
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+    SetBrightnessTool brightness(provider);
+    SetVolumeTool volume(provider);
+
+    assert_error(
+        Error::none,
+        brightness.execute("{\"percent\":5}", 13, result, cancellation));
+    TEST_ASSERT_EQUAL_UINT8(5, provider.last_brightness);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"brightness_percent\":5,\"persisted\":true}", result.c_str());
+    result.clear();
+    assert_error(
+        Error::none,
+        brightness.execute("{\"percent\":100}", 15, result, cancellation));
+    TEST_ASSERT_EQUAL_UINT8(100, provider.last_brightness);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"brightness_percent\":100,\"persisted\":true}", result.c_str());
+    result.clear();
+    provider.persist_changes = false;
+    assert_error(
+        Error::none,
+        volume.execute("{\"percent\":0}", 13, result, cancellation));
+    TEST_ASSERT_EQUAL_UINT8(0, provider.last_volume);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"volume_percent\":0,\"persisted\":false}", result.c_str());
+    result.clear();
+    assert_error(
+        Error::none,
+        volume.execute("{\"percent\":100}", 15, result, cancellation));
+    TEST_ASSERT_EQUAL_UINT8(100, provider.last_volume);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"volume_percent\":100,\"persisted\":false}", result.c_str());
+
+    assert_error(
+        Error::invalid_argument,
+        brightness.execute("{\"percent\":4}", 13, result, cancellation));
+    assert_error(
+        Error::invalid_argument,
+        brightness.execute("{\"percent\":101}", 15, result, cancellation));
+    assert_error(
+        Error::invalid_argument,
+        volume.execute("{\"percent\":101}", 15, result, cancellation));
+    assert_error(
+        Error::invalid_argument,
+        volume.execute("{\"percent\":50,\"extra\":1}", 25, result,
+                       cancellation));
+    assert_error(
+        Error::invalid_argument,
+        volume.execute("{\"percent\":\"50\"}", 16, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(2, provider.brightness_calls);
+    TEST_ASSERT_EQUAL_INT(2, provider.volume_calls);
+}
+
+void test_power_off_tool_is_strict_and_cancellable() {
+    TestDeviceControl provider;
+    provider.power_mode = PowerOffMode::development_sleep;
+    PowerOffTool tool(provider);
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+
+    assert_error(
+        Error::none, tool.execute("{}", 2, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.power_off_calls);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"scheduled\":true,\"mode\":\"development_sleep\"}",
+        result.c_str());
+    assert_error(
+        Error::invalid_argument,
+        tool.execute("{\"now\":true}", 12, result, cancellation));
+    cancellation.value = true;
+    assert_error(
+        Error::cancelled, tool.execute("{}", 2, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.power_off_calls);
+}
+
+void test_registry_holds_search_and_device_tools() {
+    TestWebSearch web_provider;
+    TestImageSearch image_provider;
+    TestDeviceControl device_provider;
+    SearchWebTool web(web_provider);
+    SearchImagesTool images(image_provider);
+    GetDeviceStatusTool status(device_provider);
+    SetBrightnessTool brightness(device_provider);
+    SetVolumeTool volume(device_provider);
+    PowerOffTool power_off(device_provider);
+    ToolRegistry registry;
+
+    assert_error(Error::none, registry.add(web));
+    assert_error(Error::none, registry.add(images));
+    assert_error(Error::none, registry.add(status));
+    assert_error(Error::none, registry.add(brightness));
+    assert_error(Error::none, registry.add(volume));
+    assert_error(Error::none, registry.add(power_off));
+    TEST_ASSERT_EQUAL_UINT32(6, registry.size());
+    TEST_ASSERT_EQUAL_UINT32(6, Limits::max_tool_count);
 }
 
 void test_image_tool_selects_only_a_current_result_id_once() {
@@ -876,7 +1052,7 @@ int main(int, char **) {
     RUN_TEST(test_history_rejects_empty_and_overlong_text);
     RUN_TEST(test_registry_rejects_duplicate_and_unknown_tool);
     RUN_TEST(test_agent_loop_executes_one_tool_and_keeps_history);
-    RUN_TEST(test_agent_loop_stops_after_two_tool_rounds);
+    RUN_TEST(test_agent_loop_stops_after_three_tool_rounds);
     RUN_TEST(test_agent_loop_honors_cancellation_before_provider);
     RUN_TEST(test_agent_loop_rolls_back_cancelled_turn);
     RUN_TEST(test_agent_loop_gives_model_a_sanitized_tool_error);
@@ -886,6 +1062,10 @@ int main(int, char **) {
     RUN_TEST(test_agent_loop_nonstream_provider_publishes_only_final_answer);
     RUN_TEST(test_agent_loop_rolls_back_when_text_callback_cancels);
     RUN_TEST(test_search_tools_validate_query_and_bound_result);
+    RUN_TEST(test_device_status_tool_returns_bounded_status);
+    RUN_TEST(test_device_setting_tools_validate_and_report_persistence);
+    RUN_TEST(test_power_off_tool_is_strict_and_cancellable);
+    RUN_TEST(test_registry_holds_search_and_device_tools);
     RUN_TEST(test_image_tool_selects_only_a_current_result_id_once);
     RUN_TEST(test_image_tool_clears_selection_on_search_and_clear);
     RUN_TEST(test_image_tool_can_use_one_fallback_after_a_search);

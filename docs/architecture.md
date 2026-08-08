@@ -50,8 +50,10 @@ later requests in the same session a fast path without keeping the radio active
 after the display turns off.
 
 Each turn first uses a short required-tool route. The route is direct answer,
-web search, or image search. Image search still needs a separate model-selected
-result ID. After routing and tool work, the final model request has no tools.
+web search, image search, or one registered device tool. Image search still
+needs a separate model-selected result ID. A relative brightness or volume
+request gets device status before it changes the value. After routing and tool
+work, the final model request has no tools.
 OpenRouter sends that answer as an event stream. The UI receives bounded copies
 of the complete answer so far. It limits display updates to keep the button and
 network paths responsive. Tool-call data cannot enter the answer or speech
@@ -106,6 +108,8 @@ creates a new thread.
   state-specific motion.
 - `provisioning`: versioned BLE packets, encrypted settings, acknowledgement,
   and NVS persistence.
+- `device preferences`: a small versioned brightness and volume record. It is
+  separate from BLE settings and contains no secret data.
 - `power`: inactivity, PWR-button input, peripheral shutdown, AXP2101
   system-off, and cold-boot reset.
 
@@ -125,10 +129,28 @@ normal answer must fit a spoken interaction.
 
 ## Tools
 
-Version 1 has two tools:
+Version 1 has six tools:
 
 - `search_web(query)`: returns a small list of titles, URLs, and snippets.
 - `search_images(query)`: returns a small list with short result IDs.
+- `get_device_status()`: returns brightness, volume, battery availability,
+  preference-persistence state, and the current power-off mode.
+- `set_brightness(percent)`: applies and stores a value from 5 through 100.
+- `set_volume(percent)`: applies and stores a value from 0 through 100.
+- `power_off()`: schedules power-off only after an explicit current request.
+
+The device-control prompt does not infer power-off from a greeting, a farewell,
+a hypothetical request, or an uncertain transcript. The final answer gives one
+short confirmation before the runtime starts the normal sleep cleanup. A new
+PWR-button action cancels a pending model power-off. Development mode enters
+recoverable soft sleep. Production mode requests AXP2101 system-off. A bottom
+PWR-button press wakes either mode; production wake is a cold start.
+
+Brightness starts at 65 percent and volume starts at 70 percent when no valid
+record exists. The record has a fixed eight-byte, version-1 format and strict
+range checks. A changed value applies for the current session if NVS storage
+fails. The tool result then reports that the value is temporary. Device-control
+values contain no credentials or user text.
 
 To show an image, the model must first search and then select one result by its
 current ID. The firmware does not accept a URL from the model. A new search

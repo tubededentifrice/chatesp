@@ -1,16 +1,13 @@
 #include "pcm_playback_sink.hpp"
 
+#include "device_control.hpp"
 #include "esp_err.h"
 
 namespace chatesp {
-namespace {
 
-constexpr int kPlaybackVolumePercent = 70;
-
-}  // namespace
-
-PcmPlaybackSink::PcmPlaybackSink(AudioPlayback &playback)
-    : playback_(playback) {}
+PcmPlaybackSink::PcmPlaybackSink(
+    AudioPlayback &playback, DeviceControl &device_control)
+    : playback_(playback), device_control_(device_control) {}
 
 agent::Error PcmPlaybackSink::begin(
     std::uint32_t sample_rate_hz, std::uint8_t channels,
@@ -28,7 +25,7 @@ agent::Error PcmPlaybackSink::begin(
     output_error_ = agent::Error::none;
     byte_count_ = 0;
     sample_count_ = 0;
-    if (playback_.start(kPlaybackVolumePercent) != ESP_OK) {
+    if (playback_.start(device_control_.volume_percent()) != ESP_OK) {
         return agent::Error::model_failed;
     }
     started_ = true;

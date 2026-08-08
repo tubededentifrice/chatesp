@@ -6,6 +6,8 @@ idf_component_register(
         "ble_provisioning.cpp"
         "chatesp_font_18.c"
         "cloud_providers.cpp"
+        "device_control.cpp"
+        "device_preferences_store.cpp"
         "device_settings.cpp"
         "http_transport.cpp"
         "image_fetch_provider.cpp"

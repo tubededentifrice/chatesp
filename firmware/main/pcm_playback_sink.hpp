@@ -9,9 +9,11 @@
 
 namespace chatesp {
 
+class DeviceControl;
+
 class PcmPlaybackSink final : public agent::PcmSink {
 public:
-    explicit PcmPlaybackSink(AudioPlayback &playback);
+    PcmPlaybackSink(AudioPlayback &playback, DeviceControl &device_control);
 
     PcmPlaybackSink(const PcmPlaybackSink &) = delete;
     PcmPlaybackSink &operator=(const PcmPlaybackSink &) = delete;
@@ -35,6 +37,7 @@ private:
     agent::Error stop();
 
     AudioPlayback &playback_;
+    DeviceControl &device_control_;
     runtime::Pcm16Stream stream_;
     agent::Error output_error_ = agent::Error::none;
     std::size_t byte_count_ = 0;

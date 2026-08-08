@@ -42,6 +42,11 @@ cancellation, network cancellation, and thread reset stay equal in both modes.
 Logs must show the selected mode but must not show credentials, chat text,
 audio, or a stable device identifier.
 
+A model `power_off` request uses the same development soft-sleep path. The
+model gives a short confirmation first. A PWR-button action can cancel the
+pending request before cleanup starts. After soft sleep, one PWR-button press
+wakes the app.
+
 If the voice runtime cannot start, development mode keeps the error on the
 screen and keeps USB available. It does not enter a permanent black state.
 
@@ -51,7 +56,10 @@ image. They stay in device flash until an erase or a replacement image removes
 them. They must never enter a tracked file or a shared firmware artifact. The
 firmware also initializes NVS because the Wi-Fi and Bluetooth drivers use it
 for radio data. Development mode does not enable NVS encryption or persistent
-BLE bonds.
+BLE bonds. Brightness and volume are non-secret device preferences. They use a
+separate fixed-size NVS record in development and production. Their defaults
+are 65 and 70 percent. If the record cannot be stored, the new value applies
+only to the current session and the tool result reports this state.
 
 ## Production mode
 
@@ -59,6 +67,10 @@ The `watch_prod` profile defines `CHATESP_DEVELOPMENT_MODE=0`. It is the release
 profile. A sleep request stops active work, turns off the display, and requests
 AXP2101 system-off. USB can disconnect after system-off. This profile enables
 HMAC-protected NVS and persistent BLE bonds.
+
+A model `power_off` request gives a short confirmation and then uses this same
+system-off path. One bottom PWR-button press starts the board again. A held wake
+continues into recording at the normal hold threshold.
 
 Build production mode without a device change:
 

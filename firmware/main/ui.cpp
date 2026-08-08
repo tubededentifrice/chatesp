@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "bsp/esp-bsp.h"
+#include "chatesp/device_preferences.hpp"
 #include "lvgl.h"
 
 LV_FONT_DECLARE(chatesp_font_18);
@@ -319,7 +320,12 @@ void create_screen() {
 
 }  // namespace
 
-bool start() {
+bool start(std::uint8_t brightness_percent) {
+    if (!runtime::DevicePreferences{
+            brightness_percent,
+            runtime::DevicePreferences::default_volume_percent}.valid()) {
+        return false;
+    }
     lv_display_t *display = bsp_display_start();
     if (display == nullptr || bsp_display_backlight_off() != ESP_OK) {
         return false;
@@ -331,7 +337,7 @@ bool start() {
     show_state(InteractionState::booting);
     lv_refr_now(display);
     bsp_display_unlock();
-    return bsp_display_brightness_set(65) == ESP_OK;
+    return bsp_display_brightness_set(brightness_percent) == ESP_OK;
 }
 
 void show_state(InteractionState state) {
@@ -554,7 +560,13 @@ esp_err_t sleep() {
     return result;
 }
 
-esp_err_t wake(InteractionState state) {
+esp_err_t wake(
+    InteractionState state, std::uint8_t brightness_percent) {
+    if (brightness_percent <
+            runtime::DevicePreferences::minimum_brightness_percent ||
+        brightness_percent > runtime::DevicePreferences::maximum_percent) {
+        return ESP_ERR_INVALID_ARG;
+    }
     // A held wake must reach microphone capture without a long display wait.
     if (!bsp_display_lock(25)) {
         return ESP_ERR_TIMEOUT;
@@ -564,7 +576,8 @@ esp_err_t wake(InteractionState state) {
     show_state(state);
     lv_refr_now(nullptr);
     bsp_display_unlock();
-    const esp_err_t wake_error = bsp_display_brightness_set(65);
+    const esp_err_t wake_error =
+        bsp_display_brightness_set(brightness_percent);
     if (wake_error != ESP_OK) {
         return wake_error;
     }
@@ -576,11 +589,20 @@ esp_err_t wake(InteractionState state) {
     lv_obj_invalidate(active_screen());
     lv_refr_now(nullptr);
     bsp_display_unlock();
-    return bsp_display_brightness_set(65);
+    return bsp_display_brightness_set(brightness_percent);
 }
 
-esp_err_t reassert_panel() {
-    return bsp_display_brightness_set(65);
+esp_err_t reassert_panel(std::uint8_t brightness_percent) {
+    return set_brightness(brightness_percent);
+}
+
+esp_err_t set_brightness(std::uint8_t brightness_percent) {
+    if (brightness_percent <
+            runtime::DevicePreferences::minimum_brightness_percent ||
+        brightness_percent > runtime::DevicePreferences::maximum_percent) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return bsp_display_brightness_set(brightness_percent);
 }
 
 }  // namespace chatesp::ui

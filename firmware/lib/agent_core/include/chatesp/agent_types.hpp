@@ -44,6 +44,20 @@ struct ToolInvocation {
     FixedText<Limits::max_tool_arguments_bytes> arguments;
 };
 
+enum class PowerOffMode : std::uint8_t {
+    system_off,
+    development_sleep,
+};
+
+struct DeviceStatus {
+    std::uint8_t brightness_percent = 65;
+    std::uint8_t volume_percent = 70;
+    std::uint8_t battery_percent = 0;
+    bool battery_available = false;
+    bool settings_persistent = false;
+    PowerOffMode power_off_mode = PowerOffMode::system_off;
+};
+
 struct Message {
     MessageRole role = MessageRole::user;
     FixedText<Limits::max_message_bytes> content;

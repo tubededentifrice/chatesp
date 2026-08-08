@@ -6,6 +6,7 @@
 #include <unity.h>
 
 #include "chatesp/byte_ring.hpp"
+#include "chatesp/device_preferences.hpp"
 #include "chatesp/pcm16_stream.hpp"
 #include "chatesp/pcm_start_policy.hpp"
 #include "chatesp/runtime_control.hpp"
@@ -59,6 +60,49 @@ bool collect(
         output->values[output->size++] = samples[index];
     }
     return true;
+}
+
+void test_device_preferences_have_a_strict_versioned_record() {
+    chatesp::runtime::DevicePreferences preferences;
+    TEST_ASSERT_TRUE(preferences.valid());
+    const auto encoded =
+        chatesp::runtime::encode_device_preferences(preferences);
+    const std::uint8_t expected[] = {
+        'C', 'E', 'D', 'P', 1, 65, 70, 0};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(
+        expected, encoded.data(), encoded.size());
+
+    chatesp::runtime::DevicePreferences decoded{5, 0};
+    TEST_ASSERT_TRUE(chatesp::runtime::decode_device_preferences(
+        encoded.data(), encoded.size(), decoded));
+    TEST_ASSERT_EQUAL_UINT8(65, decoded.brightness_percent);
+    TEST_ASSERT_EQUAL_UINT8(70, decoded.volume_percent);
+}
+
+void test_device_preferences_reject_invalid_or_unknown_records() {
+    chatesp::runtime::DevicePreferences preferences;
+    auto encoded = chatesp::runtime::encode_device_preferences(preferences);
+    chatesp::runtime::DevicePreferences output;
+
+    TEST_ASSERT_FALSE(chatesp::runtime::decode_device_preferences(
+        nullptr, encoded.size(), output));
+    TEST_ASSERT_FALSE(chatesp::runtime::decode_device_preferences(
+        encoded.data(), encoded.size() - 1, output));
+    encoded[4] = 2;
+    TEST_ASSERT_FALSE(chatesp::runtime::decode_device_preferences(
+        encoded.data(), encoded.size(), output));
+    encoded[4] = 1;
+    encoded[5] = 4;
+    TEST_ASSERT_FALSE(chatesp::runtime::decode_device_preferences(
+        encoded.data(), encoded.size(), output));
+    encoded[5] = 5;
+    encoded[6] = 101;
+    TEST_ASSERT_FALSE(chatesp::runtime::decode_device_preferences(
+        encoded.data(), encoded.size(), output));
+    encoded[6] = 100;
+    encoded[7] = 1;
+    TEST_ASSERT_FALSE(chatesp::runtime::decode_device_preferences(
+        encoded.data(), encoded.size(), output));
 }
 
 void test_stream_joins_a_sample_across_writes() {
@@ -498,6 +542,8 @@ void tearDown() {}
 
 int main(int, char **) {
     UNITY_BEGIN();
+    RUN_TEST(test_device_preferences_have_a_strict_versioned_record);
+    RUN_TEST(test_device_preferences_reject_invalid_or_unknown_records);
     RUN_TEST(test_stream_joins_a_sample_across_writes);
     RUN_TEST(test_stream_rejects_an_incomplete_final_sample);
     RUN_TEST(test_stream_bounds_each_output_chunk);

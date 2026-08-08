@@ -19,7 +19,7 @@ enum class WifiIndicator : std::uint8_t {
 
 // Start the display and show the full-boot splash. Do not use this function
 // for an in-session display wake.
-bool start();
+bool start(std::uint8_t brightness_percent);
 
 // The caller must own the BSP display lock for all show functions.
 void show_state(InteractionState state);
@@ -39,7 +39,9 @@ void show_footer(
 void hide_fullscreen_image();
 
 esp_err_t sleep();
-esp_err_t wake(InteractionState state);
-esp_err_t reassert_panel();
+esp_err_t wake(
+    InteractionState state, std::uint8_t brightness_percent);
+esp_err_t reassert_panel(std::uint8_t brightness_percent);
+esp_err_t set_brightness(std::uint8_t brightness_percent);
 
 }  // namespace chatesp::ui

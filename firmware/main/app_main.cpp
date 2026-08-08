@@ -1,6 +1,7 @@
 #include <cstdint>
 
 #include "bsp/esp-bsp.h"
+#include "device_preferences_store.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -51,14 +52,27 @@ extern "C" void app_main() {
         chatesp::power::action_button_is_pressed();
     const std::uint32_t startup_button_at_ms = monotonic_ms();
 
-    if (!chatesp::ui::start()) {
+    static chatesp::DevicePreferencesStore device_preferences_store;
+    const esp_err_t preferences_result =
+        device_preferences_store.initialize();
+    if (preferences_result != ESP_OK) {
+        ESP_LOGW(
+            kTag,
+            "Device preferences are temporary (category %s)",
+            esp_err_to_name(preferences_result));
+    }
+    const chatesp::runtime::DevicePreferences device_preferences =
+        device_preferences_store.preferences();
+
+    if (!chatesp::ui::start(device_preferences.brightness_percent)) {
         ESP_LOGE(kTag, "Display start failed");
         return;
     }
 
     static chatesp::VoiceRuntime runtime;
     const esp_err_t runtime_result = runtime.start(
-        startup_button_down, startup_button_at_ms);
+        startup_button_down, startup_button_at_ms,
+        device_preferences_store);
     if (runtime_result != ESP_OK) {
         ESP_LOGE(kTag, "Voice runtime start failed");
         show_start_error("VOICE RUNTIME COULD NOT START");

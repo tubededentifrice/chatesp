@@ -21,6 +21,20 @@ constexpr char image_action_schema[] =
     "\"oneOf\":[{\"required\":[\"query\"]},{\"required\":[\"select\"]}],"
     "\"additionalProperties\":false}";
 
+constexpr char empty_object_schema[] =
+    "{\"type\":\"object\",\"properties\":{},"
+    "\"additionalProperties\":false}";
+
+constexpr char brightness_schema[] =
+    "{\"type\":\"object\",\"properties\":{\"percent\":{\"type\":"
+    "\"integer\",\"minimum\":5,\"maximum\":100}},"
+    "\"required\":[\"percent\"],\"additionalProperties\":false}";
+
+constexpr char volume_schema[] =
+    "{\"type\":\"object\",\"properties\":{\"percent\":{\"type\":"
+    "\"integer\",\"minimum\":0,\"maximum\":100}},"
+    "\"required\":[\"percent\"],\"additionalProperties\":false}";
+
 enum class ImageActionKind : std::uint8_t { query, select };
 
 struct ImageAction {
@@ -137,6 +151,51 @@ Error parse_image_action(
     }
     action.kind = ImageActionKind::select;
     return Error::none;
+}
+
+Error parse_empty_object(const char *arguments, std::size_t size) {
+    if (arguments == nullptr || size == 0 ||
+        size > Limits::max_tool_arguments_bytes) {
+        return Error::invalid_argument;
+    }
+    detail::JsonReader reader(arguments, size);
+    return reader.consume('{') && reader.consume('}') && reader.finish()
+        ? Error::none
+        : Error::invalid_argument;
+}
+
+Error parse_percent(
+    const char *arguments, std::size_t size, std::uint8_t minimum,
+    std::uint8_t &percent) {
+    if (arguments == nullptr || size == 0 ||
+        size > Limits::max_tool_arguments_bytes) {
+        return Error::invalid_argument;
+    }
+    detail::JsonReader reader(arguments, size);
+    if (!reader.consume('{')) {
+        return Error::malformed_response;
+    }
+    FixedText<16> key;
+    std::uint32_t value = 0;
+    if (!reader.read_string(key) || !key.equals("percent") ||
+        !reader.consume(':') || !reader.read_u32(value) ||
+        !reader.consume('}') || !reader.finish() || value < minimum ||
+        value > 100) {
+        return Error::invalid_argument;
+    }
+    percent = static_cast<std::uint8_t>(value);
+    return Error::none;
+}
+
+const char *power_off_mode_name(PowerOffMode mode) {
+    return mode == PowerOffMode::system_off
+        ? "system_off"
+        : "development_sleep";
+}
+
+bool append_boolean(
+    FixedText<Limits::max_tool_result_bytes> &output, bool value) {
+    return output.append(value ? "true" : "false");
 }
 
 template <std::size_t Capacity>
@@ -387,6 +446,175 @@ void SearchImagesTool::clear_results() {
     selected_result_.clear();
     selection_ready_ = false;
     fallback_ready_ = false;
+}
+
+const char *GetDeviceStatusTool::name() const {
+    return "get_device_status";
+}
+
+const char *GetDeviceStatusTool::description() const {
+    return "Read brightness, volume, battery, persistence, and power-off mode.";
+}
+
+const char *GetDeviceStatusTool::parameters_schema() const {
+    return empty_object_schema;
+}
+
+Error GetDeviceStatusTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    const Error parse_error = parse_empty_object(arguments, size);
+    if (parse_error != Error::none) {
+        return parse_error;
+    }
+    if (cancellation.cancelled()) {
+        return Error::cancelled;
+    }
+    DeviceStatus status;
+    const Error error = provider_.status(status);
+    if (error != Error::none) {
+        return error;
+    }
+    char percentages[96]{};
+    const int written = std::snprintf(
+        percentages, sizeof(percentages),
+        "{\"brightness_percent\":%u,\"volume_percent\":%u,"
+        "\"battery_percent\":",
+        static_cast<unsigned>(status.brightness_percent),
+        static_cast<unsigned>(status.volume_percent));
+    if (written <= 0 || static_cast<std::size_t>(written) >=
+            sizeof(percentages) || !result.append(percentages)) {
+        return Error::limit_exceeded;
+    }
+    if (status.battery_available) {
+        char battery[4]{};
+        const int battery_written = std::snprintf(
+            battery, sizeof(battery), "%u",
+            static_cast<unsigned>(status.battery_percent));
+        if (battery_written <= 0 ||
+            static_cast<std::size_t>(battery_written) >= sizeof(battery) ||
+            !result.append(battery)) {
+            return Error::limit_exceeded;
+        }
+    } else if (!result.append("null")) {
+        return Error::limit_exceeded;
+    }
+    return result.append(",\"settings_persistent\":") &&
+            append_boolean(result, status.settings_persistent) &&
+            result.append(",\"power_off_mode\":") &&
+            detail::append_json_string(
+                result, power_off_mode_name(status.power_off_mode)) &&
+            result.push_back('}')
+        ? Error::none
+        : Error::limit_exceeded;
+}
+
+const char *SetBrightnessTool::name() const { return "set_brightness"; }
+
+const char *SetBrightnessTool::description() const {
+    return "Set and save display brightness from 5 through 100 percent.";
+}
+
+const char *SetBrightnessTool::parameters_schema() const {
+    return brightness_schema;
+}
+
+Error SetBrightnessTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    std::uint8_t percent = 0;
+    const Error parse_error = parse_percent(arguments, size, 5, percent);
+    if (parse_error != Error::none) {
+        return parse_error;
+    }
+    if (cancellation.cancelled()) {
+        return Error::cancelled;
+    }
+    bool persisted = false;
+    const Error error = provider_.set_brightness(percent, persisted);
+    if (error != Error::none) {
+        return error;
+    }
+    char prefix[40]{};
+    const int written = std::snprintf(
+        prefix, sizeof(prefix), "{\"brightness_percent\":%u,\"persisted\":",
+        static_cast<unsigned>(percent));
+    return written > 0 && static_cast<std::size_t>(written) < sizeof(prefix) &&
+            result.append(prefix) && append_boolean(result, persisted) &&
+            result.push_back('}')
+        ? Error::none
+        : Error::limit_exceeded;
+}
+
+const char *SetVolumeTool::name() const { return "set_volume"; }
+
+const char *SetVolumeTool::description() const {
+    return "Set and save spoken-answer volume from 0 through 100 percent.";
+}
+
+const char *SetVolumeTool::parameters_schema() const { return volume_schema; }
+
+Error SetVolumeTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    std::uint8_t percent = 0;
+    const Error parse_error = parse_percent(arguments, size, 0, percent);
+    if (parse_error != Error::none) {
+        return parse_error;
+    }
+    if (cancellation.cancelled()) {
+        return Error::cancelled;
+    }
+    bool persisted = false;
+    const Error error = provider_.set_volume(percent, persisted);
+    if (error != Error::none) {
+        return error;
+    }
+    char prefix[36]{};
+    const int written = std::snprintf(
+        prefix, sizeof(prefix), "{\"volume_percent\":%u,\"persisted\":",
+        static_cast<unsigned>(percent));
+    return written > 0 && static_cast<std::size_t>(written) < sizeof(prefix) &&
+            result.append(prefix) && append_boolean(result, persisted) &&
+            result.push_back('}')
+        ? Error::none
+        : Error::limit_exceeded;
+}
+
+const char *PowerOffTool::name() const { return "power_off"; }
+
+const char *PowerOffTool::description() const {
+    return "Schedule power-off only when the user explicitly asks for it now.";
+}
+
+const char *PowerOffTool::parameters_schema() const {
+    return empty_object_schema;
+}
+
+Error PowerOffTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    const Error parse_error = parse_empty_object(arguments, size);
+    if (parse_error != Error::none) {
+        return parse_error;
+    }
+    if (cancellation.cancelled()) {
+        return Error::cancelled;
+    }
+    PowerOffMode mode = PowerOffMode::system_off;
+    const Error error = provider_.schedule_power_off(mode);
+    if (error != Error::none) {
+        return error;
+    }
+    return result.append("{\"scheduled\":true,\"mode\":") &&
+            detail::append_json_string(result, power_off_mode_name(mode)) &&
+            result.push_back('}')
+        ? Error::none
+        : Error::limit_exceeded;
 }
 
 }  // namespace agent

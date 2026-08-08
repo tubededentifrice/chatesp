@@ -441,7 +441,8 @@ agent::Error OpenRouterChatProvider::route_turn(
         } else if (tools_.find(turn.tool_call.name.c_str()) == nullptr) {
             error = agent::Error::tool_not_found;
         } else {
-            error = agent::Error::malformed_response;
+            route.kind = agent::TurnRouteKind::tool_call;
+            route.tool_call = turn.tool_call;
         }
     }
     return cancellation.cancelled() ? agent::Error::cancelled : error;

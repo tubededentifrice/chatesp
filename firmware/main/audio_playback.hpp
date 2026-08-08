@@ -21,7 +21,7 @@ public:
     AudioPlayback(const AudioPlayback &) = delete;
     AudioPlayback &operator=(const AudioPlayback &) = delete;
 
-    esp_err_t start(int volume_percent = 70);
+    esp_err_t start(int volume_percent);
     esp_err_t play(const std::int16_t *samples, std::size_t sample_count);
     esp_err_t stop();
     void cancel();

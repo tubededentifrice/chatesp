@@ -21,6 +21,7 @@
 #include "chatesp/speech_segmenter.hpp"
 #include "chatesp/turn_timing.hpp"
 #include "cloud_providers.hpp"
+#include "device_control.hpp"
 #include "device_settings.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -354,14 +355,22 @@ const char *error_message(agent::Error error) {
 class VoiceRuntime::Impl final : public agent::AgentProgressObserver,
                                  public agent::ChatTextSink {
 public:
-    Impl()
-        : image_fetch_provider_(image_transport_),
+    explicit Impl(DevicePreferencesStore &device_preferences_store)
+        : device_control_(
+              device_preferences_store,
+              device_preferences_store.preferences(),
+              kDevelopmentMode),
+          image_fetch_provider_(image_transport_),
           openrouter_connection_(settings_.openrouter()),
           brave_key_(settings_.brave()),
           web_provider_(search_transport_, network_, brave_key_),
           image_provider_(search_transport_, network_, brave_key_),
           web_tool_(web_provider_),
           image_tool_(image_provider_),
+          device_status_tool_(device_control_),
+          brightness_tool_(device_control_),
+          volume_tool_(device_control_),
+          power_off_tool_(device_control_),
           chat_provider_(
               openrouter_control_transport_, network_, openrouter_connection_,
               tools_),
@@ -369,10 +378,14 @@ public:
               openrouter_control_transport_, network_, openrouter_connection_),
           speech_provider_(
               openrouter_audio_transport_, network_, openrouter_connection_),
-          pcm_sink_(playback_),
+          pcm_sink_(playback_, device_control_),
           interaction_(interaction_config_for_mode(kDevelopmentMode)) {
         tools_ready_ = tools_.add(web_tool_) == agent::Error::none &&
-            tools_.add(image_tool_) == agent::Error::none;
+            tools_.add(image_tool_) == agent::Error::none &&
+            tools_.add(device_status_tool_) == agent::Error::none &&
+            tools_.add(brightness_tool_) == agent::Error::none &&
+            tools_.add(volume_tool_) == agent::Error::none &&
+            tools_.add(power_off_tool_) == agent::Error::none;
         void *agent_memory = heap_caps_malloc(
             sizeof(agent::AgentLoop), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (agent_memory != nullptr) {
@@ -425,8 +438,9 @@ public:
         if (!tools_ready_) {
             return ESP_FAIL;
         }
-        // Start NVS through the settings layer before Wi-Fi or NimBLE can use
-        // it. In production, this is the controlled HMAC security start.
+        // Confirm NVS through the settings layer before Wi-Fi or NimBLE can
+        // use it. The device-preference start in app_main can start NVS first
+        // so the saved display brightness is available before the splash.
         const esp_err_t settings_result = settings_store_.initialize();
         if (settings_result != ESP_OK) {
             return settings_result;
@@ -505,6 +519,7 @@ public:
         }
         button_pressed_.store(pressed, std::memory_order_release);
         if (pressed) {
+            device_control_.cancel_power_off();
             voice_priority_.store(true, std::memory_order_release);
             cancellation_.cancel();
             speech_channel_.cancel();
@@ -1026,7 +1041,8 @@ private:
             interaction_.button_down(command.at_ms);
             // Reassert only the panel command here. Full display work must not
             // delay the button state machine or microphone capture.
-            const esp_err_t panel_error = ui::reassert_panel();
+            const esp_err_t panel_error = ui::reassert_panel(
+                device_control_.brightness_percent());
             if (panel_error != ESP_OK) {
                 display_wake_pending_ = true;
                 display_wake_attempted_at_ms_ = command.at_ms;
@@ -1085,7 +1101,8 @@ private:
     }
 
     void request_display_wake(std::uint32_t now_ms) {
-        const esp_err_t result = ui::wake(interaction_.state());
+        const esp_err_t result = ui::wake(
+            interaction_.state(), device_control_.brightness_percent());
         display_wake_pending_ = result != ESP_OK;
         display_wake_attempted_at_ms_ = now_ms;
         if (display_wake_pending_) {
@@ -1303,6 +1320,11 @@ private:
             (void)speech_error;
             join_image_worker();
             image_frame_.reset();
+            if (device_control_.power_off_pending() &&
+                !cancellation_.cancelled()) {
+                finish_model_power_off();
+                return;
+            }
             if (error == agent::Error::cancelled ||
                 cancellation_.cancelled()) {
                 cancel_current();
@@ -1331,6 +1353,11 @@ private:
             speech_channel_.cancel();
             const agent::Error speech_error = wait_for_speech_worker();
             (void)speech_error;
+            if (device_control_.power_off_pending() &&
+                !cancellation_.cancelled()) {
+                finish_model_power_off();
+                return;
+            }
             fail("SPEECH PIPELINE FAILED");
             return;
         }
@@ -1365,6 +1392,11 @@ private:
 
         if (cancellation_.cancelled()) {
             cancel_current();
+            return;
+        }
+
+        if (device_control_.power_off_pending()) {
+            finish_model_power_off();
             return;
         }
 
@@ -1406,6 +1438,21 @@ private:
         }
     }
 
+    void finish_model_power_off() {
+        image_transport_.cancel_active();
+        join_image_worker();
+        selected_image_result_.clear();
+        image_frame_.reset();
+        with_display([]() {
+            ui::show_answer_notice("TURNING OFF", "POWER OFF");
+        });
+        interaction_.cancel_for_sleep();
+        timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
+        log_turn_timing();
+        voice_priority_.store(false, std::memory_order_release);
+        ESP_LOGI(kTag, "The model scheduled device power-off");
+    }
+
     void finish_with_error(agent::Error error) {
         if (error == agent::Error::cancelled || cancellation_.cancelled()) {
             cancel_current();
@@ -1420,6 +1467,7 @@ private:
     }
 
     void cancel_current() {
+        device_control_.cancel_power_off();
         capture_.discard();
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
@@ -1434,6 +1482,7 @@ private:
     }
 
     void fail(const char *message) {
+        device_control_.cancel_power_off();
         capture_.discard();
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
@@ -1480,6 +1529,7 @@ private:
     }
 
     void enter_sleep() {
+        device_control_.cancel_power_off();
         display_available_.store(false, std::memory_order_release);
         display_wake_pending_ = false;
         footer_shown_ = false;
@@ -1563,6 +1613,7 @@ private:
     }
 
     void recover_poweroff(std::uint32_t now_ms) {
+        device_control_.cancel_power_off();
         display_available_.store(true, std::memory_order_release);
         display_sleep_pending_ = false;
         ensure_ble_started();
@@ -1574,6 +1625,7 @@ private:
 
     RuntimeSettings settings_;
     SettingsStore settings_store_;
+    DeviceControl device_control_;
     network::NetworkManager network_;
     transport::HttpTransport openrouter_control_transport_;
     transport::HttpTransport openrouter_audio_transport_;
@@ -1590,6 +1642,10 @@ private:
     cloud::BraveImageSearchProvider image_provider_;
     agent::SearchWebTool web_tool_;
     agent::SearchImagesTool image_tool_;
+    agent::GetDeviceStatusTool device_status_tool_;
+    agent::SetBrightnessTool brightness_tool_;
+    agent::SetVolumeTool volume_tool_;
+    agent::PowerOffTool power_off_tool_;
     cloud::OpenRouterChatProvider chat_provider_;
     cloud::OpenRouterTranscriptionProvider transcription_provider_;
     cloud::OpenRouterSpeechProvider speech_provider_;
@@ -1658,11 +1714,12 @@ VoiceRuntime::~VoiceRuntime() {
 }
 
 esp_err_t VoiceRuntime::start(
-    bool startup_button_down, std::uint32_t startup_at_ms) {
+    bool startup_button_down, std::uint32_t startup_at_ms,
+    DevicePreferencesStore &device_preferences_store) {
     if (impl_ != nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
-    impl_ = new (std::nothrow) Impl();
+    impl_ = new (std::nothrow) Impl(device_preferences_store);
     if (impl_ == nullptr) {
         return ESP_ERR_NO_MEM;
     }

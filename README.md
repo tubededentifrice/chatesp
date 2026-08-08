@@ -12,8 +12,9 @@ companion for secure BLE configuration.
    answer with tools disabled. Text appears as the model sends it. Complete
    sentences go to speech at once. One playback session joins up to four
    speech segments in order.
-4. Continue within 30 seconds to use the same thread.
-5. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
+4. Ask for device status, brightness, volume, or power-off when needed.
+5. Continue within 30 seconds to use the same thread.
+6. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
    starts a new thread.
 
 The interface is black, high-contrast, and similar to a small terminal. The
@@ -42,9 +43,10 @@ The project is in active development. The firmware implements the black
 terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
 Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
 parallel image download, search, BLE provisioning,
-and sleep paths. The iOS companion can store settings in Keychain and send them
-over encrypted BLE. A selected, bounded JPEG can appear full-screen after the
-spoken answer.
+device status and controls, and sleep paths. Brightness and volume changes use
+a small persistent device-preference record. The iOS companion can store
+settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
+can appear full-screen after the spoken answer.
 
 Automated tests cover pure state, protocol, privacy, and bounded-buffer paths.
 The V2 development device has passed black-screen startup without a white
