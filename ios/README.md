@@ -55,6 +55,24 @@ xcodebuild \
   test
 ```
 
+For a physical iPhone, keep the Apple Team ID in the ignored local signing
+file. If Xcode added the Team ID to the tracked project, capture and remove it:
+
+```sh
+uv run --locked python tools/ios.py configure-signing
+```
+
+Build and install the latest Debug app on the one available physical iPhone:
+
+```sh
+uv run --locked python tools/ios.py install
+```
+
+Add `--launch` to open the app after installation. The command fails safely
+when no iPhone or more than one iPhone is available. Use `--device` only to
+select between multiple local devices. The tool does not print the Team ID,
+device name, or device identifier.
+
 The simulator build and tests do not test Bluetooth pairing. A physical iPhone
 and integrated device firmware must pass these gates:
 

@@ -58,3 +58,25 @@ When a tool or workflow fails:
 Do not add a bypass for a permission, security, dependency, or irreversible
 write policy. Do not convert a one-time external service outage into a source
 change unless the change gives a safe general recovery.
+
+## Build and install the iOS app locally
+
+Never save a personal Apple Team ID in the tracked Xcode project. If Xcode
+added one, move it to the ignored local configuration and remove it from the
+project:
+
+```sh
+uv run --locked python tools/ios.py configure-signing
+```
+
+Build, sign, and install the current Debug app on the one available physical
+iPhone:
+
+```sh
+uv run --locked python tools/ios.py install
+```
+
+Use `--launch` only when the task also requires an app launch. The tool uses
+bounded device, build, install, and launch commands. It sanitizes personal
+signing and device data from failure output. It stops if device selection is
+not unique.
