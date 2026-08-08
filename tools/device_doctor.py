@@ -14,12 +14,14 @@ from pathlib import Path
 if __package__:
     from tools.watch_monitor import (
         SerialRedactor,
+        close_safe_serial,
         open_safe_serial,
         redact_serial_text,
     )
 else:
     from watch_monitor import (  # type: ignore[no-redef]
         SerialRedactor,
+        close_safe_serial,
         open_safe_serial,
         redact_serial_text,
     )
@@ -175,7 +177,7 @@ def collect_boot_log(port: str, duration_seconds: float) -> str:
             output.append(tail)
             sys.stdout.write(tail)
             sys.stdout.flush()
-        connection.close()
+        close_safe_serial(connection)
     return "".join(output)
 
 

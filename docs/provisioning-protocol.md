@@ -43,6 +43,11 @@ Core Bluetooth identifier before it starts a new connection. It must not
 report a completed settings write unless it received the application
 acknowledgement before the disconnect.
 
+A development build keeps its bounded BLE bond store in RAM. It must retain
+that store when it stops and restarts BLE during the same boot. A cold start
+clears the development bond store. A production build keeps bonds in plaintext
+NVS so the phone can reconnect after a cold start.
+
 One transfer contains one complete settings packet. The maximum packet size is
 1,024 bytes. iOS sends one control frame and then ordered data frames. It waits
 for each write response before it sends the next frame.
