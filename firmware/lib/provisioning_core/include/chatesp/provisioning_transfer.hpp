@@ -13,6 +13,7 @@ constexpr std::size_t kControlFrameSize = 16;
 constexpr std::size_t kDataFrameHeaderSize = 14;
 constexpr std::size_t kMaximumFrameDataSize = 180;
 constexpr std::size_t kAcknowledgementSize = 44;
+constexpr std::uint16_t kAcknowledgementActiveVersionFlag = 0x0001;
 
 enum class TransferError : std::uint8_t {
     none,
@@ -81,7 +82,8 @@ make_acknowledgement(
     AcknowledgementStatus status,
     std::uint32_t revision,
     const std::array<std::uint8_t, kFingerprintSize> &fingerprint,
-    std::uint8_t version = kProtocolVersion);
+    std::uint8_t version = kProtocolVersion,
+    std::uint16_t flags = 0);
 
 }  // namespace provisioning
 }  // namespace chatesp

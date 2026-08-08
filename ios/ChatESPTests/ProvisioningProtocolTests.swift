@@ -19,6 +19,21 @@ final class ProvisioningProtocolTests: XCTestCase {
         return ProvisioningSettings(preferences: preferences, secrets: secrets)
     }
 
+    private func acknowledgement(
+        status: ProvisioningStatus,
+        revision: UInt32,
+        fingerprint: Data,
+        flags: UInt16 = 0
+    ) throws -> ProvisioningAcknowledgement {
+        var bytes = Data("CESA".utf8)
+        bytes.append(ProvisioningProtocolV2.version)
+        bytes.append(status.rawValue)
+        bytes.appendBigEndian(flags)
+        bytes.appendBigEndian(revision)
+        bytes.append(fingerprint)
+        return try ProvisioningAcknowledgement(data: bytes)
+    }
+
     func testGoldenPacketMatchesFirmwareVector() throws {
         let packet = try goldenSettings().packet(revision: 7)
         XCTAssertEqual(packet.data.count, 303)
@@ -65,6 +80,33 @@ final class ProvisioningProtocolTests: XCTestCase {
         var unknownStatus = bytes
         unknownStatus[5] = 0xff
         XCTAssertThrowsError(try ProvisioningAcknowledgement(data: unknownStatus))
+    }
+
+    func testRevisionRecoveryRequiresFlaggedActiveVersion() throws {
+        let activeFingerprint = Data(repeating: 0x5a, count: 32)
+        let recovery = try acknowledgement(
+            status: .staleRevision,
+            revision: 7,
+            fingerprint: activeFingerprint,
+            flags: ProvisioningProtocolV2.activeVersionAcknowledgementFlag)
+        XCTAssertTrue(recovery.isRevisionRecovery)
+
+        let legacyError = try acknowledgement(
+            status: .staleRevision,
+            revision: 1,
+            fingerprint: activeFingerprint)
+        XCTAssertFalse(legacyError.isRevisionRecovery)
+
+        XCTAssertThrowsError(try acknowledgement(
+            status: .staleRevision,
+            revision: 0,
+            fingerprint: activeFingerprint,
+            flags: ProvisioningProtocolV2.activeVersionAcknowledgementFlag))
+        XCTAssertThrowsError(try acknowledgement(
+            status: .storageFailure,
+            revision: 7,
+            fingerprint: activeFingerprint,
+            flags: ProvisioningProtocolV2.activeVersionAcknowledgementFlag))
     }
 
     func testDeviceContextHasAuthenticatedBoundedLayout() throws {
@@ -161,6 +203,22 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(try preferences.revision(for: fingerprint), 3)
     }
 
+    func testRevisionRecoveryHandlesMatchingAndChangedContent() throws {
+        let current = try goldenSettings().contentFingerprint()
+        let different = Data(repeating: 0x5a, count: 32)
+
+        var matching = AppPreferences()
+        _ = try matching.revision(for: current)
+        try matching.recoverActiveVersion(revision: 7, fingerprint: current)
+        XCTAssertEqual(try matching.revision(for: current), 7)
+
+        var changed = AppPreferences()
+        _ = try changed.revision(for: current)
+        try changed.recoverActiveVersion(revision: 7, fingerprint: different)
+        XCTAssertNil(changed.pendingRevision)
+        XCTAssertEqual(try changed.revision(for: current), 8)
+    }
+
     func testPreferencesUseOneVersionedRecord() throws {
         let suite = "org.chatesp.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -168,10 +226,26 @@ final class ProvisioningProtocolTests: XCTestCase {
         let store = PreferencesStore(defaults: defaults)
         var preferences = AppPreferences()
         preferences.chatModel = "example/model"
+        preferences.selectedWatchIdentifier = UUID()
         try store.save(preferences)
         let record = defaults.persistentDomain(forName: suite)
         XCTAssertEqual(record?.keys.count, 1)
         XCTAssertEqual(store.load(), preferences)
+    }
+
+    func testPreferencesDecodeRecordWithoutSelectedWatch() throws {
+        let suite = "org.chatesp.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = PreferencesStore(defaults: defaults)
+        let recordKey = "org.chatesp.preferences.record"
+        let encoded = try JSONEncoder().encode(AppPreferences())
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "selectedWatchIdentifier")
+        defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: recordKey)
+
+        XCTAssertNil(store.load().selectedWatchIdentifier)
     }
 
     func testMemoryFingerprintMatchesFirmwareVector() throws {

@@ -8,8 +8,10 @@ SessionResult acknowledgement(
     AcknowledgementStatus status,
     std::uint32_t revision = 0,
     const std::array<std::uint8_t, kFingerprintSize> &fingerprint = {},
-    std::uint8_t version = kProtocolVersion) {
-    return {true, make_acknowledgement(status, revision, fingerprint, version)};
+    std::uint8_t version = kProtocolVersion,
+    std::uint16_t flags = 0) {
+    return {true, make_acknowledgement(
+        status, revision, fingerprint, version, flags)};
 }
 
 AcknowledgementStatus validation_status(ValidationError error) {
@@ -63,9 +65,10 @@ SessionResult ProvisioningSession::handle_data(
         return {};
     }
 
+    const StoredVersion stored = settings.stored_version();
     const ValidationResult validation = validate_settings_packet(
         assembler_.packet_data(), assembler_.packet_size(), security,
-        settings.stored_version());
+        stored);
 
     AcknowledgementStatus status = validation_status(validation.error);
     if (validation.error == ValidationError::none) {
@@ -80,9 +83,18 @@ SessionResult ProvisioningSession::handle_data(
         }
     }
 
+    const bool include_active_version =
+        stored.present &&
+        stored.revision > 0 &&
+        validation.revision > 0 &&
+        (validation.error == ValidationError::stale_revision ||
+         validation.error == ValidationError::revision_conflict);
     const SessionResult result = acknowledgement(
-        status, validation.revision, validation.fingerprint,
-        assembler_.version());
+        status,
+        include_active_version ? stored.revision : validation.revision,
+        include_active_version ? stored.fingerprint : validation.fingerprint,
+        assembler_.version(),
+        include_active_version ? kAcknowledgementActiveVersionFlag : 0);
     assembler_.reset();
     return result;
 }

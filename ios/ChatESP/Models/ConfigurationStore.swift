@@ -9,6 +9,10 @@ final class ConfigurationStore: ObservableObject {
     private let preferencesStore: PreferencesStore
     private let keychainStore: KeychainStore
 
+    var selectedWatchIdentifier: UUID? {
+        preferences.selectedWatchIdentifier
+    }
+
     init(
         preferencesStore: PreferencesStore = PreferencesStore(),
         keychainStore: KeychainStore = KeychainStore()
@@ -40,6 +44,30 @@ final class ConfigurationStore: ObservableObject {
             revision: acknowledgement.revision,
             fingerprint: acknowledgement.fingerprint)
         try persist()
+    }
+
+    func recoverRevision(
+        from acknowledgement: ProvisioningAcknowledgement
+    ) throws -> ProvisioningPacket {
+        guard acknowledgement.isRevisionRecovery else {
+            throw ProvisioningError.acknowledgementMismatch
+        }
+        try preferences.recoverActiveVersion(
+            revision: acknowledgement.revision,
+            fingerprint: acknowledgement.fingerprint)
+        try preferencesStore.save(preferences)
+        return try makePacket()
+    }
+
+    func setSelectedWatchIdentifier(_ identifier: UUID?) throws {
+        let previous = preferences.selectedWatchIdentifier
+        preferences.selectedWatchIdentifier = identifier
+        do {
+            try preferencesStore.save(preferences)
+        } catch {
+            preferences.selectedWatchIdentifier = previous
+            throw error
+        }
     }
 
     func saveEdits() {

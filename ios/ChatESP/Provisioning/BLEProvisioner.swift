@@ -33,6 +33,62 @@ enum ProvisioningPhase: Equatable {
     }
 }
 
+enum BLEProvisionerError: Error, Equatable, LocalizedError {
+    case requestInProgress
+    case stopped
+
+    var errorDescription: String? {
+        switch self {
+        case .requestInProgress:
+            return "A settings transfer is already in progress."
+        case .stopped:
+            return "The watch connection was stopped."
+        }
+    }
+}
+
+struct BLEProvisionerPolicy {
+    enum TransferTimeoutAction: Equatable {
+        case failConnection
+        case retryCompleteTransfer
+    }
+
+    static let scanTimeout: TimeInterval = 10
+    static let connectionTimeout: TimeInterval = 10
+    static let frameTimeout: TimeInterval = 10
+    static let reconnectDelays: [TimeInterval] = [2, 4, 8, 16]
+
+    static func canStartProvisioning(hasPendingRequest: Bool) -> Bool {
+        !hasPendingRequest
+    }
+
+    static func acceptsCallback(selectedID: UUID?, callbackID: UUID) -> Bool {
+        selectedID == callbackID
+    }
+
+    static func reconnectDelay(attempt: Int) -> TimeInterval? {
+        guard reconnectDelays.indices.contains(attempt) else { return nil }
+        return reconnectDelays[attempt]
+    }
+
+    static func transferTimeoutAction(
+        frameIndex: Int,
+        frameCount: Int
+    ) -> TransferTimeoutAction {
+        frameIndex < frameCount ? .failConnection : .retryCompleteTransfer
+    }
+
+    static func hasFreshLocation(
+        authorizationAllowed: Bool,
+        updatedAt: TimeInterval?,
+        now: TimeInterval
+    ) -> Bool {
+        guard authorizationAllowed, let updatedAt else { return false }
+        let elapsed = now - updatedAt
+        return elapsed >= 0 && elapsed <= 900
+    }
+}
+
 @MainActor
 final class BLEProvisioner: NSObject, ObservableObject {
     @Published private(set) var watches: [DiscoveredWatch] = []
@@ -43,6 +99,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
     @Published private(set) var memoryMessage =
         "Connect a watch to manage memories."
     @Published private(set) var isWatchConnected = false
+    @Published private(set) var isProvisioning = false
+
+    var onSelectedWatchChanged: ((UUID?) -> Void)?
 
     private static let service = CBUUID(string: ProvisioningProtocolV2.serviceUUID)
     private static let control = CBUUID(string: ProvisioningProtocolV2.controlUUID)
@@ -52,8 +111,16 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private static let memoryCommand = CBUUID(string: MemoryProtocolV1.commandUUID)
     private static let memoryResponse = CBUUID(string: MemoryProtocolV1.responseUUID)
 
-    private lazy var central = CBCentralManager(delegate: self, queue: .main)
+    private lazy var central = CBCentralManager(
+        delegate: self,
+        queue: .main,
+        options: [
+            CBCentralManagerOptionRestoreIdentifierKey:
+                "com.chatesp.provisioning.central"
+        ])
     private var discovered: [UUID: CBPeripheral] = [:]
+    private var restoredPeripherals: [UUID: CBPeripheral] = [:]
+    private var desiredSelectedID: UUID?
     private var selected: CBPeripheral?
     private var controlCharacteristic: CBCharacteristic?
     private var dataCharacteristic: CBCharacteristic?
@@ -69,8 +136,11 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var timeoutWork: DispatchWorkItem?
     private var completion: ((Result<ProvisioningAcknowledgement, Error>) -> Void)?
     private var scanWhenReady = false
+    private var scanTimeoutWork: DispatchWorkItem?
+    private var connectionTimeoutWork: DispatchWorkItem?
     private let locationManager = CLLocationManager()
     private var approximateLocation = ""
+    private var approximateLocationUpdatedAt: TimeInterval?
     private var contextTimer: Timer?
     private var pendingDeviceContext: DeviceContextPacket?
     private var lastDeviceContextSentAt: Date?
@@ -79,6 +149,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var freshLocationWaitWork: DispatchWorkItem?
     private var waitingForFreshLocation = false
     private var reconnectWork: DispatchWorkItem?
+    private var reconnectAttempt = 0
     private var memoryRevision: UInt32 = 0
     private var memoryFingerprint = Data(repeating: 0, count: 32)
     private var nextMemoryRequestID: UInt32 = 1
@@ -92,7 +163,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var memoryListRestartCount = 0
     private var memoryRefreshNeeded = false
 
-    override init() {
+    init(selectedWatchIdentifier: UUID? = nil) {
+        desiredSelectedID = selectedWatchIdentifier
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
@@ -102,13 +174,17 @@ final class BLEProvisioner: NSObject, ObservableObject {
 
     deinit {
         contextTimer?.invalidate()
+        scanTimeoutWork?.cancel()
+        connectionTimeoutWork?.cancel()
         deviceContextTimeoutWork?.cancel()
         freshLocationWaitWork?.cancel()
         reconnectWork?.cancel()
         memoryTimeoutWork?.cancel()
+        locationManager.stopMonitoringSignificantLocationChanges()
     }
 
     func scan() {
+        guard !isProvisioning else { return }
         if central.state == .unknown || central.state == .resetting {
             scanWhenReady = true
             phase = .scanning
@@ -122,6 +198,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func startScan() {
+        scanTimeoutWork?.cancel()
         scanWhenReady = false
         watches = []
         discovered = [:]
@@ -129,25 +206,127 @@ final class BLEProvisioner: NSObject, ObservableObject {
         central.scanForPeripherals(
             withServices: [Self.service],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.scanTimeoutWork = nil
+            self.central.stopScan()
+            if self.phase == .scanning {
+                self.phase = .idle
+            }
+        }
+        scanTimeoutWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + BLEProvisionerPolicy.scanTimeout,
+            execute: work)
     }
 
     func select(_ watch: DiscoveredWatch) {
-        central.stopScan()
-        if let selected, selected != watch.peripheral {
-            central.cancelPeripheralConnection(selected)
+        guard !isProvisioning else { return }
+        select(watch.peripheral, notifySelectionChange: true)
+    }
+
+    var selectedWatchIdentifier: UUID? {
+        selectedID
+    }
+
+    func restoreSelectedWatch(identifier: UUID?) {
+        desiredSelectedID = identifier
+        guard let identifier else {
+            for peripheral in restoredPeripherals.values where
+                !isSelected(peripheral) {
+                central.cancelPeripheralConnection(peripheral)
+            }
+            restoredPeripherals = [:]
+            return
         }
-        selected = watch.peripheral
-        selectedID = watch.id
-        isWatchConnected = false
-        clearMemoryConnectionState()
+        if selectedID == identifier { return }
+        if let peripheral = restoredPeripherals[identifier] ??
+            central.retrievePeripherals(withIdentifiers: [identifier]).first {
+            select(peripheral, notifySelectionChange: false)
+        } else if central.state == .poweredOn {
+            startScan()
+        } else {
+            scanWhenReady = true
+        }
+    }
+
+    func forgetSelectedWatch() {
+        scanWhenReady = false
+        central.stopScan()
+        scanTimeoutWork?.cancel()
+        scanTimeoutWork = nil
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        connectionTimeoutWork?.cancel()
+        connectionTimeoutWork = nil
+        contextTimer?.invalidate()
+        contextTimer = nil
         deviceContextTimeoutWork?.cancel()
+        deviceContextTimeoutWork = nil
         cancelFreshLocationWait()
+        locationManager.stopMonitoringSignificantLocationChanges()
+        approximateLocation = ""
+        approximateLocationUpdatedAt = nil
         pendingDeviceContext = nil
         deviceContextAttempt = 0
+        lastDeviceContextSentAt = nil
+        let oldSelection = selected
+        selected = nil
+        selectedID = nil
+        desiredSelectedID = nil
+        restoredPeripherals = [:]
+        isWatchConnected = false
+        if pendingPacket != nil || completion != nil {
+            finish(.failure(BLEProvisionerError.stopped), sendContext: false)
+        }
+        if pendingMemoryCommand != nil {
+            finishMemoryCommand(.failure(MemoryProtocolError.disconnected))
+        }
+        clearMemoryConnectionState()
+        clearCharacteristics()
+        phase = .idle
+        if let oldSelection {
+            oldSelection.delegate = nil
+            central.cancelPeripheralConnection(oldSelection)
+        }
+        onSelectedWatchChanged?(nil)
+    }
+
+    private func select(
+        _ peripheral: CBPeripheral,
+        notifySelectionChange: Bool
+    ) {
+        central.stopScan()
+        scanTimeoutWork?.cancel()
+        scanTimeoutWork = nil
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        connectionTimeoutWork?.cancel()
+        connectionTimeoutWork = nil
+        let oldSelection = selected
+        selected = peripheral
+        selectedID = peripheral.identifier
+        desiredSelectedID = peripheral.identifier
+        if let oldSelection, oldSelection !== peripheral {
+            oldSelection.delegate = nil
+            central.cancelPeripheralConnection(oldSelection)
+        }
+        reconnectAttempt = 0
+        isWatchConnected = peripheral.state == .connected
+        clearMemoryConnectionState()
+        clearCharacteristics()
+        resetDeviceContextTransfer()
         startDeviceContextSync()
-        phase = .connecting
-        watch.peripheral.delegate = self
-        central.connect(watch.peripheral)
+        peripheral.delegate = self
+        if notifySelectionChange {
+            onSelectedWatchChanged?(peripheral.identifier)
+        }
+        if peripheral.state == .connected {
+            lastDeviceContextSentAt = nil
+            prepareCharacteristics(on: peripheral)
+        } else {
+            connectSelected()
+        }
     }
 
     func provision(
@@ -158,7 +337,14 @@ final class BLEProvisioner: NSObject, ObservableObject {
             completion(.failure(ProvisioningError.noDevice))
             return
         }
+        guard BLEProvisionerPolicy.canStartProvisioning(
+            hasPendingRequest: pendingPacket != nil || self.completion != nil
+        ) else {
+            completion(.failure(BLEProvisionerError.requestInProgress))
+            return
+        }
         self.completion = completion
+        isProvisioning = true
         deviceContextTimeoutWork?.cancel()
         cancelFreshLocationWait()
         pendingDeviceContext = nil
@@ -168,21 +354,46 @@ final class BLEProvisioner: NSObject, ObservableObject {
         if selected.state == .connected {
             prepareCharacteristics(on: selected)
         } else {
-            phase = .connecting
-            central.connect(selected)
+            connectSelected()
         }
     }
 
     private func prepareCharacteristics(on peripheral: CBPeripheral) {
+        guard isSelected(peripheral) else { return }
+        connectionTimeoutWork?.cancel()
+        connectionTimeoutWork = nil
         phase = .pairing
+        clearCharacteristics()
+        clearMemoryConnectionState()
+        peripheral.discoverServices([Self.service])
+    }
+
+    private func clearCharacteristics() {
         controlCharacteristic = nil
         dataCharacteristic = nil
         acknowledgementCharacteristic = nil
         deviceContextCharacteristic = nil
         memoryCommandCharacteristic = nil
         memoryResponseCharacteristic = nil
-        clearMemoryConnectionState()
-        peripheral.discoverServices([Self.service])
+    }
+
+    private func resetDeviceContextTransfer() {
+        deviceContextTimeoutWork?.cancel()
+        deviceContextTimeoutWork = nil
+        cancelFreshLocationWait()
+        pendingDeviceContext = nil
+        deviceContextAttempt = 0
+    }
+
+    private func isSelected(_ peripheral: CBPeripheral) -> Bool {
+        selected === peripheral && BLEProvisionerPolicy.acceptsCallback(
+            selectedID: selectedID,
+            callbackID: peripheral.identifier)
+    }
+
+    private func isActive(_ peripheral: CBPeripheral) -> Bool {
+        isSelected(peripheral) && isWatchConnected &&
+            peripheral.state == .connected
     }
 
     func refreshMemories() {
@@ -491,13 +702,15 @@ final class BLEProvisioner: NSObject, ObservableObject {
 
     private func startDeviceContextSync() {
         locationManager.requestWhenInUseAuthorization()
-        locationManager.startMonitoringSignificantLocationChanges()
+        if locationManager.authorizationStatus == .authorizedAlways {
+            locationManager.startMonitoringSignificantLocationChanges()
+        }
         requestFreshLocation()
         if contextTimer == nil {
             contextTimer = Timer.scheduledTimer(withTimeInterval: 3_600, repeats: true) {
                 [weak self] _ in
                 Task { @MainActor in
-                    self?.sendDeviceContext()
+                    self?.sendDeviceContextAfterFreshLocation()
                 }
             }
         }
@@ -562,7 +775,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
         do {
             let packet = try DeviceContextPacket(
-                date: Date(), approximateLocation: approximateLocation)
+                date: Date(), approximateLocation: currentApproximateLocation())
             pendingDeviceContext = packet
             if !retry {
                 deviceContextAttempt = 0
@@ -577,6 +790,19 @@ final class BLEProvisioner: NSObject, ObservableObject {
             lastDeviceContextSentAt = nil
             deviceContextAttempt = 0
         }
+    }
+
+    private func currentApproximateLocation() -> String {
+        let authorizationAllowed =
+            locationManager.authorizationStatus == .authorizedAlways ||
+            locationManager.authorizationStatus == .authorizedWhenInUse
+        guard BLEProvisionerPolicy.hasFreshLocation(
+            authorizationAllowed: authorizationAllowed,
+            updatedAt: approximateLocationUpdatedAt,
+            now: ProcessInfo.processInfo.systemUptime) else {
+            return ""
+        }
+        return approximateLocation
     }
 
     private func startDeviceContextTimeout() {
@@ -596,17 +822,72 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func scheduleReconnect() {
-        reconnectWork?.cancel()
-        guard pendingPacket == nil, let selected else { return }
+        guard reconnectWork == nil,
+              pendingPacket == nil,
+              let selected,
+              let delay = BLEProvisionerPolicy.reconnectDelay(
+                attempt: reconnectAttempt) else {
+            if selectedID != nil, reconnectAttempt >=
+                BLEProvisionerPolicy.reconnectDelays.count {
+                phase = .failed("The watch did not reconnect.")
+            }
+            return
+        }
+        reconnectAttempt += 1
         let work = DispatchWorkItem { [weak self, weak selected] in
-            guard let self, let selected,
+            guard let self else { return }
+            self.reconnectWork = nil
+            guard let selected,
+                  self.isSelected(selected),
                   self.central.state == .poweredOn,
                   selected.state == .disconnected else { return }
-            self.phase = .connecting
-            self.central.connect(selected)
+            self.connectSelected()
         }
         reconnectWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func connectSelected() {
+        guard let selected, central.state == .poweredOn else {
+            phase = .failed(ProvisioningError.bluetoothUnavailable.localizedDescription)
+            return
+        }
+        phase = .connecting
+        selected.delegate = self
+        switch selected.state {
+        case .connected:
+            lastDeviceContextSentAt = nil
+            isWatchConnected = true
+            prepareCharacteristics(on: selected)
+        case .connecting:
+            startConnectionTimeout(for: selected)
+        case .disconnected:
+            central.connect(selected)
+            startConnectionTimeout(for: selected)
+        case .disconnecting:
+            scheduleReconnect()
+        @unknown default:
+            scheduleReconnect()
+        }
+    }
+
+    private func startConnectionTimeout(for peripheral: CBPeripheral) {
+        connectionTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self, weak peripheral] in
+            guard let self, let peripheral, self.isSelected(peripheral),
+                  peripheral.state != .connected else { return }
+            self.connectionTimeoutWork = nil
+            self.central.cancelPeripheralConnection(peripheral)
+            if self.pendingPacket != nil {
+                self.finish(.failure(ProvisioningError.timeout), sendContext: false)
+            } else {
+                self.scheduleReconnect()
+            }
+        }
+        connectionTimeoutWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + BLEProvisionerPolicy.connectionTimeout,
+            execute: work)
     }
 
     private func beginAttempt() {
@@ -632,6 +913,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
             if acknowledgementCharacteristic.isNotifying {
                 writeNextFrame()
             } else {
+                startTimeout()
                 selected.setNotifyValue(true, for: acknowledgementCharacteristic)
             }
         } catch {
@@ -640,6 +922,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func writeNextFrame() {
+        guard pendingPacket != nil, isProvisioning else { return }
         guard let selected else {
             finish(.failure(ProvisioningError.disconnected))
             return
@@ -654,16 +937,33 @@ final class BLEProvisioner: NSObject, ObservableObject {
             : 0
         phase = .transferring(percent)
         let frame = frames[frameIndex]
+        startTimeout()
         selected.writeValue(frame.1, for: frame.0, type: .withResponse)
     }
 
     private func startTimeout() {
         timeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            self?.retryOrFinish(ProvisioningError.timeout)
+            guard let self,
+                  self.pendingPacket != nil,
+                  self.isProvisioning else { return }
+            if BLEProvisionerPolicy.transferTimeoutAction(
+                frameIndex: self.frameIndex,
+                frameCount: self.frames.count) == .failConnection {
+                if let selected = self.selected {
+                    self.central.cancelPeripheralConnection(selected)
+                }
+                self.finish(
+                    .failure(ProvisioningError.timeout),
+                    sendContext: false)
+            } else {
+                self.retryOrFinish(ProvisioningError.timeout)
+            }
         }
         timeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + BLEProvisionerPolicy.frameTimeout,
+            execute: work)
     }
 
     private func retryOrFinish(_ error: Error) {
@@ -675,13 +975,17 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
     }
 
-    private func finish(_ result: Result<ProvisioningAcknowledgement, Error>) {
+    private func finish(
+        _ result: Result<ProvisioningAcknowledgement, Error>,
+        sendContext shouldSendContext: Bool = true
+    ) {
         timeoutWork?.cancel()
         timeoutWork = nil
         transfer = nil
         frames = []
         frameIndex = 0
         pendingPacket = nil
+        isProvisioning = false
         switch result {
         case .success:
             phase = .complete
@@ -691,7 +995,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
         let callback = completion
         completion = nil
         callback?(result)
-        sendDeviceContext()
+        if shouldSendContext {
+            sendDeviceContext()
+        }
     }
 }
 
@@ -699,17 +1005,60 @@ extension BLEProvisioner: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
             if central.state == .poweredOn, self.scanWhenReady {
-                self.startScan()
+                if let identifier = self.desiredSelectedID,
+                   let peripheral = self.restoredPeripherals[identifier] ??
+                    self.central.retrievePeripherals(
+                        withIdentifiers: [identifier]).first {
+                    self.select(peripheral, notifySelectionChange: false)
+                } else {
+                    self.startScan()
+                }
                 return
+            }
+            if central.state == .poweredOn,
+               self.selected != nil,
+               !self.isWatchConnected,
+               self.pendingPacket == nil {
+                self.scheduleReconnect()
             }
             if central.state != .poweredOn, self.phase == .scanning {
                 self.scanWhenReady = false
                 self.phase = .failed(ProvisioningError.bluetoothUnavailable.localizedDescription)
             }
             if central.state != .poweredOn {
+                self.connectionTimeoutWork?.cancel()
+                self.connectionTimeoutWork = nil
+                self.reconnectWork?.cancel()
+                self.reconnectWork = nil
                 self.isWatchConnected = false
                 self.clearMemoryConnectionState()
+                self.resetDeviceContextTransfer()
+                if self.pendingPacket != nil || self.completion != nil {
+                    self.finish(
+                        .failure(ProvisioningError.bluetoothUnavailable),
+                        sendContext: false)
+                }
             }
+        }
+    }
+
+    nonisolated func centralManager(
+        _ central: CBCentralManager,
+        willRestoreState dict: [String: Any]
+    ) {
+        let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey]
+            as? [CBPeripheral] ?? []
+        Task { @MainActor in
+            for peripheral in peripherals {
+                peripheral.delegate = self
+                self.restoredPeripherals[peripheral.identifier] = peripheral
+            }
+            guard let identifier = self.desiredSelectedID,
+                  let peripheral = self.restoredPeripherals[identifier] else {
+                self.central.stopScan()
+                return
+            }
+            self.select(peripheral, notifySelectionChange: false)
         }
     }
 
@@ -720,16 +1069,31 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         rssi RSSI: NSNumber
     ) {
         Task { @MainActor in
+            guard central.isScanning else { return }
             self.discovered[peripheral.identifier] = peripheral
             self.watches = self.discovered.values
                 .map { DiscoveredWatch(peripheral: $0, name: $0.name ?? "ChatESP") }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            if self.selected == nil,
+               self.desiredSelectedID == peripheral.identifier {
+                self.select(peripheral, notifySelectionChange: false)
+            }
         }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
+            guard self.isSelected(peripheral) else {
+                if self.restoredPeripherals[peripheral.identifier] !== peripheral {
+                    central.cancelPeripheralConnection(peripheral)
+                }
+                return
+            }
             self.reconnectWork?.cancel()
+            self.reconnectWork = nil
+            self.connectionTimeoutWork?.cancel()
+            self.connectionTimeoutWork = nil
+            self.reconnectAttempt = 0
             self.lastDeviceContextSentAt = nil
             self.isWatchConnected = true
             self.prepareCharacteristics(on: peripheral)
@@ -742,6 +1106,9 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard self.isSelected(peripheral) else { return }
+            self.connectionTimeoutWork?.cancel()
+            self.connectionTimeoutWork = nil
             self.isWatchConnected = false
             self.clearMemoryConnectionState()
             if self.pendingPacket != nil {
@@ -759,6 +1126,9 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard self.isSelected(peripheral) else { return }
+            self.connectionTimeoutWork?.cancel()
+            self.connectionTimeoutWork = nil
             self.isWatchConnected = false
             self.clearMemoryConnectionState()
             if self.pendingPacket != nil {
@@ -778,6 +1148,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
 extension BLEProvisioner: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         Task { @MainActor in
+            guard self.isActive(peripheral) else { return }
             if let error {
                 self.finish(.failure(error))
                 return
@@ -799,6 +1170,9 @@ extension BLEProvisioner: CBPeripheralDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard self.isActive(peripheral), service.peripheral === peripheral else {
+                return
+            }
             if let error {
                 self.finish(.failure(error))
                 return
@@ -840,6 +1214,10 @@ extension BLEProvisioner: CBPeripheralDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard self.isActive(peripheral),
+                  characteristic.service?.peripheral === peripheral else {
+                return
+            }
             if characteristic.uuid == Self.memoryResponse {
                 if let error {
                     self.memoryAvailable = false
@@ -865,10 +1243,23 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 }
                 return
             }
-            guard characteristic.uuid == Self.acknowledgement,
-                  characteristic.isNotifying else {
+            guard characteristic.uuid == Self.acknowledgement else {
                 return
             }
+            guard characteristic.isNotifying else {
+                if self.pendingPacket != nil {
+                    self.retryOrFinish(ProvisioningError.writeFailed)
+                } else {
+                    self.deviceContextTimeoutWork?.cancel()
+                    self.pendingDeviceContext = nil
+                    self.lastDeviceContextSentAt = nil
+                    self.deviceContextAttempt = 0
+                    self.phase = .idle
+                }
+                return
+            }
+            self.timeoutWork?.cancel()
+            self.timeoutWork = nil
             if self.pendingPacket != nil {
                 self.writeNextFrame()
             } else {
@@ -883,11 +1274,22 @@ extension BLEProvisioner: CBPeripheralDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard self.isActive(peripheral),
+                  characteristic.service?.peripheral === peripheral else {
+                return
+            }
             if characteristic.uuid == Self.memoryCommand {
                 if let error {
                     self.retryMemoryCommand(error)
                 }
                 return
+            }
+            if characteristic.uuid == Self.control || characteristic.uuid == Self.data {
+                guard self.pendingPacket != nil, self.isProvisioning else {
+                    return
+                }
+                self.timeoutWork?.cancel()
+                self.timeoutWork = nil
             }
             if let error {
                 if characteristic.uuid == Self.deviceContext {
@@ -918,6 +1320,10 @@ extension BLEProvisioner: CBPeripheralDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard self.isActive(peripheral),
+                  characteristic.service?.peripheral === peripheral else {
+                return
+            }
             if characteristic.uuid == Self.memoryResponse {
                 if let error {
                     if self.pendingMemoryCommand != nil {
@@ -992,6 +1398,10 @@ extension BLEProvisioner: CBPeripheralDelegate {
             guard let packet = self.pendingPacket else { return }
             do {
                 let acknowledgement = try ProvisioningAcknowledgement(data: data)
+                if acknowledgement.isRevisionRecovery {
+                    self.finish(.success(acknowledgement))
+                    return
+                }
                 guard acknowledgement.isSuccess else {
                     throw ProvisioningError.deviceRejected(acknowledgement.status)
                 }
@@ -1009,12 +1419,21 @@ extension BLEProvisioner: CBPeripheralDelegate {
 
 extension BLEProvisioner: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard manager.authorizationStatus == .authorizedAlways ||
-                manager.authorizationStatus == .authorizedWhenInUse else {
-            return
+        Task { @MainActor in
+            guard self.selected != nil else { return }
+            switch manager.authorizationStatus {
+            case .authorizedAlways:
+                manager.startMonitoringSignificantLocationChanges()
+                manager.requestLocation()
+            case .authorizedWhenInUse:
+                manager.stopMonitoringSignificantLocationChanges()
+                manager.requestLocation()
+            default:
+                manager.stopMonitoringSignificantLocationChanges()
+                self.approximateLocation = ""
+                self.approximateLocationUpdatedAt = nil
+            }
         }
-        manager.startMonitoringSignificantLocationChanges()
-        manager.requestLocation()
     }
 
     nonisolated func locationManager(
@@ -1034,8 +1453,10 @@ extension BLEProvisioner: CLLocationManagerDelegate {
             locale: Locale(identifier: "en_US_POSIX"),
             latitude, longitude)
         Task { @MainActor in
+            guard self.selected != nil else { return }
             let changed = self.approximateLocation != text
             self.approximateLocation = text
+            self.approximateLocationUpdatedAt = ProcessInfo.processInfo.systemUptime
             if self.waitingForFreshLocation {
                 self.cancelFreshLocationWait()
                 self.sendDeviceContext(force: true)

@@ -22,6 +22,11 @@ std::uint32_t read_u32(const std::uint8_t *data) {
         static_cast<std::uint32_t>(data[3]);
 }
 
+void write_u16(std::uint8_t *data, std::uint16_t value) {
+    data[0] = static_cast<std::uint8_t>(value >> 8U);
+    data[1] = static_cast<std::uint8_t>(value);
+}
+
 void write_u32(std::uint8_t *data, std::uint32_t value) {
     data[0] = static_cast<std::uint8_t>(value >> 24U);
     data[1] = static_cast<std::uint8_t>(value >> 16U);
@@ -150,7 +155,8 @@ std::array<std::uint8_t, kAcknowledgementSize> make_acknowledgement(
     AcknowledgementStatus status,
     std::uint32_t revision,
     const std::array<std::uint8_t, kFingerprintSize> &fingerprint,
-    std::uint8_t version) {
+    std::uint8_t version,
+    std::uint16_t flags) {
     std::array<std::uint8_t, kAcknowledgementSize> result{};
     result[0] = 'C';
     result[1] = 'E';
@@ -158,6 +164,7 @@ std::array<std::uint8_t, kAcknowledgementSize> make_acknowledgement(
     result[3] = 'A';
     result[4] = supported_protocol_version(version) ? version : kProtocolVersion;
     result[5] = static_cast<std::uint8_t>(status);
+    write_u16(result.data() + 6, flags);
     write_u32(result.data() + 8, revision);
     std::copy(fingerprint.begin(), fingerprint.end(), result.begin() + 12);
     return result;

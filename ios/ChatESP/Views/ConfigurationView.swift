@@ -25,6 +25,17 @@ struct ConfigurationView: View {
             } message: {
                 Text("This deletes all saved facts from the watch.")
             }
+            .onAppear {
+                provisioner.onSelectedWatchChanged = { identifier in
+                    do {
+                        try store.setSelectedWatchIdentifier(identifier)
+                    } catch {
+                        store.show(error)
+                    }
+                }
+                provisioner.restoreSelectedWatch(
+                    identifier: store.selectedWatchIdentifier)
+            }
         }
     }
 
@@ -106,6 +117,7 @@ struct ConfigurationView: View {
                 store.saveEdits()
                 provisioner.scan()
             }
+            .disabled(provisioner.isProvisioning)
 
             ForEach(provisioner.watches) { watch in
                 Button {
@@ -119,6 +131,13 @@ struct ConfigurationView: View {
                                 .foregroundStyle(.green)
                         }
                     }
+                }
+                .disabled(provisioner.isProvisioning)
+            }
+
+            if provisioner.selectedID != nil {
+                Button("Stop and Forget Watch", role: .destructive) {
+                    provisioner.forgetSelectedWatch()
                 }
             }
 
@@ -171,7 +190,8 @@ struct ConfigurationView: View {
             Button("Save on Watch") {
                 send()
             }
-            .disabled(provisioner.selectedID == nil)
+            .disabled(
+                provisioner.selectedID == nil || provisioner.isProvisioning)
 
             if let error = store.errorText {
                 Text(error)
@@ -185,20 +205,36 @@ struct ConfigurationView: View {
     private func send() {
         do {
             let packet = try store.makePacket()
-            provisioner.provision(packet: packet) { result in
-                switch result {
-                case .success(let acknowledgement):
-                    do {
-                        try store.accept(acknowledgement)
-                    } catch {
-                        store.show(error)
-                    }
-                case .failure(let error):
-                    store.show(error)
-                }
-            }
+            send(packet, canRecoverRevision: true)
         } catch {
             store.show(error)
+        }
+    }
+
+    private func send(
+        _ packet: ProvisioningPacket,
+        canRecoverRevision: Bool
+    ) {
+        provisioner.provision(packet: packet) { result in
+            switch result {
+            case .success(let acknowledgement):
+                do {
+                    if acknowledgement.isRevisionRecovery {
+                        guard canRecoverRevision else {
+                            throw ProvisioningError.acknowledgementMismatch
+                        }
+                        let recoveryPacket = try store.recoverRevision(
+                            from: acknowledgement)
+                        send(recoveryPacket, canRecoverRevision: false)
+                    } else {
+                        try store.accept(acknowledgement)
+                    }
+                } catch {
+                    store.show(error)
+                }
+            case .failure(let error):
+                store.show(error)
+            }
         }
     }
 }

@@ -353,9 +353,20 @@ void test_acknowledgement_has_exact_binary_layout() {
     TEST_ASSERT_EQUAL_UINT8_ARRAY("CESA", acknowledgement.data(), 4);
     TEST_ASSERT_EQUAL_UINT8(provisioning::kProtocolVersion, acknowledgement[4]);
     TEST_ASSERT_EQUAL_UINT8(0, acknowledgement[5]);
+    TEST_ASSERT_EQUAL_UINT8(0, acknowledgement[6]);
+    TEST_ASSERT_EQUAL_UINT8(0, acknowledgement[7]);
     TEST_ASSERT_EQUAL_UINT8(7, acknowledgement[11]);
     TEST_ASSERT_EQUAL_UINT8_ARRAY(
         validation.fingerprint.data(), acknowledgement.data() + 12, validation.fingerprint.size());
+
+    const auto recovery = provisioning::make_acknowledgement(
+        provisioning::AcknowledgementStatus::stale_revision,
+        validation.revision,
+        validation.fingerprint,
+        provisioning::kProtocolVersion,
+        provisioning::kAcknowledgementActiveVersionFlag);
+    TEST_ASSERT_EQUAL_UINT8(0, recovery[6]);
+    TEST_ASSERT_EQUAL_UINT8(1, recovery[7]);
 }
 
 void test_device_context_has_bounded_authenticated_layout() {

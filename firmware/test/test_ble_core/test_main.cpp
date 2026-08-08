@@ -44,9 +44,11 @@ void append_u32(std::vector<std::uint8_t> &output, std::uint32_t value) {
     output.push_back(static_cast<std::uint8_t>(value));
 }
 
-std::vector<std::uint8_t> make_packet(std::uint32_t revision = 7) {
+std::vector<std::uint8_t> make_packet(
+    std::uint32_t revision = 7,
+    const Fields &fields = valid_fields()) {
     std::vector<std::uint8_t> payload;
-    for (const auto &field : valid_fields()) {
+    for (const auto &field : fields) {
         payload.push_back(field.first);
         append_u16(payload, field.second.size());
         payload.insert(payload.end(), field.second.begin(), field.second.end());
@@ -188,6 +190,45 @@ void test_unchanged_packet_does_not_write_storage() {
     TEST_ASSERT_EQUAL_INT(0, settings.store_calls);
 }
 
+void test_revision_errors_return_flagged_active_version() {
+    provisioning::ProvisioningSession session;
+    FakeSettings settings;
+    const auto active_packet = make_packet(7);
+    const auto active = provisioning::validate_settings_packet(
+        active_packet.data(), active_packet.size(), kSecureLink, {});
+    settings.stored = {true, active.revision, active.fingerprint};
+
+    const auto stale = send_packet(session, settings, make_packet(6));
+    TEST_ASSERT_EQUAL_HEX8(
+        static_cast<std::uint8_t>(provisioning::AcknowledgementStatus::stale_revision),
+        acknowledgement_status(stale));
+    TEST_ASSERT_EQUAL_UINT8(0, stale.acknowledgement[6]);
+    TEST_ASSERT_EQUAL_UINT8(1, stale.acknowledgement[7]);
+    TEST_ASSERT_EQUAL_UINT8(7, stale.acknowledgement[11]);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(
+        active.fingerprint.data(), stale.acknowledgement.data() + 12, 32);
+
+    auto changed_fields = valid_fields();
+    changed_fields[5].second = "example/other-model";
+    const auto conflict = send_packet(
+        session, settings, make_packet(7, changed_fields));
+    TEST_ASSERT_EQUAL_HEX8(
+        static_cast<std::uint8_t>(provisioning::AcknowledgementStatus::revision_conflict),
+        acknowledgement_status(conflict));
+    TEST_ASSERT_EQUAL_UINT8(1, conflict.acknowledgement[7]);
+    TEST_ASSERT_EQUAL_UINT8(7, conflict.acknowledgement[11]);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(
+        active.fingerprint.data(), conflict.acknowledgement.data() + 12, 32);
+
+    const auto zero_revision = send_packet(session, settings, make_packet(0));
+    TEST_ASSERT_EQUAL_HEX8(
+        static_cast<std::uint8_t>(provisioning::AcknowledgementStatus::stale_revision),
+        acknowledgement_status(zero_revision));
+    TEST_ASSERT_EQUAL_UINT8(0, zero_revision.acknowledgement[6]);
+    TEST_ASSERT_EQUAL_UINT8(0, zero_revision.acknowledgement[7]);
+    TEST_ASSERT_EQUAL_INT(0, settings.store_calls);
+}
+
 void test_transfer_errors_acknowledge_and_clear_the_transfer() {
     provisioning::ProvisioningSession session;
     auto control = make_control(make_packet().size());
@@ -271,6 +312,7 @@ int main(int, char **) {
     RUN_TEST(test_complete_packet_is_stored_before_applied_ack);
     RUN_TEST(test_storage_failure_never_reports_applied);
     RUN_TEST(test_unchanged_packet_does_not_write_storage);
+    RUN_TEST(test_revision_errors_return_flagged_active_version);
     RUN_TEST(test_transfer_errors_acknowledge_and_clear_the_transfer);
     RUN_TEST(test_insecure_data_is_rejected_and_cleared);
     RUN_TEST(test_disconnect_clears_an_incomplete_transfer);

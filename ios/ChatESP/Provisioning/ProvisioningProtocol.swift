@@ -8,6 +8,7 @@ enum ProvisioningProtocolV2 {
     static let packetHeaderSize = 48
     static let fieldCount: UInt8 = 9
     static let dataBytesPerFrame = 180
+    static let activeVersionAcknowledgementFlag: UInt16 = 0x0001
 
     static let serviceUUID = "7B2E1000-6F3C-4B8A-9D71-4C4553500001"
     static let controlUUID = "7B2E1001-6F3C-4B8A-9D71-4C4553500001"
@@ -255,23 +256,40 @@ struct ProvisioningAcknowledgement: Equatable {
     let status: ProvisioningStatus
     let revision: UInt32
     let fingerprint: Data
+    let flags: UInt16
 
     var isSuccess: Bool {
         status == .applied || status == .unchanged
+    }
+
+    var isRevisionRecovery: Bool {
+        (status == .staleRevision || status == .revisionConflict) &&
+            flags == ProvisioningProtocolV2.activeVersionAcknowledgementFlag &&
+            revision > 0
     }
 
     init(data: Data) throws {
         guard data.count == 44,
               data.prefix(4) == Data("CESA".utf8),
               data[4] == ProvisioningProtocolV2.version,
-              data[6] == 0,
-              data[7] == 0,
               let status = ProvisioningStatus(rawValue: data[5]) else {
+            throw ProvisioningError.malformedAcknowledgement
+        }
+        flags = data.readBigEndianUInt16(at: 6)
+        let hasActiveVersion =
+            flags == ProvisioningProtocolV2.activeVersionAcknowledgementFlag
+        guard flags == 0 || hasActiveVersion,
+              !hasActiveVersion || (
+                status == .staleRevision || status == .revisionConflict
+              ) else {
             throw ProvisioningError.malformedAcknowledgement
         }
         self.status = status
         revision = data.readBigEndianUInt32(at: 8)
         fingerprint = data.subdata(in: 12..<44)
+        guard !hasActiveVersion || revision > 0 else {
+            throw ProvisioningError.malformedAcknowledgement
+        }
     }
 }
 

@@ -13,6 +13,7 @@ struct AppPreferences: Codable, Equatable {
     var acknowledgedFingerprintHex: String?
     var pendingRevision: UInt32?
     var pendingFingerprintHex: String?
+    var selectedWatchIdentifier: UUID?
 
     mutating func revision(for fingerprint: Data) throws -> UInt32 {
         let hex = fingerprint.hexString
@@ -43,6 +44,19 @@ struct AppPreferences: Codable, Equatable {
         }
         appliedRevision = revision
         acknowledgedFingerprintHex = hex
+        pendingRevision = nil
+        pendingFingerprintHex = nil
+    }
+
+    mutating func recoverActiveVersion(
+        revision: UInt32,
+        fingerprint: Data
+    ) throws {
+        guard revision > 0, fingerprint.count == 32 else {
+            throw ProvisioningError.malformedAcknowledgement
+        }
+        appliedRevision = revision
+        acknowledgedFingerprintHex = fingerprint.hexString
         pendingRevision = nil
         pendingFingerprintHex = nil
     }

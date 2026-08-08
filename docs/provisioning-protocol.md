@@ -71,8 +71,12 @@ equal the packet length from the begin frame. The device rejects a wrong
 transfer ID, gap, overlap, empty frame, excess data, bad flag, or bad length.
 
 The iOS app uses 180 data bytes per frame, a 10-second acknowledgement timeout,
-and at most two complete transfer attempts. A timeout or disconnect is not a
-success. The app keeps the same revision and fingerprint for a retry.
+and at most two complete transport attempts for each packet. A timeout or
+disconnect is not a success. The app keeps the same revision and fingerprint
+for a transport retry. One flagged revision-recovery response can start one
+additional packet as specified below. Thus, one Save action sends at most two
+packets and makes at most four complete transfer attempts. The app must not
+start a second recovery for the same Save action.
 
 ## Settings packet
 
@@ -132,6 +136,28 @@ plus one. Revision zero is stale.
 The iOS app saves a pending revision and fingerprint before transfer. It keeps
 them for a retry. It marks them as acknowledged only after a successful
 application acknowledgement.
+
+If the iOS preferences record is lost, the first new packet can have an old or
+conflicting revision. After the firmware fully validates that packet on an
+authenticated encrypted link, a `stale_revision` or `revision_conflict`
+acknowledgement supplies the active durable revision and fingerprint. The
+active-version flag identifies this metadata. iOS saves the active metadata,
+clears its pending metadata, and makes at most one recovery packet. That packet
+has the same two-attempt transport bound. If the current content has the active
+fingerprint, it uses the active revision and expects `unchanged`. If the content
+is different, it uses the active revision plus one. It stops with
+`revisionExhausted` when different content follows revision `0xffffffff`.
+
+The recovery response contains only a revision and a SHA-256 fingerprint. It
+does not contain settings. Firmware must not set the active-version flag for an
+insecure link, an invalid packet envelope, another status, or absent durable
+settings. iOS must reject a flagged zero revision. A response without the flag
+is not recovery metadata. This rule prevents a response from old firmware from
+being used as active metadata.
+
+The selected Core Bluetooth watch identifier is an optional, non-secret field
+in the same versioned iOS preferences record. A record from an earlier app can
+omit this field. Credentials stay in Keychain.
 
 The firmware validates the complete packet before a persistent write. It then
 writes the changed settings and metadata to plaintext NVS as one logical
@@ -287,7 +313,7 @@ A GATT write response is not provisioning success.
 | 0 | 4 | ASCII `CESA` |
 | 4 | 1 | Protocol version, `2` |
 | 5 | 1 | Status |
-| 6 | 2 | Flags, zero |
+| 6 | 2 | Flags; bit 0 means that error metadata is the active durable version |
 | 8 | 4 | Applied or rejected revision |
 | 12 | 32 | Content fingerprint |
 
@@ -309,9 +335,12 @@ Status values are:
 
 For `applied` and `unchanged`, revision and fingerprint must match the packet.
 iOS rejects a success status with a different revision or fingerprint. For an
-error after a valid packet header, the device copies its revision and
-fingerprint. Otherwise, it sends zero for both values. The acknowledgement must
-not contain field data or error text.
+error other than a flagged revision error after a valid packet header, the
+device copies the packet revision and fingerprint. Otherwise, it sends zero for
+both values. For a flagged `stale_revision` or `revision_conflict`, the device
+copies the active durable revision and fingerprint and sets bit 0. All other
+flag bits are zero. The acknowledgement must not contain field data or error
+text.
 
 ## Compatibility
 
@@ -321,6 +350,10 @@ settings remain valid. Version 1 has fields 1 through 8, uses the
 does not have an approximate-location field. The iOS app sends version 2.
 Both versions reject unknown frame versions, operations, flags, packet types,
 fields, and acknowledgement sizes.
+
+Version 2 firmware from before active-version recovery sends revision errors
+with zero flags. The current iOS app reports the error and does not use that
+metadata for recovery.
 
 The memory characteristics are optional for compatibility. An old app can use
 the first five characteristics with new firmware. A new app can provision old
