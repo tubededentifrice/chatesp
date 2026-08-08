@@ -6,11 +6,13 @@ import unittest
 from pathlib import Path
 
 from tools.pio import (
+    canonical_platformio_environment,
     dependency_check_is_fresh,
     dependency_policy_digest,
     device_write_policy_errors,
     first_party_write_api_errors,
     invocation_policy_errors,
+    remove_aliased_watch_builds,
     prepare_profile_sdkconfigs,
     profile_sdkconfig_text,
     requested_watch_environments,
@@ -20,6 +22,73 @@ from tools.pio import (
 
 
 class PlatformioWrapperTests(unittest.TestCase):
+    def test_platformio_uses_canonical_project_and_core_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            container = Path(directory)
+            root = container / "physical" / "repo"
+            project = root / "firmware"
+            project.mkdir(parents=True)
+            alias = container / "alias"
+            alias.symlink_to(root.parent, target_is_directory=True)
+
+            environment = canonical_platformio_environment(
+                {
+                    "PWD": str(alias / "repo"),
+                    "PLATFORMIO_CORE_DIR": str(
+                        alias / "repo" / ".platformio"
+                    ),
+                },
+                root,
+                project,
+            )
+
+            self.assertEqual(str(project.resolve()), environment["PWD"])
+            self.assertEqual(
+                str((root / ".platformio").resolve()),
+                environment["PLATFORMIO_CORE_DIR"],
+            )
+
+    def test_aliased_watch_build_data_is_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            container = Path(directory)
+            root = container / "physical" / "repo"
+            project = root / "firmware"
+            build = project / ".pio" / "build" / "watch_dev"
+            build.mkdir(parents=True)
+            alias = container / "alias"
+            alias.symlink_to(root.parent, target_is_directory=True)
+            (build / "project_description.json").write_text(
+                json.dumps(
+                    {"sources": [str(alias / "repo" / "source.cpp")]}
+                ),
+                encoding="utf-8",
+            )
+
+            removed = remove_aliased_watch_builds(
+                project, root, ["run", "-e", "watch_dev"]
+            )
+
+            self.assertEqual(["watch_dev"], removed)
+            self.assertFalse(build.exists())
+
+    def test_canonical_watch_build_data_is_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "repo"
+            project = root / "firmware"
+            build = project / ".pio" / "build" / "watch_dev"
+            build.mkdir(parents=True)
+            (build / "project_description.json").write_text(
+                json.dumps({"sources": [str(root / "source.cpp")]}),
+                encoding="utf-8",
+            )
+
+            removed = remove_aliased_watch_builds(
+                project, root, ["run", "-e", "watch_dev"]
+            )
+
+            self.assertEqual([], removed)
+            self.assertTrue(build.exists())
+
     def test_device_profiles_forbid_irreversible_writes(self) -> None:
         root = Path(__file__).resolve().parents[1]
         self.assertEqual(

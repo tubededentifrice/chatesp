@@ -147,6 +147,9 @@ Run all PlatformIO commands through `tools/pio.py`. The wrapper checks the
 dependency cooldown first. For the watch build, it also creates the ESP-IDF
 Python environment from a hash-locked requirements file.
 
+For an isolated agent task or a repeatable tooling failure, use the procedures
+in [agent tooling](docs/agent-tooling.md).
+
 Never put credentials in tracked files. Local development values belong in
 `.secrets/device.env`, which Git ignores. The iOS app will store secrets in
 Keychain and provision the device through encrypted BLE.

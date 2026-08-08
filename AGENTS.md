@@ -93,6 +93,8 @@ Some files can be absent during initial setup. Read them when they exist.
 
 Other agents can work in this repository at the same time. Do not revert their
 changes. Adapt your work to the current worktree.
+For an isolated task, use `tools/task_worktree.py`. Do not put a build worktree
+under a system temporary directory. See `docs/agent-tooling.md`.
 
 1. Inspect Git status and preserve changes that do not belong to the task.
 2. Identify user-visible, hardware, protocol, privacy, and power effects.
@@ -127,7 +129,7 @@ is blocked, keep the verified local commit and report the exact blocker.
 
 ## Keep guidance current
 
-Correct a task-relevant instruction or local skill in the same task when
-evidence shows that it is wrong, stale, duplicated, or incomplete. Keep this
-file for stable repository rules. Keep detailed and changing facts in project
-documents. Keep task procedures in skills.
+Correct task-relevant guidance when evidence shows that it is wrong, stale,
+or incomplete. For a repeatable tool or workflow failure, add a narrow guard
+and a regression test when practical. See `docs/agent-tooling.md`. Keep this
+file concise. Put details in project documents and procedures in skills.

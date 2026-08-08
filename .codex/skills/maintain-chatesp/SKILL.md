@@ -61,6 +61,10 @@ checks. Validate every BLE and network boundary. Set fixed limits for recording
 length, JSON, images, conversation history, output, retries, and tool rounds.
 Avoid repeated NVS writes and unbounded heap growth.
 
+If task isolation is necessary, create it with `tools/task_worktree.py` as
+specified in `docs/agent-tooling.md`. If a repeatable tool or workflow problem
+occurs, follow the self-improvement procedure in that document.
+
 Use the repository tools:
 
 ```sh

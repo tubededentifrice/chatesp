@@ -60,6 +60,59 @@ FORBIDDEN_EFUSE_SOURCE_MARKERS = (
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".s"}
 
 
+def canonical_platformio_environment(
+    environment: Mapping[str, str], root: Path, project: Path
+) -> dict[str, str]:
+    """Return a PlatformIO environment with one physical path spelling."""
+    result = dict(environment)
+    configured_core = Path(
+        result.get("PLATFORMIO_CORE_DIR", str(root / ".platformio"))
+    ).expanduser()
+    if not configured_core.is_absolute():
+        configured_core = root / configured_core
+    result["PLATFORMIO_CORE_DIR"] = str(configured_core.resolve())
+    result["PWD"] = str(project.resolve())
+    result.setdefault("ESP_IDF_VERSION", IDF_FRAMEWORK_VERSION)
+    return result
+
+
+def _contains_path_alias(value: object, root: Path) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_path_alias(item, root) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_path_alias(item, root) for item in value)
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return False
+    canonical_root = root.resolve()
+    candidate = Path(value)
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    if resolved != canonical_root and canonical_root not in resolved.parents:
+        return False
+    return os.path.normpath(value) != str(resolved)
+
+
+def remove_aliased_watch_builds(
+    project: Path, root: Path, arguments: list[str]
+) -> list[str]:
+    """Remove generated watch data that contains an aliased project path."""
+    root = root.resolve()
+    removed: list[str] = []
+    for profile in sorted(requested_watch_environments(arguments)):
+        build_dir = project / ".pio" / "build" / profile
+        description = build_dir / "project_description.json"
+        try:
+            data = json.loads(description.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _contains_path_alias(data, root):
+            shutil.rmtree(build_dir)
+            removed.append(profile)
+    return removed
+
+
 def dependency_policy_digest(root: Path) -> str:
     """Return a digest of each file that controls dependency policy."""
     candidates = [
@@ -367,10 +420,16 @@ def main() -> int:
         print("PlatformIO is not in the locked uv environment.", file=sys.stderr)
         return 1
 
-    environment = os.environ.copy()
-    environment.setdefault("PLATFORMIO_CORE_DIR", str(root / ".platformio"))
-    environment.setdefault("ESP_IDF_VERSION", IDF_FRAMEWORK_VERSION)
+    environment = canonical_platformio_environment(
+        os.environ, root, project
+    )
     core_dir = Path(environment["PLATFORMIO_CORE_DIR"])
+    for profile in remove_aliased_watch_builds(
+        project, root, sys.argv[1:]
+    ):
+        print(
+            f"Removed {profile} build data that used a non-canonical path."
+        )
     verify_dependency_age(root, core_dir)
     if requires_idf_python(sys.argv[1:]):
         prepare_profile_sdkconfigs(project, sys.argv[1:])
