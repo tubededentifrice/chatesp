@@ -234,7 +234,6 @@ private struct GlobalSettingsView: View {
             LocationSettings(configuration: globalConfigurationBinding)
             ModelSettings(
                 configuration: globalConfigurationBinding,
-                openRouterKey: store.secrets.global.openRouterKey,
                 modelCatalog: modelCatalog)
             if let error = store.errorText {
                 Section("Needs Attention") {
@@ -346,9 +345,10 @@ private struct DeviceSettingsView: View {
             }
             if configuration.map({
                 $0.chatEndpoint.isEmpty || $0.chatModel.isEmpty ||
-                    $0.transcriptionModel.isEmpty || $0.speechModel.isEmpty
+                    $0.transcriptionModel.isEmpty || $0.speechModel.isEmpty ||
+                    $0.englishSpeechVoice.isEmpty || $0.frenchSpeechVoice.isEmpty
             }) == true {
-                Text("Empty endpoint or model values use the built-in defaults.")
+                Text("Empty endpoint, model, or voice values use the built-in defaults.")
                     .foregroundStyle(.secondary)
             }
             if let error = store.errorText {
@@ -489,7 +489,6 @@ private struct LocationSettings: View {
 
 private struct ModelSettings: View {
     @Binding var configuration: ChatESPConfiguration
-    let openRouterKey: String
     @ObservedObject var modelCatalog: ModelCatalog
 
     var body: some View {
@@ -497,6 +496,8 @@ private struct ModelSettings: View {
             modelRow(.chat, selection: $configuration.chatModel)
             modelRow(.transcription, selection: $configuration.transcriptionModel)
             modelRow(.speech, selection: $configuration.speechModel)
+            voiceRow(.english, selection: $configuration.englishSpeechVoice)
+            voiceRow(.french, selection: $configuration.frenchSpeechVoice)
         } header: {
             Text("Models")
         } footer: {
@@ -512,8 +513,15 @@ private struct ModelSettings: View {
             ModelBrowserView(
                 purpose: purpose,
                 selection: selection,
-                apiKey: openRouterKey,
-                catalog: modelCatalog)
+                catalog: modelCatalog,
+                onSelect: purpose == .speech ? { model in
+                    configuration.englishSpeechVoice = model.preferredVoice(
+                        for: .english,
+                        preserving: configuration.englishSpeechVoice) ?? ""
+                    configuration.frenchSpeechVoice = model.preferredVoice(
+                        for: .french,
+                        preserving: configuration.frenchSpeechVoice) ?? ""
+                } : nil)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 Text(purpose.title)
@@ -524,6 +532,25 @@ private struct ModelSettings: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+            }
+        }
+    }
+
+    private func voiceRow(
+        _ language: SpeechVoiceLanguage,
+        selection: Binding<String>
+    ) -> some View {
+        NavigationLink {
+            VoiceBrowserView(
+                language: language,
+                modelID: configuration.speechModel,
+                selection: selection,
+                catalog: modelCatalog)
+        } label: {
+            LabeledContent(language.title) {
+                Text(selection.wrappedValue)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -616,6 +643,8 @@ private struct DeviceModelOverrides: View {
             modelOverride(.chat, keyPath: \.chatModel)
             modelOverride(.transcription, keyPath: \.transcriptionModel)
             modelOverride(.speech, keyPath: \.speechModel)
+            voiceOverride(.english, keyPath: \.englishSpeechVoice)
+            voiceOverride(.french, keyPath: \.frenchSpeechVoice)
         } header: {
             Text("Model Overrides")
         } footer: {
@@ -652,8 +681,8 @@ private struct DeviceModelOverrides: View {
                         selection: Binding(
                             get: { override.wrappedValue ?? global },
                             set: { override.wrappedValue = $0 }),
-                        apiKey: store.secretValues(for: deviceID).openRouterKey,
-                        catalog: modelCatalog)
+                        catalog: modelCatalog,
+                        onSelect: purpose == .speech ? updateSpeechVoices : nil)
                 } label: {
                     Text(override.wrappedValue ?? global)
                         .font(.caption.monospaced())
@@ -666,6 +695,77 @@ private struct DeviceModelOverrides: View {
             Text(purpose.explanation)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func voiceOverride(
+        _ language: SpeechVoiceLanguage,
+        keyPath: WritableKeyPath<ChatESPConfigurationOverrides, String?>
+    ) -> some View {
+        let global = globalVoice(language)
+        let override = Binding<String?>(
+            get: {
+                store.preferences.device(id: deviceID)?.overrides[keyPath: keyPath]
+            },
+            set: { value in
+                store.updateDeviceOverrides(id: deviceID) {
+                    $0[keyPath: keyPath] = value
+                }
+            })
+        return VStack(alignment: .leading, spacing: 8) {
+            Toggle(
+                "Override \(language.title)",
+                isOn: Binding(
+                    get: { override.wrappedValue != nil },
+                    set: { enabled in
+                        override.wrappedValue = enabled ? global : nil
+                    }))
+            if override.wrappedValue != nil {
+                NavigationLink {
+                    VoiceBrowserView(
+                        language: language,
+                        modelID: effectiveSpeechModel,
+                        selection: Binding(
+                            get: { override.wrappedValue ?? global },
+                            set: { override.wrappedValue = $0 }),
+                        catalog: modelCatalog)
+                } label: {
+                    Text(override.wrappedValue ?? global)
+                        .font(.caption.monospaced())
+                }
+            } else {
+                Text("Global: \(global)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var effectiveSpeechModel: String {
+        store.preferences.device(id: deviceID)?.overrides.speechModel ??
+            store.preferences.global.speechModel
+    }
+
+    private func globalVoice(_ language: SpeechVoiceLanguage) -> String {
+        switch language {
+        case .english: return store.preferences.global.englishSpeechVoice
+        case .french: return store.preferences.global.frenchSpeechVoice
+        }
+    }
+
+    private func updateSpeechVoices(_ model: OpenRouterModel) {
+        let global = store.preferences.global
+        store.updateDeviceOverrides(id: deviceID) { overrides in
+            let english = overrides.englishSpeechVoice ?? global.englishSpeechVoice
+            let french = overrides.frenchSpeechVoice ?? global.frenchSpeechVoice
+            if let selected = model.preferredVoice(
+                for: .english, preserving: english), selected != english {
+                overrides.englishSpeechVoice = selected
+            }
+            if let selected = model.preferredVoice(
+                for: .french, preserving: french), selected != french {
+                overrides.frenchSpeechVoice = selected
+            }
         }
     }
 
@@ -723,10 +823,22 @@ private struct OverrideTextField: View {
 private struct ModelBrowserView: View {
     let purpose: ModelPurpose
     @Binding var selection: String
-    let apiKey: String
     @ObservedObject var catalog: ModelCatalog
+    let onSelect: ((OpenRouterModel) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
+
+    init(
+        purpose: ModelPurpose,
+        selection: Binding<String>,
+        catalog: ModelCatalog,
+        onSelect: ((OpenRouterModel) -> Void)? = nil
+    ) {
+        self.purpose = purpose
+        _selection = selection
+        self.catalog = catalog
+        self.onSelect = onSelect
+    }
 
     var body: some View {
         List {
@@ -745,14 +857,14 @@ private struct ModelBrowserView: View {
                 Section("Could Not Load Models") {
                     Text(error).foregroundStyle(.red)
                     Button("Try Again") {
-                        Task { await catalog.load(apiKey: apiKey, force: true) }
+                        Task { await catalog.load(force: true) }
                     }
                 }
             } else {
                 if !currentSelectionIsListed {
                     Section("Current Selection") {
                         Text(selection).font(.body.monospaced())
-                        Text("OpenRouter did not list this ID as compatible. Select a model below before you provision the device.")
+                        Text("OpenRouter did not list this ID as compatible. Select a compatible model below.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
@@ -765,6 +877,7 @@ private struct ModelBrowserView: View {
                     ForEach(filteredModels) { model in
                         Button {
                             selection = model.id
+                            onSelect?(model)
                             dismiss()
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -776,9 +889,12 @@ private struct ModelBrowserView: View {
                                             .foregroundStyle(.green)
                                     }
                                 }
-                                Text(model.id)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                                ModelIDPriceRow(model: model)
+                                if purpose == .speech {
+                                    Text("\(model.supportedVoices.count) voices")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                                 if !model.description.isEmpty {
                                     Text(model.description)
                                         .font(.caption)
@@ -795,7 +911,7 @@ private struct ModelBrowserView: View {
         .navigationTitle(purpose.title)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search compatible models")
-        .task { await catalog.load(apiKey: apiKey, force: true) }
+        .task { await catalog.load(force: true) }
     }
 
     private var compatibleModels: [OpenRouterModel] {
@@ -813,5 +929,117 @@ private struct ModelBrowserView: View {
 
     private var currentSelectionIsListed: Bool {
         compatibleModels.contains { $0.id == selection }
+    }
+}
+
+private struct ModelIDPriceRow: View {
+    let model: OpenRouterModel
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(model.id)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(model.pricingSummary)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.blue)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: 180, alignment: .trailing)
+                .layoutPriority(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct VoiceBrowserView: View {
+    let language: SpeechVoiceLanguage
+    let modelID: String
+    @Binding var selection: String
+    @ObservedObject var catalog: ModelCatalog
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+
+    var body: some View {
+        List {
+            Section("Text-to-Speech Model") {
+                if let model {
+                    ModelIDPriceRow(model: model)
+                } else {
+                    Text(modelID).font(.caption.monospaced())
+                }
+            }
+            if catalog.isLoading && model == nil {
+                Section {
+                    HStack {
+                        ProgressView()
+                        Text("Loading voices…")
+                    }
+                }
+            } else if let error = catalog.errorText, model == nil {
+                Section("Could Not Load Voices") {
+                    Text(error).foregroundStyle(.red)
+                    Button("Try Again") {
+                        Task { await catalog.load(force: true) }
+                    }
+                }
+            } else if let model {
+                if !model.supportedVoices.contains(selection) {
+                    Section("Current Selection") {
+                        Text(selection).font(.body.monospaced())
+                        Text("This model does not list this voice. Select a voice below.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Section("Compatible Voices") {
+                    if filteredVoices.isEmpty {
+                        Text("No compatible voice matches this search.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(filteredVoices, id: \.self) { voice in
+                        Button {
+                            selection = voice
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(voice).font(.body.monospaced())
+                                Spacer()
+                                if voice == selection {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                Section("Voices Not Available") {
+                    Text("OpenRouter does not list this model or its voices. Select a text-to-speech model first.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle(language.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Search voices")
+        .task { await catalog.load() }
+    }
+
+    private var model: OpenRouterModel? {
+        catalog.models.first { $0.id == modelID }
+    }
+
+    private var filteredVoices: [String] {
+        guard let voices = model?.supportedVoices else { return [] }
+        let sorted = voices.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        guard !searchText.isEmpty else { return sorted }
+        return sorted.filter { $0.localizedCaseInsensitiveContains(searchText) }
     }
 }

@@ -215,6 +215,7 @@ void test_request_errors_have_explicit_user_messages() {
         TEST_ASSERT_NOT_NULL(message);
         TEST_ASSERT_GREATER_THAN_UINT32(0, std::strlen(message));
         TEST_ASSERT_NULL(std::strstr(message, "TRY AGAIN"));
+        TEST_ASSERT_NULL(std::strstr(message, "WATCH"));
         for (const char *cursor = message; *cursor != '\0'; ++cursor) {
             TEST_ASSERT_FALSE(*cursor >= '0' && *cursor <= '9');
         }
@@ -223,7 +224,7 @@ void test_request_errors_have_explicit_user_messages() {
 
 void test_speech_errors_have_explicit_user_messages() {
     TEST_ASSERT_EQUAL_STRING(
-        "THE WATCH COULD NOT PLAY THE ANSWER",
+        "UNABLE TO PLAY THE ANSWER",
         chatesp::speech_error_message(chatesp::agent::Error::model_failed));
     TEST_ASSERT_EQUAL_STRING(
         "THE SPEECH SERVICE RETURNED INVALID AUDIO",
@@ -237,6 +238,7 @@ void test_speech_errors_have_explicit_user_messages() {
             static_cast<chatesp::agent::Error>(value));
         TEST_ASSERT_NOT_NULL(message);
         TEST_ASSERT_GREATER_THAN_UINT32(0, std::strlen(message));
+        TEST_ASSERT_NULL(std::strstr(message, "WATCH"));
         for (const char *cursor = message; *cursor != '\0'; ++cursor) {
             TEST_ASSERT_FALSE(*cursor >= '0' && *cursor <= '9');
         }

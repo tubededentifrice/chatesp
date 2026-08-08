@@ -1,6 +1,6 @@
 # Provisioning protocol
 
-This document defines ChatESP BLE provisioning protocol version 2. All integer
+This document defines ChatESP BLE provisioning protocol version 3. All integer
 values use network byte order. All text uses UTF-8. A length is a byte count.
 The companion and this protocol are optional at runtime. The ChatESP device uses an
 ignored local configuration in development or the last valid stored record in
@@ -57,7 +57,7 @@ The 16-byte control frame has this layout:
 | Offset | Size | Value |
 | --- | ---: | --- |
 | 0 | 4 | ASCII `CESB` |
-| 4 | 1 | Protocol version, `2` |
+| 4 | 1 | Protocol version, `3` |
 | 5 | 1 | Operation: `1` begin, `2` cancel |
 | 6 | 2 | Flags, zero |
 | 8 | 4 | Random transfer ID |
@@ -74,7 +74,7 @@ Each data frame has a 14-byte header followed by 1 through 180 packet bytes:
 | Offset | Size | Value |
 | --- | ---: | --- |
 | 0 | 4 | ASCII `CESD` |
-| 4 | 1 | Protocol version, `2` |
+| 4 | 1 | Protocol version, `3` |
 | 5 | 1 | Flags, zero |
 | 6 | 4 | Transfer ID from the begin frame |
 | 10 | 2 | Offset in the complete packet |
@@ -102,16 +102,16 @@ The packet has a 48-byte header:
 | Offset | Size | Value |
 | --- | ---: | --- |
 | 0 | 4 | ASCII `CESP` |
-| 4 | 1 | Protocol version, `2` |
+| 4 | 1 | Protocol version, `3` |
 | 5 | 1 | Packet type, `1` for settings |
 | 6 | 1 | Flags, zero |
-| 7 | 1 | Field count, `9` |
+| 7 | 1 | Field count, `11` |
 | 8 | 4 | Revision, 1 through `0xffffffff` |
 | 12 | 2 | TLV payload length |
 | 14 | 2 | Complete packet length |
 | 16 | 32 | Content fingerprint |
 
-The payload contains all nine fields once, in increasing field-ID order. Each
+The payload contains all 11 fields once, in increasing field-ID order. Each
 field has a one-byte ID, a two-byte length, and its text bytes. Unknown,
 missing, repeated, or out-of-order fields are errors.
 
@@ -126,17 +126,19 @@ missing, repeated, or out-of-order fields are errors.
 | 7 | Transcription model | Same model rule | iOS preferences and plaintext device NVS |
 | 8 | Speech model | Same model rule | iOS preferences and plaintext device NVS |
 | 9 | Approximate location | Empty, or up to 96 valid UTF-8 bytes without control characters; use a city and country, not coordinates or a street address | iOS preferences and plaintext device NVS |
+| 10 | English speech voice | 1 through 96 ASCII letters, digits, `.`, `_`, `-`, or `:` | iOS preferences and plaintext device NVS |
+| 11 | French speech voice | Same voice rule | iOS preferences and plaintext device NVS |
 
 An empty Brave key disables search. Empty OpenRouter and Wi-Fi credentials are
 valid stored states. Cloud voice reports a runtime error until Wi-Fi and the
-OpenRouter key are available. Empty endpoint and model edits in the iOS app use
-the documented built-in defaults in the transmitted packet. UTF-8 must use the
+OpenRouter key are available. Empty endpoint, model, and voice edits in the iOS
+app use the documented built-in defaults in the transmitted packet. UTF-8 must use the
 shortest form and must not contain a null, surrogate, or value above `U+10FFFF`.
 
 The content fingerprint is:
 
 ```text
-SHA-256("CESP-CONTENT-V2" || version || packet_type || field_count || TLV_payload)
+SHA-256("CESP-CONTENT-V3" || version || packet_type || field_count || TLV_payload)
 ```
 
 The fingerprint does not include the revision. Both implementations compare
@@ -185,7 +187,7 @@ global secret values and optional secret overrides for each device.
 
 The app saves each field edit to its local store at once. It does not validate
 the complete settings packet before it saves another field. The app combines
-the current global values and device overrides, applies endpoint and model
+the current global values and device overrides, applies endpoint, model, and voice
 defaults to empty values, and starts an automatic transfer when each nonempty
 value is valid. An invalid nonempty value stays local. The device-page status
 identifies it. The app sends saved changes after the selected device connects.
@@ -343,7 +345,7 @@ A GATT write response is not provisioning success.
 | Offset | Size | Value |
 | --- | ---: | --- |
 | 0 | 4 | ASCII `CESA` |
-| 4 | 1 | Protocol version, `2` |
+| 4 | 1 | Protocol version, `3` |
 | 5 | 1 | Status |
 | 6 | 2 | Flags; bit 0 means that error metadata is the active durable version |
 | 8 | 4 | Applied or rejected revision |
@@ -376,20 +378,21 @@ text.
 
 ## Compatibility
 
-The firmware accepts version 1 packets and frames so that stored version 1
-settings remain valid. Version 1 has fields 1 through 8, uses the
-`CESP-CONTENT-V1` fingerprint domain, and gets a version 1 acknowledgement. It
-does not have an approximate-location field. The iOS app sends version 2.
-Both versions reject unknown frame versions, operations, flags, packet types,
-fields, and acknowledgement sizes.
+The firmware accepts version 1 and version 2 packets and frames so that old
+stored settings remain valid. Version 1 has fields 1 through 8 and does not
+have an approximate-location field. Version 2 has fields 1 through 9. They use
+the `CESP-CONTENT-V1` and `CESP-CONTENT-V2` fingerprint domains. The firmware
+uses `af_heart` and `ff_siwis` when either old version has no voice fields. The
+iOS app sends version 3. All versions reject unknown frame versions,
+operations, flags, packet types, fields, and acknowledgement sizes.
 
 Version 2 firmware from before active-version recovery sends revision errors
 with zero flags. The current iOS app reports the error and does not use that
 metadata for recovery.
 
 The memory characteristics are optional for compatibility. An old app can use
-the first five characteristics with new firmware. A new app can provision old
-firmware and shows that a firmware update is required for memory management.
+the first five characteristics with new firmware. The current app needs
+version 3 firmware to send voice choices.
 
 ## Golden vector
 
@@ -405,8 +408,10 @@ Firmware and Swift tests use this non-secret vector:
 - transcription model: `openai/whisper-large-v3-turbo`
 - speech model: `google/gemini-3.1-flash-tts-preview`
 - approximate location: `Dubai, United Arab Emirates`
-- complete packet length: `311`
-- fingerprint: `3dd4441effe5f36c424310634670e91ea4dd936e958b38c21db1449a5fda98ce`
+- English speech voice: `Zephyr`
+- French speech voice: `Puck`
+- complete packet length: `327`
+- fingerprint: `1960e12e83ee87f7595f353d6c65b186c1348b0e136d76dd1dd02e9286b0b0e6`
 
 Tests also cover insecure links, truncated and excess packets, bad magic,
 unknown versions, flags, lengths, fingerprints, UTF-8, field limits, field

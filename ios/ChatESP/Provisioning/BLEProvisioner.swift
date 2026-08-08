@@ -130,11 +130,11 @@ final class BLEProvisioner: NSObject, ObservableObject {
 
     var onSelectedDeviceChanged: ((UUID?) -> Void)?
 
-    private static let service = CBUUID(string: ProvisioningProtocolV2.serviceUUID)
-    private static let control = CBUUID(string: ProvisioningProtocolV2.controlUUID)
-    private static let data = CBUUID(string: ProvisioningProtocolV2.dataUUID)
-    private static let acknowledgement = CBUUID(string: ProvisioningProtocolV2.acknowledgementUUID)
-    private static let deviceContext = CBUUID(string: ProvisioningProtocolV2.deviceContextUUID)
+    private static let service = CBUUID(string: ProvisioningProtocolV3.serviceUUID)
+    private static let control = CBUUID(string: ProvisioningProtocolV3.controlUUID)
+    private static let data = CBUUID(string: ProvisioningProtocolV3.dataUUID)
+    private static let acknowledgement = CBUUID(string: ProvisioningProtocolV3.acknowledgementUUID)
+    private static let deviceContext = CBUUID(string: ProvisioningProtocolV3.deviceContextUUID)
     private static let memoryCommand = CBUUID(string: MemoryProtocolV1.commandUUID)
     private static let memoryResponse = CBUUID(string: MemoryProtocolV1.responseUUID)
 

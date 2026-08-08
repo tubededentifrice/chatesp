@@ -29,6 +29,8 @@ Fields valid_fields() {
         {7, "openai/whisper-large-v3-turbo"},
         {8, "google/gemini-3.1-flash-tts-preview"},
         {9, "Dubai, United Arab Emirates"},
+        {10, "Zephyr"},
+        {11, "Puck"},
     };
 }
 
@@ -46,7 +48,8 @@ void append_u32(std::vector<std::uint8_t> &output, std::uint32_t value) {
 
 std::vector<std::uint8_t> make_packet(
     std::uint32_t revision = 7,
-    const Fields &fields = valid_fields()) {
+    const Fields &fields = valid_fields(),
+    std::uint8_t version = provisioning::kProtocolVersion) {
     std::vector<std::uint8_t> payload;
     for (const auto &field : fields) {
         payload.push_back(field.first);
@@ -54,8 +57,8 @@ std::vector<std::uint8_t> make_packet(
         payload.insert(payload.end(), field.second.begin(), field.second.end());
     }
     std::vector<std::uint8_t> packet{
-        'C', 'E', 'S', 'P', provisioning::kProtocolVersion, 1, 0,
-        provisioning::kRequiredFieldCount,
+        'C', 'E', 'S', 'P', version, 1, 0,
+        static_cast<std::uint8_t>(fields.size()),
         static_cast<std::uint8_t>(revision >> 24U),
         static_cast<std::uint8_t>(revision >> 16U),
         static_cast<std::uint8_t>(revision >> 8U),
@@ -232,7 +235,7 @@ void test_revision_errors_return_flagged_active_version() {
 void test_transfer_errors_acknowledge_and_clear_the_transfer() {
     provisioning::ProvisioningSession session;
     auto control = make_control(make_packet().size());
-    control[4] = 3;
+    control[4] = 4;
 
     const auto result = session.handle_control(
         control.data(), control.size(), kSecureLink);
@@ -281,11 +284,32 @@ void test_settings_record_owns_and_clears_values() {
     std::fill(packet.begin(), packet.end(), 0);
     TEST_ASSERT_EQUAL_STRING(
         "Test Network", std::string(settings.wifi_ssid.view()).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "Zephyr", std::string(settings.english_speech_voice.view()).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "Puck", std::string(settings.french_speech_voice.view()).c_str());
     settings.clear();
     TEST_ASSERT_EQUAL_UINT32(0, settings.revision);
     TEST_ASSERT_TRUE(settings.openrouter_key.view().empty());
     TEST_ASSERT_TRUE(settings.wifi_password.view().empty());
     TEST_ASSERT_TRUE(settings.approximate_location.view().empty());
+    TEST_ASSERT_TRUE(settings.english_speech_voice.view().empty());
+    TEST_ASSERT_TRUE(settings.french_speech_voice.view().empty());
+}
+
+void test_old_settings_records_receive_safe_voice_defaults() {
+    auto fields = valid_fields();
+    fields.pop_back();
+    fields.pop_back();
+    auto packet = make_packet(7, fields, 2);
+    const auto validation = provisioning::validate_settings_packet(
+        packet.data(), packet.size(), kSecureLink, {});
+    provisioning::SettingsRecord settings;
+    TEST_ASSERT_TRUE(settings.assign(validation));
+    TEST_ASSERT_EQUAL_STRING(
+        "af_heart", std::string(settings.english_speech_voice.view()).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "ff_siwis", std::string(settings.french_speech_voice.view()).c_str());
 }
 
 void test_valid_transfer_can_follow_a_rejected_packet() {
@@ -317,6 +341,7 @@ int main(int, char **) {
     RUN_TEST(test_insecure_data_is_rejected_and_cleared);
     RUN_TEST(test_disconnect_clears_an_incomplete_transfer);
     RUN_TEST(test_settings_record_owns_and_clears_values);
+    RUN_TEST(test_old_settings_records_receive_safe_voice_defaults);
     RUN_TEST(test_valid_transfer_can_follow_a_rejected_packet);
     return UNITY_END();
 }

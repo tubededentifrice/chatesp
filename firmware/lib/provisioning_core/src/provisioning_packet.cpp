@@ -13,6 +13,8 @@ constexpr std::array<std::uint8_t, 15> kFingerprintDomainV1{
     'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '1'};
 constexpr std::array<std::uint8_t, 15> kFingerprintDomainV2{
     'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '2'};
+constexpr std::array<std::uint8_t, 15> kFingerprintDomainV3{
+    'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '3'};
 constexpr std::array<std::uint8_t, 15> kDeviceContextFingerprintDomain{
     'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'X', 'T', '-', 'V', '1'};
 
@@ -270,6 +272,17 @@ bool valid_model(std::string_view value) {
     });
 }
 
+bool valid_voice(std::string_view value) {
+    if (value.empty() || value.size() > 96) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](char item) {
+        return (item >= 'a' && item <= 'z') || (item >= 'A' && item <= 'Z') ||
+            (item >= '0' && item <= '9') || item == '-' || item == '_' ||
+            item == '.' || item == ':';
+    });
+}
+
 ValidationError validate_field(std::uint8_t id, std::string_view value) {
     switch (id) {
         case 1:
@@ -298,6 +311,10 @@ ValidationError validate_field(std::uint8_t id, std::string_view value) {
                     valid_utf8(value, true)
                 ? ValidationError::none
                 : ValidationError::invalid_approximate_location;
+        case 10:
+        case 11:
+            return valid_voice(value) ? ValidationError::none
+                                      : ValidationError::invalid_voice;
         default:
             return ValidationError::bad_field_order;
     }
@@ -314,6 +331,8 @@ void assign_field(SettingsView &settings, std::uint8_t id, std::string_view valu
         case 7: settings.transcription_model = value; break;
         case 8: settings.speech_model = value; break;
         case 9: settings.approximate_location = value; break;
+        case 10: settings.english_speech_voice = value; break;
+        case 11: settings.french_speech_voice = value; break;
         default: break;
     }
 }
@@ -352,9 +371,13 @@ std::array<std::uint8_t, kFingerprintSize> compute_content_fingerprint(
     const std::uint8_t *payload,
     std::size_t payload_size) {
     Sha256 sha;
-    const auto &domain = version == 1 ? kFingerprintDomainV1
-                                      : kFingerprintDomainV2;
-    sha.update(domain.data(), domain.size());
+    const auto *domain = &kFingerprintDomainV3;
+    if (version == 1) {
+        domain = &kFingerprintDomainV1;
+    } else if (version == 2) {
+        domain = &kFingerprintDomainV2;
+    }
+    sha.update(domain->data(), domain->size());
     const std::array<std::uint8_t, 3> metadata{version, packet_type, field_count};
     sha.update(metadata.data(), metadata.size());
     sha.update(payload, payload_size);
@@ -391,8 +414,9 @@ ValidationResult validate_settings_packet(
         result.error = ValidationError::bad_type;
         return result;
     }
-    const std::uint8_t required_field_count =
-        packet[4] == 1 ? kVersion1FieldCount : kRequiredFieldCount;
+    const std::uint8_t required_field_count = packet[4] == 1
+        ? kVersion1FieldCount
+        : packet[4] == 2 ? kVersion2FieldCount : kRequiredFieldCount;
     if (packet[6] != 0 || packet[7] != required_field_count) {
         result.error = packet[6] != 0 ? ValidationError::bad_flags : ValidationError::bad_field_count;
         return result;

@@ -6,6 +6,7 @@
 #include <unity.h>
 
 #include "chatesp/byte_ring.hpp"
+#include "chatesp/crash_trace.hpp"
 #include "chatesp/device_preferences.hpp"
 #include "chatesp/pcm16_stream.hpp"
 #include "chatesp/pcm_start_policy.hpp"
@@ -77,6 +78,91 @@ void test_device_preferences_have_a_strict_versioned_record() {
         encoded.data(), encoded.size(), decoded));
     TEST_ASSERT_EQUAL_UINT8(65, decoded.brightness_percent);
     TEST_ASSERT_EQUAL_UINT8(70, decoded.volume_percent);
+}
+
+void test_crash_trace_keeps_bounded_reset_history() {
+    chatesp::runtime::CrashTraceStore trace{};
+    TEST_ASSERT_FALSE(chatesp::runtime::crash_trace_valid(trace));
+
+    chatesp::runtime::crash_trace_begin_boot(trace, 1);
+    TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_valid(trace));
+    auto active_index = chatesp::runtime::crash_trace_active_index(trace);
+    TEST_ASSERT_LESS_THAN(trace.boots.size(), active_index);
+    TEST_ASSERT_EQUAL_UINT32(1, trace.boots[active_index].sequence);
+    for (std::uint32_t index = 0; index < 20; ++index) {
+        TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_mark(
+            trace, chatesp::runtime::CrashEvent::ble_stop_requested, index));
+    }
+    const auto first_index = active_index;
+    TEST_ASSERT_EQUAL_UINT8(
+        chatesp::runtime::kCrashTraceEventCount,
+        trace.boots[first_index].event_count);
+    TEST_ASSERT_EQUAL_UINT32(
+        4, trace.boots[first_index]
+               .events[trace.boots[first_index].next_event]
+               .at_ms);
+
+    chatesp::runtime::crash_trace_begin_boot(trace, 9);
+    TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_valid(trace));
+    active_index = chatesp::runtime::crash_trace_active_index(trace);
+    TEST_ASSERT_EQUAL_UINT8(0, trace.boots[first_index].active);
+    TEST_ASSERT_EQUAL_UINT32(9, trace.boots[first_index].outcome_reset_reason);
+    TEST_ASSERT_EQUAL_UINT32(2, trace.boots[active_index].sequence);
+
+    chatesp::runtime::crash_trace_begin_boot(trace, 3);
+    chatesp::runtime::crash_trace_begin_boot(trace, 4);
+    TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_valid(trace));
+    active_index = chatesp::runtime::crash_trace_active_index(trace);
+    TEST_ASSERT_EQUAL_UINT32(4, trace.boots[active_index].sequence);
+}
+
+void test_crash_trace_rejects_corruption() {
+    chatesp::runtime::CrashTraceStore trace{};
+    chatesp::runtime::crash_trace_begin_boot(trace, 1);
+    TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_valid(trace));
+    const auto active_index =
+        chatesp::runtime::crash_trace_active_index(trace);
+    ++trace.boots[active_index].sequence;
+    TEST_ASSERT_FALSE(chatesp::runtime::crash_trace_valid(trace));
+    TEST_ASSERT_FALSE(chatesp::runtime::crash_trace_mark(
+        trace, chatesp::runtime::CrashEvent::runtime_ready, 10));
+}
+
+void test_crash_trace_recovers_without_erasing_older_records() {
+    chatesp::runtime::CrashTraceStore trace{};
+    chatesp::runtime::crash_trace_begin_boot(trace, 1);
+    chatesp::runtime::crash_trace_begin_boot(trace, 2);
+    const auto damaged_index =
+        chatesp::runtime::crash_trace_active_index(trace);
+    ++trace.boots[damaged_index].checksum;
+    TEST_ASSERT_FALSE(chatesp::runtime::crash_trace_valid(trace));
+
+    chatesp::runtime::crash_trace_begin_boot(trace, 9);
+    TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_valid(trace));
+    const auto active_index =
+        chatesp::runtime::crash_trace_active_index(trace);
+    TEST_ASSERT_EQUAL_UINT32(2, trace.boots[active_index].sequence);
+    std::size_t completed_count = 0;
+    for (const auto &boot : trace.boots) {
+        if (chatesp::runtime::crash_boot_record_valid(boot) &&
+            boot.active == 0) {
+            ++completed_count;
+        }
+    }
+    TEST_ASSERT_EQUAL_size_t(1, completed_count);
+}
+
+void test_crash_trace_heartbeat_does_not_change_event_checksum() {
+    chatesp::runtime::CrashTraceStore trace{};
+    chatesp::runtime::crash_trace_begin_boot(trace, 1);
+    const auto active_index =
+        chatesp::runtime::crash_trace_active_index(trace);
+    const std::uint32_t checksum = trace.boots[active_index].checksum;
+    TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_heartbeat(trace, 5'000));
+    TEST_ASSERT_EQUAL_UINT32(
+        5'000, trace.boots[active_index].last_heartbeat_ms);
+    TEST_ASSERT_EQUAL_UINT32(checksum, trace.boots[active_index].checksum);
+    TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_valid(trace));
 }
 
 void test_device_preferences_reject_invalid_or_unknown_records() {
@@ -560,6 +646,10 @@ void tearDown() {}
 
 int main(int, char **) {
     UNITY_BEGIN();
+    RUN_TEST(test_crash_trace_keeps_bounded_reset_history);
+    RUN_TEST(test_crash_trace_rejects_corruption);
+    RUN_TEST(test_crash_trace_recovers_without_erasing_older_records);
+    RUN_TEST(test_crash_trace_heartbeat_does_not_change_event_checksum);
     RUN_TEST(test_device_preferences_have_a_strict_versioned_record);
     RUN_TEST(test_device_preferences_reject_invalid_or_unknown_records);
     RUN_TEST(test_stream_joins_a_sample_across_writes);

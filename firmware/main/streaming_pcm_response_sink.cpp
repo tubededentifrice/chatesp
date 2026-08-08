@@ -101,6 +101,7 @@ agent::Error StreamingPcmResponseSink::start_session() {
     if (storage_ == nullptr || playback_chunk_ == nullptr ||
         mutex_ == nullptr || events_ == nullptr ||
         !ring_.reset(storage_, buffer_capacity_)) {
+        ESP_LOGE(kTag, "PCM playback resources are unavailable");
         stop_and_cleanup();
         return agent::Error::model_failed;
     }
@@ -116,10 +117,12 @@ agent::Error StreamingPcmResponseSink::start_session() {
     response_active_ = false;
     first_response_complete_ = false;
     session_active_ = true;
-    const BaseType_t created = xTaskCreatePinnedToCore(
+    const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
         playback_task_entry, "tts_playback", kPlaybackStackBytes, this,
-        kPlaybackPriority, &task_, kPlaybackCore);
+        kPlaybackPriority, &task_, kPlaybackCore,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (created != pdPASS) {
+        ESP_LOGE(kTag, "PCM playback worker could not start");
         task_ = nullptr;
         stop_and_cleanup();
         return agent::Error::model_failed;
@@ -410,7 +413,8 @@ void StreamingPcmResponseSink::complete_worker(agent::Error result) {
         unlock();
     }
     xEventGroupSetBits(events_, kWorkerDoneBit | kSpaceReadyBit);
-    vTaskDelete(nullptr);
+    // The owner frees the PSRAM-backed task stack with the matching IDF API.
+    vTaskSuspend(nullptr);
 }
 
 void StreamingPcmResponseSink::stop_and_cleanup() {
@@ -420,6 +424,10 @@ void StreamingPcmResponseSink::stop_and_cleanup() {
             agent::Error::total_timeout) {
             esp_restart();
         }
+    }
+    if (task_ != nullptr) {
+        vTaskDeleteWithCaps(task_);
+        task_ = nullptr;
     }
     if (mutex_ != nullptr && lock()) {
         ring_.reset(nullptr, 0);
@@ -442,7 +450,6 @@ void StreamingPcmResponseSink::stop_and_cleanup() {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
     }
-    task_ = nullptr;
     total_bytes_ = 0;
     response_bytes_ = 0;
     response_length_ = -1;

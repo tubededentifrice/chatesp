@@ -28,6 +28,7 @@
 #include "chatesp/turn_timing.hpp"
 #include "chatesp/user_error_message.hpp"
 #include "cloud_providers.hpp"
+#include "crash_diagnostics.hpp"
 #include "device_control.hpp"
 #include "device_memory_store.hpp"
 #include "device_settings.hpp"
@@ -35,6 +36,7 @@
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -65,6 +67,7 @@ constexpr std::uint32_t kEarlyConnectRetryMs = 10'000;
 constexpr std::uint32_t kDisplayWakeRetryMs = 100;
 constexpr std::uint32_t kDisplaySleepRetryMs = 100;
 constexpr std::uint32_t kFooterRefreshMs = 100;
+constexpr std::uint32_t kRuntimeHeartbeatMs = 5'000;
 constexpr std::uint32_t kBatteryRefreshMs = 30'000;
 constexpr std::uint32_t kAnswerStreamRefreshMs = 60;
 constexpr std::uint32_t kPoweroffGraceMs = 250;
@@ -245,6 +248,8 @@ struct RuntimeSettings {
         chat_model.clear();
         transcription_model.clear();
         speech_model.clear();
+        english_speech_voice.clear();
+        french_speech_voice.clear();
         approximate_location.clear();
         configured = false;
     }
@@ -264,6 +269,8 @@ struct RuntimeSettings {
             chat_model.assign("~deepseek/deepseek-v4-flash-latest") &&
             transcription_model.assign("openai/whisper-large-v3-turbo") &&
             speech_model.assign("hexgrad/kokoro-82m") &&
+            english_speech_voice.assign("af_heart") &&
+            french_speech_voice.assign("ff_siwis") &&
             approximate_location.assign("");
         if (!configured) {
             clear();
@@ -284,6 +291,10 @@ struct RuntimeSettings {
             next.transcription_model.assign(
                 record.transcription_model.view()) &&
             next.speech_model.assign(record.speech_model.view()) &&
+            next.english_speech_voice.assign(
+                record.english_speech_voice.view()) &&
+            next.french_speech_voice.assign(
+                record.french_speech_voice.view()) &&
             next.approximate_location.assign(
                 record.approximate_location.view());
         if (!next.configured) {
@@ -307,7 +318,8 @@ struct RuntimeSettings {
                 chat_model.view().data(),
                 transcription_model.view().data(),
                 speech_model.view().data(),
-                "af_heart",
+                english_speech_voice.view().data(),
+                french_speech_voice.view().data(),
             },
         };
     }
@@ -336,7 +348,9 @@ struct RuntimeSettings {
         return configured && !endpoint.view().empty() &&
             !openrouter_key.view().empty() && !chat_model.view().empty() &&
             !transcription_model.view().empty() &&
-            !speech_model.view().empty();
+            !speech_model.view().empty() &&
+            !english_speech_voice.view().empty() &&
+            !french_speech_voice.view().empty();
     }
 
     provisioning::BoundedSetting<192> endpoint;
@@ -347,6 +361,8 @@ struct RuntimeSettings {
     provisioning::BoundedSetting<96> chat_model;
     provisioning::BoundedSetting<96> transcription_model;
     provisioning::BoundedSetting<96> speech_model;
+    provisioning::BoundedSetting<96> english_speech_voice;
+    provisioning::BoundedSetting<96> french_speech_voice;
     provisioning::BoundedSetting<96> approximate_location;
     bool configured = false;
 };
@@ -966,6 +982,7 @@ private:
                 "Optional IP context skipped because Bluetooth stayed active");
             return;
         }
+        crash_diagnostics::mark(runtime::CrashEvent::network_context_begin);
         // This optional HTTPS worker does not use DMA from its stack. Keep its
         // fixed stack in PSRAM so Wi-Fi, I2S, and task control data keep enough
         // internal RAM for the worker to start after Bluetooth stops.
@@ -1042,6 +1059,8 @@ private:
         }
         network_context_.clear();
         network_context_date_.clear();
+        crash_diagnostics::mark(
+            runtime::CrashEvent::network_context_complete);
         // Let the idle task reclaim the worker stack before BLE starts again.
         ble_start_attempted_ = false;
     }
@@ -1375,10 +1394,14 @@ private:
     }
 
     void run_passkey_ui() {
+        const bool watchdog_active = esp_task_wdt_add(nullptr) == ESP_OK;
         PasskeyEvent current{};
         PasskeyEvent shown{};
         bool has_shown = false;
         while (true) {
+            if (watchdog_active) {
+                (void)esp_task_wdt_reset();
+            }
             PasskeyEvent event;
             if (xQueueReceive(
                     passkey_queue_, &event, pdMS_TO_TICKS(40)) == pdTRUE) {
@@ -1390,6 +1413,8 @@ private:
             const PasskeyEvent desired{current.passkey, visible};
             if (!has_shown || desired.passkey != shown.passkey ||
                 desired.visible != shown.visible) {
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::ble_passkey_begin);
                 if (bsp_display_lock(100)) {
                     ui::show_ble_passkey(
                         desired.passkey, desired.visible);
@@ -1397,6 +1422,12 @@ private:
                     shown = desired;
                     has_shown = true;
                 }
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::ble_passkey_complete);
+                ESP_LOGI(
+                    kTag, "BLE passkey stack minimum free bytes: %u",
+                    static_cast<unsigned>(
+                        uxTaskGetStackHighWaterMark(nullptr)));
             }
         }
     }
@@ -1494,6 +1525,8 @@ private:
             start_network_early(true);
         }
 
+        std::uint32_t heartbeat_at_ms = monotonic_ms();
+        crash_diagnostics::heartbeat();
         while (true) {
             if (queue_overflow_.exchange(false, std::memory_order_acq_rel)) {
                 fail("BUTTON INPUT WAS TOO FAST");
@@ -1512,10 +1545,18 @@ private:
             }
 
             const std::uint32_t now_ms = monotonic_ms();
+            if (now_ms - heartbeat_at_ms >= kRuntimeHeartbeatMs) {
+                heartbeat_at_ms = now_ms;
+                crash_diagnostics::heartbeat();
+            }
             process_quick_controls(now_ms);
             retry_mode_display(now_ms);
             const network::NetworkState network_state = network_.state();
             if (network_state != last_network_state_) {
+                if (network_state == network::NetworkState::connected) {
+                    crash_diagnostics::mark(
+                        runtime::CrashEvent::wifi_connected);
+                }
                 if (last_network_state_ ==
                         network::NetworkState::connected &&
                     network_state != network::NetworkState::connected) {
@@ -2270,11 +2311,13 @@ private:
         stop_ble();
 
         if (kDevelopmentMode) {
+            crash_diagnostics::mark(runtime::CrashEvent::soft_sleep_begin);
             if (!poweroff_gate_.mark_soft_sleep()) {
                 display_available_.store(true, std::memory_order_release);
             }
             return;
         }
+        crash_diagnostics::mark(runtime::CrashEvent::poweroff_begin);
         if (!poweroff_gate_.mark_poweroff_ready()) {
             display_available_.store(true, std::memory_order_release);
         }
@@ -2318,10 +2361,15 @@ private:
             return true;
         }
         ble_start_attempted_ = true;
+        crash_diagnostics::mark(runtime::CrashEvent::ble_start_begin);
         const esp_err_t result = ble_provisioning::start(
             &settings_store_, &memory_store_, passkey_callback,
             device_context_callback, this);
         ble_started_ = result == ESP_OK;
+        if (ble_started_) {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::ble_start_complete);
+        }
         if (!ble_started_) {
             ESP_LOGE(kTag, "BLE provisioning restart failed");
         }

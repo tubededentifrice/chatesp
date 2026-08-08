@@ -1740,14 +1740,22 @@ void test_openrouter_transcription_and_speech_protocols() {
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"input\":\"Hello.\""));
     TEST_ASSERT_NOT_NULL(
         std::strstr(body.c_str(), "\"voice\":\"af_heart\""));
+    OpenRouterConfig selected;
+    selected.speech_model = "microsoft/mai-voice-2";
+    selected.speech_voice = "en-US-Harper:MAI-Voice-2";
+    selected.french_speech_voice = "fr-FR-Soleil:MAI-Voice-2";
     const OpenRouterConfig french = openrouter_speech_config_for_language(
-        OpenRouterConfig{}, SpeechLanguage::french);
+        selected, SpeechLanguage::french);
     assert_error(
         Error::none,
         build_openrouter_speech_request(
             french, "Bonjour.", 8, body));
+    TEST_ASSERT_NOT_NULL(std::strstr(
+        body.c_str(),
+        "\"model\":\"microsoft/mai-voice-2\""));
     TEST_ASSERT_NOT_NULL(
-        std::strstr(body.c_str(), "\"voice\":\"ff_siwis\""));
+        std::strstr(
+            body.c_str(), "\"voice\":\"fr-FR-Soleil:MAI-Voice-2\""));
     TEST_ASSERT_NULL(std::strstr(body.c_str(), "Transcript:"));
     assert_error(
         Error::none,

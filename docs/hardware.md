@@ -159,8 +159,8 @@ The connected V2 board must pass these checks for this control change:
   and a JPEG allocation failure does not stop speech;
 - a speech failure shows a clear operation and reason. It does not show an
   internal numeric error category;
-- an English answer uses the `af_heart` Kokoro voice, a French answer uses
-  `ff_siwis`, and the internal language tag is not visible or spoken;
+- an English answer uses the selected English voice, a French answer uses the
+  selected French voice, and the internal language tag is not visible or spoken;
 - a fast PCM transfer starts after the 200 ms prebuffer. A slow first segment
   buffers before playback so that audio stays clear;
 - a new held press returns to `LISTENING` within 250 ms and stops model, TTS,

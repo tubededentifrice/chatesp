@@ -64,8 +64,21 @@ audio, or a stable device identifier.
 
 The NimBLE shutdown completion wait has a one-second limit. If the host does
 not stop in that time, automatic or button sleep still completes. The runtime
-stays available for the next PWR-button wake while the stop worker finishes or
-stays blocked.
+stays available while the stop worker finishes. The task watchdog restarts the
+device if the worker stays blocked for five seconds. The watchdog also restarts
+the device if a task prevents the scheduler from running for five seconds.
+
+The firmware keeps a small crash trace in RTC memory. The trace contains the
+three most recent boot records and the 16 most recent event codes in each boot.
+It records reset reasons and bounded firmware stages, such as BLE stop and BLE
+start. It does not record credentials, network addresses, chat text, audio,
+locations, or device identifiers. It does not write to flash. The trace stays
+available after software, watchdog, panic, and USB resets. A full loss of power
+clears it. At the next boot, the device writes the earlier boot records to the
+serial log. Thus, a monitor reset can show evidence from the reset that occurred
+before it. A separate five-second runtime heartbeat shows if the main runtime
+loop continued after its last recorded stage. The heartbeat does not use an
+event slot and does not change the event checksum.
 
 A model `power_off` request uses the same development soft-sleep path. The
 model gives a short confirmation first. A PWR-button action can cancel the

@@ -12,6 +12,14 @@ bool SettingsRecord::assign(const ValidationResult &validation) {
     SettingsRecord next;
     next.revision = validation.revision;
     next.fingerprint = validation.fingerprint;
+    const std::string_view english_voice =
+        validation.settings.english_speech_voice.empty()
+            ? std::string_view{"af_heart"}
+            : validation.settings.english_speech_voice;
+    const std::string_view french_voice =
+        validation.settings.french_speech_voice.empty()
+            ? std::string_view{"ff_siwis"}
+            : validation.settings.french_speech_voice;
     const bool valid =
         next.chat_endpoint.assign(validation.settings.chat_endpoint) &&
         next.openrouter_key.assign(validation.settings.openrouter_key) &&
@@ -22,7 +30,9 @@ bool SettingsRecord::assign(const ValidationResult &validation) {
         next.transcription_model.assign(validation.settings.transcription_model) &&
         next.speech_model.assign(validation.settings.speech_model) &&
         next.approximate_location.assign(
-            validation.settings.approximate_location);
+            validation.settings.approximate_location) &&
+        next.english_speech_voice.assign(english_voice) &&
+        next.french_speech_voice.assign(french_voice);
     if (!valid) {
         next.clear();
         return false;
@@ -49,6 +59,8 @@ void SettingsRecord::clear() {
     transcription_model.clear();
     speech_model.clear();
     approximate_location.clear();
+    english_speech_voice.clear();
+    french_speech_voice.clear();
 }
 
 }  // namespace provisioning

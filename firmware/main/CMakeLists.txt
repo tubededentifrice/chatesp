@@ -7,6 +7,7 @@ idf_component_register(
         "chatesp_clock_font_180.c"
         "chatesp_font_18.c"
         "cloud_providers.cpp"
+        "crash_diagnostics.cpp"
         "device_control.cpp"
         "device_memory_store.cpp"
         "device_preferences_store.cpp"
@@ -37,6 +38,7 @@ idf_component_register(
         esp_netif
         esp_partition
         esp_rom
+        esp_system
         esp_wifi
         heap
         mbedtls

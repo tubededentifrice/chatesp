@@ -58,6 +58,8 @@ struct SettingsRecord {
     BoundedSetting<96> transcription_model;
     BoundedSetting<96> speech_model;
     BoundedSetting<96> approximate_location;
+    BoundedSetting<96> english_speech_voice;
+    BoundedSetting<96> french_speech_voice;
 
     [[nodiscard]] bool assign(const ValidationResult &validation);
     void clear();

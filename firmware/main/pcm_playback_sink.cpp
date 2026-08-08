@@ -2,8 +2,14 @@
 
 #include "device_control.hpp"
 #include "esp_err.h"
+#include "esp_log.h"
 
 namespace chatesp {
+namespace {
+
+constexpr char kTag[] = "pcm_playback";
+
+}  // namespace
 
 PcmPlaybackSink::PcmPlaybackSink(
     AudioPlayback &playback, DeviceControl &device_control)
@@ -25,7 +31,12 @@ agent::Error PcmPlaybackSink::begin(
     output_error_ = agent::Error::none;
     byte_count_ = 0;
     sample_count_ = 0;
-    if (playback_.start(device_control_.volume_percent()) != ESP_OK) {
+    const esp_err_t start_error =
+        playback_.start(device_control_.volume_percent());
+    if (start_error != ESP_OK) {
+        ESP_LOGE(
+            kTag, "Speaker start failed (category %s)",
+            esp_err_to_name(start_error));
         return agent::Error::model_failed;
     }
     started_ = true;
@@ -107,6 +118,11 @@ bool PcmPlaybackSink::play_samples(
     self->output_error_ = self->playback_.cancelled()
                               ? agent::Error::cancelled
                               : agent::Error::model_failed;
+    if (!self->playback_.cancelled()) {
+        ESP_LOGE(
+            kTag, "Speaker write failed (category %s)",
+            esp_err_to_name(error));
+    }
     return false;
 }
 
@@ -116,6 +132,11 @@ agent::Error PcmPlaybackSink::stop() {
     byte_count_ = 0;
     sample_count_ = 0;
     started_ = false;
+    if (error != ESP_OK) {
+        ESP_LOGE(
+            kTag, "Speaker stop failed (category %s)",
+            esp_err_to_name(error));
+    }
     return error == ESP_OK ? agent::Error::none
                            : agent::Error::model_failed;
 }
