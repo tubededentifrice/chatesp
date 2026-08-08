@@ -20,6 +20,8 @@ enum class WifiIndicator : std::uint8_t {
 struct QuickControlsUpdate {
     std::uint8_t brightness_percent = 65;
     std::uint8_t volume_percent = 70;
+    bool brightness_changed = false;
+    bool volume_changed = false;
     bool commit = false;
 };
 

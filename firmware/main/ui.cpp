@@ -259,7 +259,8 @@ void sync_controls_values(
         controls_volume_percent);
 }
 
-void dispatch_controls_update(bool commit) {
+void dispatch_controls_update(
+    bool brightness_changed, bool volume_changed, bool commit) {
     controls_gesture.note_activity(lv_tick_get());
     if (controls_callback == nullptr) {
         return;
@@ -267,6 +268,8 @@ void dispatch_controls_update(bool commit) {
     const QuickControlsUpdate update{
         controls_brightness_percent,
         controls_volume_percent,
+        brightness_changed,
+        volume_changed,
         commit,
     };
     controls_callback(update, controls_callback_context);
@@ -320,7 +323,9 @@ void open_controls() {
     }
     controls_close_animation_active = false;
     controls_gesture.set_open(true, lv_tick_get());
-    dispatch_controls_update(false);
+    // Opening is an activity event only. Do not run panel I/O from the LVGL
+    // event callback before the control panel becomes visible.
+    dispatch_controls_update(false, false, false);
     lv_anim_delete(controls_panel, controls_panel_y_animation);
     set_hidden(controls_edge_target, true);
     set_hidden(controls_backdrop, false);
@@ -399,7 +404,7 @@ void controls_slider_event(lv_event_t *event) {
     }
     if (code == LV_EVENT_RELEASED) {
         controls_slider_active = false;
-        dispatch_controls_update(true);
+        dispatch_controls_update(false, false, true);
         return;
     }
     if (controls_sync_active) {
@@ -428,7 +433,8 @@ void controls_slider_event(lv_event_t *event) {
         controls_volume_percent = value;
         format_percent(volume_value_buffer, volume_value_label, value);
     }
-    dispatch_controls_update(false);
+    dispatch_controls_update(
+        slider == brightness_slider, slider == volume_slider, false);
 }
 
 void controls_timer_callback(lv_timer_t *) {
@@ -523,6 +529,7 @@ void create_quick_controls(lv_obj_t *screen) {
         controls_panel, lv_color_hex(0x38383d), LV_PART_MAIN);
     lv_obj_set_style_radius(controls_panel, 28, LV_PART_MAIN);
     lv_obj_add_flag(controls_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(controls_panel, LV_OBJ_FLAG_PRESS_LOCK);
     lv_obj_clear_flag(controls_panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(
         controls_panel, controls_gesture_event, LV_EVENT_ALL, nullptr);
@@ -599,6 +606,9 @@ void create_quick_controls(lv_obj_t *screen) {
     lv_obj_set_style_bg_opa(
         controls_edge_target, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_add_flag(controls_edge_target, LV_OBJ_FLAG_CLICKABLE);
+    // The required 48-pixel swipe ends below this 34-pixel target. Keep the
+    // original target pressed until release so LVGL delivers the full swipe.
+    lv_obj_add_flag(controls_edge_target, LV_OBJ_FLAG_PRESS_LOCK);
     lv_obj_clear_flag(controls_edge_target, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(
         controls_edge_target, controls_edge_event, LV_EVENT_ALL, nullptr);

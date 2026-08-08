@@ -294,7 +294,7 @@ void test_held_wake_press_records_until_release() {
         static_cast<int>(machine.state()));
 }
 
-void test_quick_controls_open_only_from_the_top_edge() {
+void test_quick_controls_open_only_from_top_and_continues_below_target() {
     chatesp::QuickControlsGesture controls;
     controls.set_allowed(true);
 
@@ -306,7 +306,7 @@ void test_quick_controls_open_only_from_the_top_edge() {
     controls.press(180, 20, 300);
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(chatesp::QuickControlsAction::open),
-        static_cast<int>(controls.release(180, 68, 400)));
+        static_cast<int>(controls.release(180, 220, 400)));
 }
 
 void test_quick_controls_reject_a_sideways_drag() {
@@ -387,7 +387,7 @@ int main(int, char **) {
     RUN_TEST(test_power_button_filter_ignores_two_key_edges_in_one_poll);
     RUN_TEST(test_short_wake_press_returns_to_idle);
     RUN_TEST(test_held_wake_press_records_until_release);
-    RUN_TEST(test_quick_controls_open_only_from_the_top_edge);
+    RUN_TEST(test_quick_controls_open_only_from_top_and_continues_below_target);
     RUN_TEST(test_quick_controls_reject_a_sideways_drag);
     RUN_TEST(test_quick_controls_close_with_an_upward_swipe);
     RUN_TEST(test_quick_controls_auto_close_handles_wrap_and_active_touch);

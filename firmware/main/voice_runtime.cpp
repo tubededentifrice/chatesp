@@ -886,16 +886,24 @@ private:
         if (self == nullptr || !preferences.valid()) {
             return;
         }
-        (void)self->device_control_.preview_brightness(
-            update.brightness_percent);
-        if (self->device_control_.preview_volume(update.volume_percent) ==
-            agent::Error::none) {
-            (void)self->playback_.set_volume(update.volume_percent);
+        if (update.brightness_changed) {
+            self->pending_brightness_percent_.store(
+                update.brightness_percent, std::memory_order_release);
+            self->quick_controls_brightness_pending_.store(
+                true, std::memory_order_release);
         }
-        self->pending_brightness_percent_.store(
-            update.brightness_percent, std::memory_order_release);
-        self->pending_volume_percent_.store(
-            update.volume_percent, std::memory_order_release);
+        if (update.volume_changed) {
+            // Volume preview is atomic, so active speech can change without
+            // delay. Panel I/O does not run in the LVGL callback.
+            if (self->device_control_.preview_volume(update.volume_percent) ==
+                agent::Error::none) {
+                (void)self->playback_.set_volume(update.volume_percent);
+            }
+            self->pending_volume_percent_.store(
+                update.volume_percent, std::memory_order_release);
+            self->quick_controls_volume_pending_.store(
+                true, std::memory_order_release);
+        }
         if (update.commit) {
             self->quick_controls_commit_pending_.store(
                 true, std::memory_order_release);
@@ -1067,16 +1075,22 @@ private:
     void process_quick_controls(std::uint32_t now_ms) {
         const bool update = quick_controls_update_pending_.exchange(
             false, std::memory_order_acq_rel);
+        const bool brightness_update =
+            quick_controls_brightness_pending_.exchange(
+                false, std::memory_order_acq_rel);
+        const bool volume_update = quick_controls_volume_pending_.exchange(
+            false, std::memory_order_acq_rel);
         const bool commit_requested =
             quick_controls_commit_pending_.load(std::memory_order_acquire);
-        if (!update && !commit_requested) {
+        if (!update && !brightness_update && !volume_update &&
+            !commit_requested) {
             return;
         }
         const bool can_commit = quick_controls_can_persist(
             voice_priority_.load(std::memory_order_acquire),
             button_pressed_.load(std::memory_order_acquire),
             interaction_.state() == InteractionState::sleep_pending);
-        if (!update && !can_commit) {
+        if (!update && !brightness_update && !volume_update && !can_commit) {
             return;
         }
 
@@ -1084,19 +1098,26 @@ private:
             pending_brightness_percent_.load(std::memory_order_acquire);
         const std::uint8_t volume =
             pending_volume_percent_.load(std::memory_order_acquire);
+        bool values_match = true;
         const runtime::DevicePreferences requested{brightness, volume};
-        bool values_match = requested.valid();
-        if (values_match &&
-            device_control_.preview_brightness(brightness) !=
-                agent::Error::none) {
-            values_match = false;
+        values_match = requested.valid();
+        if (values_match && brightness_update) {
+            bool brightness_applied = false;
+            if (bsp_display_lock(25)) {
+                brightness_applied =
+                    device_control_.preview_brightness(brightness) ==
+                    agent::Error::none;
+                bsp_display_unlock();
+            }
+            if (!brightness_applied) {
+                values_match = false;
+            }
         }
-        if (values_match &&
-            device_control_.preview_volume(volume) != agent::Error::none) {
-            values_match = false;
-        }
-        if (values_match && playback_.set_volume(volume) != ESP_OK) {
-            values_match = false;
+        if (values_match && volume_update) {
+            if (device_control_.preview_volume(volume) != agent::Error::none ||
+                playback_.set_volume(volume) != ESP_OK) {
+                values_match = false;
+            }
         }
         if (update) {
             interaction_.note_idle_activity(now_ms);
@@ -1891,6 +1912,8 @@ private:
     std::atomic<std::uint8_t> pending_volume_percent_{
         runtime::DevicePreferences::default_volume_percent};
     std::atomic<bool> quick_controls_update_pending_{false};
+    std::atomic<bool> quick_controls_brightness_pending_{false};
+    std::atomic<bool> quick_controls_volume_pending_{false};
     std::atomic<bool> quick_controls_commit_pending_{false};
     runtime::PoweroffGate poweroff_gate_;
     std::uint32_t level_refreshed_at_ms_ = 0;

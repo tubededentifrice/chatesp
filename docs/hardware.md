@@ -107,6 +107,7 @@ The connected V2 board must pass these checks for this control change:
 - volume commands mute at 0 percent, apply at 100 percent, and reject values
   outside the range;
 - a tap on the top handle and a downward top-edge swipe open the control panel;
+- the downward swipe stays captured after it moves below the top touch target;
 - a swipe that starts below the top edge or moves mainly sideways does not open
   the control panel;
 - the panel closes after an upward swipe, a tap outside, five seconds without
