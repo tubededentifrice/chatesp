@@ -110,15 +110,12 @@ private struct OpenRouterModelsResponse: Decodable {
 
 enum ModelCatalogError: LocalizedError {
     case invalidResponse
-    case authenticationRejected
     case responseTooLarge
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "OpenRouter did not return a valid model list."
-        case .authenticationRejected:
-            return "OpenRouter did not accept the saved API key."
         case .responseTooLarge:
             return "The OpenRouter model list was larger than the app limit."
         }
@@ -128,32 +125,20 @@ enum ModelCatalogError: LocalizedError {
 struct ModelCatalogClient {
     static let maximumResponseBytes = 4 * 1_024 * 1_024
 
-    func fetch(apiKey: String) async throws -> [OpenRouterModel] {
-        if apiKey.utf8.count >= 8 {
-            do {
-                return try await fetch(path: "models/user", apiKey: apiKey)
-            } catch ModelCatalogError.authenticationRejected {
-                // A partial or expired key must not block the public catalog.
-            }
-        }
-        return try await fetch(path: "models", apiKey: nil)
-    }
-
-    private func fetch(
-        path: String,
-        apiKey: String?
-    ) async throws -> [OpenRouterModel] {
+    static func catalogRequest() throws -> URLRequest {
         guard let url = URL(
-            string: "https://openrouter.ai/api/v1/\(path)?output_modalities=all"
+            string: "https://openrouter.ai/api/v1/models?output_modalities=all"
         ) else {
             throw ModelCatalogError.invalidResponse
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let apiKey {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
+        return request
+    }
+
+    func fetch() async throws -> [OpenRouterModel] {
+        let request = try Self.catalogRequest()
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
@@ -164,11 +149,6 @@ struct ModelCatalogClient {
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw ModelCatalogError.invalidResponse
-        }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw apiKey == nil
-                ? ModelCatalogError.invalidResponse
-                : ModelCatalogError.authenticationRejected
         }
         guard (200...299).contains(http.statusCode),
               http.value(forHTTPHeaderField: "Content-Type")?
@@ -199,13 +179,13 @@ final class ModelCatalog: ObservableObject {
 
     private let client = ModelCatalogClient()
 
-    func load(apiKey: String, force: Bool = false) async {
+    func load(force: Bool = false) async {
         guard force || models.isEmpty else { return }
         guard !isLoading else { return }
         isLoading = true
         errorText = nil
         do {
-            models = try await client.fetch(apiKey: apiKey)
+            models = try await client.fetch()
         } catch {
             if Task.isCancelled {
                 isLoading = false

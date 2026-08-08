@@ -16,12 +16,12 @@ The app does not send settings after a Keychain read error. It retries the read
 when the app becomes active.
 
 The Models section explains each model role. Its searchable OpenRouter browser
+uses the public all-modality catalog and does not send the saved API key. It
 shows only compatible models. Chat and tool models require text input, text
 output, and tool calling. Transcription models require audio input and
 transcription output. Speech models require text input, speech output, and the
 English and French voices that the firmware uses. The catalog request has
-fixed time and response-size limits. An invalid partial key does not block the
-public model catalog.
+fixed time and response-size limits.
 
 The app opens device discovery in a separate Add page. It does not keep a
 second nearby-device section on the main page. A device page contains settings,

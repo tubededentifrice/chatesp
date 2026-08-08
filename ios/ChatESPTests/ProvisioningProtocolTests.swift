@@ -553,6 +553,17 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertFalse(transcription.supports(.speech))
     }
 
+    func testModelCatalogRequestsEveryOutputModalityWithoutAKey() throws {
+        let request = try ModelCatalogClient.catalogRequest()
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://openrouter.ai/api/v1/models?output_modalities=all")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Accept"),
+            "application/json")
+    }
+
     func testMemoryFingerprintMatchesFirmwareVector() throws {
         let facts = [
             MemoryFact(id: 2, fact: "User likes tea."),

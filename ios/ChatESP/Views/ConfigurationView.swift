@@ -222,7 +222,6 @@ private struct GlobalSettingsView: View {
             LocationSettings(configuration: globalConfigurationBinding)
             ModelSettings(
                 configuration: globalConfigurationBinding,
-                openRouterKey: store.secrets.global.openRouterKey,
                 modelCatalog: modelCatalog)
             if let error = store.errorText {
                 Section("Needs Attention") {
@@ -473,7 +472,6 @@ private struct LocationSettings: View {
 
 private struct ModelSettings: View {
     @Binding var configuration: ChatESPConfiguration
-    let openRouterKey: String
     @ObservedObject var modelCatalog: ModelCatalog
 
     var body: some View {
@@ -496,7 +494,6 @@ private struct ModelSettings: View {
             ModelBrowserView(
                 purpose: purpose,
                 selection: selection,
-                apiKey: openRouterKey,
                 catalog: modelCatalog)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
@@ -636,7 +633,6 @@ private struct DeviceModelOverrides: View {
                         selection: Binding(
                             get: { override.wrappedValue ?? global },
                             set: { override.wrappedValue = $0 }),
-                        apiKey: store.secretValues(for: deviceID).openRouterKey,
                         catalog: modelCatalog)
                 } label: {
                     Text(override.wrappedValue ?? global)
@@ -707,7 +703,6 @@ private struct OverrideTextField: View {
 private struct ModelBrowserView: View {
     let purpose: ModelPurpose
     @Binding var selection: String
-    let apiKey: String
     @ObservedObject var catalog: ModelCatalog
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
@@ -729,14 +724,14 @@ private struct ModelBrowserView: View {
                 Section("Could Not Load Models") {
                     Text(error).foregroundStyle(.red)
                     Button("Try Again") {
-                        Task { await catalog.load(apiKey: apiKey, force: true) }
+                        Task { await catalog.load(force: true) }
                     }
                 }
             } else {
                 if !currentSelectionIsListed {
                     Section("Current Selection") {
                         Text(selection).font(.body.monospaced())
-                        Text("OpenRouter did not list this ID as compatible. Select a model below before you provision the device.")
+                        Text("OpenRouter did not list this ID as compatible. Select a compatible model below.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
@@ -779,7 +774,7 @@ private struct ModelBrowserView: View {
         .navigationTitle(purpose.title)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search compatible models")
-        .task { await catalog.load(apiKey: apiKey, force: true) }
+        .task { await catalog.load(force: true) }
     }
 
     private var compatibleModels: [OpenRouterModel] {

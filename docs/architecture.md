@@ -262,12 +262,13 @@ Wi-Fi or OpenRouter credentials. An empty Brave key disables search.
 An explicit device change cancels an active settings transfer before the app
 changes the selected peripheral.
 
-The model browser gets a bounded OpenRouter catalog response. It filters chat
+The model browser gets the bounded public OpenRouter all-modality catalog. It
+does not send the saved API key for this public request. It filters chat
 models for text input, text output, and tool calling. It filters transcription
 models for audio input and transcription output. It filters speech models for
 text input, speech output, and both firmware-selected voices. Catalog or
 network failure does not remove the saved model IDs or block other settings
-edits. An invalid partial OpenRouter key falls back to the public catalog.
+edits.
 
 ## Model contract
 
