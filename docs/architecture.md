@@ -233,7 +233,12 @@ BLE bonds in plaintext NVS. This keeps settings after a restart, but a person
 with physical flash access can read the credentials. Development keeps BLE
 settings and bonds in memory. ChatESP never enables eFuse-backed NVS
 encryption, flash encryption, secure boot, or another irreversible device
-write. Each device build has an explicit zero policy flag and compile-time
-checks. Logs show only redacted error categories. Turn timing records contain
-phase durations and bounded counters only. They do not contain text, audio,
-URLs, credentials, stable identifiers, or precise location.
+write. Each device build has an explicit zero policy flag. The PlatformIO
+wrapper rejects unreviewed environments, project replacements, build-flag
+overrides, duplicated policy flags, unsafe SDK settings, and direct first-party
+eFuse write APIs. CMake requires a separate `FORBID` lock before configuration,
+and source checks reject unsafe compiled settings. No user request, environment
+variable, or approval flag can bypass this policy. Logs show only redacted
+error categories. Turn timing records contain phase durations and bounded
+counters only. They do not contain text, audio, URLs, credentials, stable
+identifiers, or precise location.

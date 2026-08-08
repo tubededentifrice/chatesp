@@ -145,8 +145,12 @@ ChatESP must never burn an eFuse or enable a feature that can burn one on first
 start. This rule also applies to production firmware. NVS encryption, flash
 encryption, and secure boot stay disabled. Each device profile must set
 `CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. Source checks must stop a build if
-this flag is absent or nonzero, or if an irreversible ESP-IDF feature is on.
-There is no approval flag that can bypass this rule.
+this flag is absent, duplicated, or nonzero, or if an irreversible ESP-IDF
+feature is on. CMake must also require
+`CHATESP_PERMANENT_WRITE_POLICY=FORBID`. The build wrapper must reject project,
+environment, and build-flag overrides for watch builds. It must reject direct
+first-party eFuse write APIs. There is no user request, environment variable,
+or approval flag that can bypass this rule.
 
 Production BLE settings and BLE bonds use normal plaintext NVS. This is less
 secure than eFuse-backed encrypted NVS, but it is reversible. An attacker with

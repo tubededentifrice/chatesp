@@ -119,8 +119,10 @@ uv run --locked python tools/pio.py run -e watch_prod
 
 Production does not enable encrypted NVS, flash encryption, or secure boot.
 These features can burn eFuses. Each device profile sets
-`CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`, and source checks reject a build
-that can make one of these permanent changes. There is no approval bypass.
+`CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. The build wrapper, CMake,
+reviewed SDK settings, and source checks each fail closed if the lock is
+missing, changed, duplicated, or replaced. Watch builds also reject project or
+build-flag overrides. There is no user-approval or environment-variable bypass.
 
 See [development mode](docs/development-mode.md) for the mode contract and the
 recovery procedure.
