@@ -69,9 +69,14 @@ The connected V2 board must pass these checks for this control change:
 - the footer shows Wi-Fi connection state and a valid battery percentage, or a
   clear unavailable value;
 - model text grows on the display before the complete answer is available;
-- speech starts while PCM data is still arriving when the transfer is faster
-  than playback. A slow transfer buffers before playback so that audio stays
-  clear. A new held press stops it and starts recording.
+- on a held cold start, Wi-Fi setup starts only after 100 ms of valid audio and
+  does not stop microphone capture;
+- speech starts from the first complete sentence while later answer text and
+  TTS segments continue. Segment order is correct and the codec stays active;
+- a fast PCM transfer starts after the 200 ms prebuffer. A slow first segment
+  buffers before playback so that audio stays clear;
+- a new held press returns to `LISTENING` within 250 ms and stops model, TTS,
+  playback, search, and image work.
 
 The full-screen image path must pass these checks on the V2 AMOLED:
 
@@ -100,3 +105,12 @@ The current USB-power checks do not verify battery sleep current.
 - Measure idle, recording, Wi-Fi, playback, and deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,
   stuck state, or unexpected NVS write.
+- Compare the same 20 direct, 10 web, and 10 image prompts before and after the
+  change on 2.4 GHz Wi-Fi at -65 dBm or better. Test warm and held-cold starts.
+- Require at least 30 percent lower p50 release-to-first-audio time for direct
+  questions. Warm direct p50 must be at most 4 seconds and p90 at most 7
+  seconds. Held-cold p90 must be at most 10 seconds. Web p90 must be at most 12
+  seconds.
+- Confirm that the prompt set has no PCM underrun or segment-order error.
+- Measure energy for the complete interaction. Do not infer energy improvement
+  from peak current.

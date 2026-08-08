@@ -18,6 +18,8 @@
 #include "chatesp/ble_settings.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/runtime_control.hpp"
+#include "chatesp/speech_segmenter.hpp"
+#include "chatesp/turn_timing.hpp"
 #include "cloud_providers.hpp"
 #include "device_settings.hpp"
 #include "esp_heap_caps.h"
@@ -33,6 +35,7 @@
 #include "pcm_playback_sink.hpp"
 #include "power_control.hpp"
 #include "settings_store.hpp"
+#include "speech_segment_channel.hpp"
 #include "ui.hpp"
 
 #ifndef CHATESP_DEVELOPMENT_MODE
@@ -52,7 +55,6 @@ constexpr std::uint32_t kDisplaySleepRetryMs = 100;
 constexpr std::uint32_t kFooterRefreshMs = 100;
 constexpr std::uint32_t kBatteryRefreshMs = 30'000;
 constexpr std::uint32_t kAnswerStreamRefreshMs = 60;
-constexpr std::uint32_t kTranscriptVisibleMs = 450;
 constexpr std::uint32_t kPoweroffGraceMs = 250;
 constexpr std::uint32_t kInteractionTimeoutMs = 180'000;
 constexpr std::size_t kMinimumRecordingSamples =
@@ -61,6 +63,15 @@ constexpr UBaseType_t kRuntimePriority = 5;
 constexpr std::uint32_t kRuntimeStackBytes = 32 * 1024;
 constexpr UBaseType_t kPasskeyPriority = 6;
 constexpr std::uint32_t kPasskeyStackBytes = 4 * 1024;
+constexpr UBaseType_t kSpeechPriority = 5;
+constexpr std::uint32_t kSpeechStackBytes = 16 * 1024;
+constexpr EventBits_t kSpeechDoneBit = BIT0;
+constexpr EventBits_t kNetworkWarmDoneBit = BIT1;
+constexpr EventBits_t kImageDoneBit = BIT2;
+constexpr UBaseType_t kNetworkWarmPriority = 3;
+constexpr std::uint32_t kNetworkWarmStackBytes = 6 * 1024;
+constexpr UBaseType_t kImagePriority = 3;
+constexpr std::uint32_t kImageStackBytes = 20 * 1024;
 
 std::uint32_t monotonic_ms() {
     return static_cast<std::uint32_t>(esp_timer_get_time() / 1'000ULL);
@@ -89,10 +100,12 @@ private:
 struct RequestScratch {
     agent::FixedText<agent::Limits::max_transcript_bytes> transcript;
     agent::FixedText<agent::Limits::max_answer_bytes> answer;
+    agent::FixedText<agent::Limits::max_answer_bytes> stream_answer;
 
     void clear() {
         transcript.clear();
         answer.clear();
+        stream_answer.clear();
     }
 };
 
@@ -336,37 +349,26 @@ const char *error_message(agent::Error error) {
     }
 }
 
-std::size_t bounded_speech_size(const char *text, std::size_t size) {
-    if (text == nullptr) {
-        return 0;
-    }
-    std::size_t result =
-        std::min(size, agent::Limits::max_tts_input_bytes);
-    while (result > 0 &&
-           (static_cast<unsigned char>(text[result]) & 0xc0U) == 0x80U) {
-        --result;
-    }
-    return result;
-}
-
 }  // namespace
 
 class VoiceRuntime::Impl final : public agent::AgentProgressObserver,
                                  public agent::ChatTextSink {
 public:
     Impl()
-        : image_fetch_provider_(transport_),
+        : image_fetch_provider_(image_transport_),
           openrouter_connection_(settings_.openrouter()),
           brave_key_(settings_.brave()),
-          web_provider_(transport_, network_, brave_key_),
-          image_provider_(transport_, network_, brave_key_),
+          web_provider_(search_transport_, network_, brave_key_),
+          image_provider_(search_transport_, network_, brave_key_),
           web_tool_(web_provider_),
           image_tool_(image_provider_),
           chat_provider_(
-              transport_, network_, openrouter_connection_, tools_),
+              openrouter_control_transport_, network_, openrouter_connection_,
+              tools_),
           transcription_provider_(
-              transport_, network_, openrouter_connection_),
-          speech_provider_(transport_, network_, openrouter_connection_),
+              openrouter_control_transport_, network_, openrouter_connection_),
+          speech_provider_(
+              openrouter_audio_transport_, network_, openrouter_connection_),
           pcm_sink_(playback_),
           interaction_(interaction_config_for_mode(kDevelopmentMode)) {
         tools_ready_ = tools_.add(web_tool_) == agent::Error::none &&
@@ -388,9 +390,14 @@ public:
 
     ~Impl() override {
         cancellation_.cancel();
-        transport_.cancel_active();
+        speech_channel_.cancel();
+        cancel_transports();
         capture_.cancel();
         pcm_sink_.cancel();
+        if (speech_events_ != nullptr) {
+            vEventGroupDelete(speech_events_);
+            speech_events_ = nullptr;
+        }
         if (ble_started_) {
             ble_provisioning::stop();
         }
@@ -426,7 +433,9 @@ public:
         }
         command_queue_ = xQueueCreate(16, sizeof(Command));
         passkey_queue_ = xQueueCreate(1, sizeof(PasskeyEvent));
-        if (command_queue_ == nullptr || passkey_queue_ == nullptr) {
+        speech_events_ = xEventGroupCreate();
+        if (command_queue_ == nullptr || passkey_queue_ == nullptr ||
+            speech_events_ == nullptr) {
             if (command_queue_ != nullptr) {
                 vQueueDelete(command_queue_);
                 command_queue_ = nullptr;
@@ -434,6 +443,10 @@ public:
             if (passkey_queue_ != nullptr) {
                 vQueueDelete(passkey_queue_);
                 passkey_queue_ = nullptr;
+            }
+            if (speech_events_ != nullptr) {
+                vEventGroupDelete(speech_events_);
+                speech_events_ = nullptr;
             }
             return ESP_ERR_NO_MEM;
         }
@@ -450,6 +463,8 @@ public:
             vQueueDelete(passkey_queue_);
             command_queue_ = nullptr;
             passkey_queue_ = nullptr;
+            vEventGroupDelete(speech_events_);
+            speech_events_ = nullptr;
             return ESP_ERR_NO_MEM;
         }
         if (startup_button_down) {
@@ -475,6 +490,8 @@ public:
             vQueueDelete(passkey_queue_);
             command_queue_ = nullptr;
             passkey_queue_ = nullptr;
+            vEventGroupDelete(speech_events_);
+            speech_events_ = nullptr;
             return ESP_ERR_NO_MEM;
         }
 
@@ -490,9 +507,10 @@ public:
         if (pressed) {
             voice_priority_.store(true, std::memory_order_release);
             cancellation_.cancel();
+            speech_channel_.cancel();
             capture_.cancel();
             pcm_sink_.cancel();
-            transport_.cancel_active();
+            cancel_transports();
         }
         const runtime::ButtonRoute route = pressed
             ? poweroff_gate_.button_down()
@@ -526,16 +544,23 @@ public:
                 show_model_progress("PREPARING THE REQUEST");
                 break;
             case agent::AgentProgressEvent::model_start:
+                timing_.mark(runtime::TurnPhase::route_start, now_ms);
                 show_model_progress("ASKING THE MODEL");
                 break;
             case agent::AgentProgressEvent::tool_start:
+                timing_.note_tool_round();
                 interaction_.tool_started(now_ms);
                 show_state(interaction_.state());
+                break;
+            case agent::AgentProgressEvent::answer_start:
+                start_image_worker();
+                show_model_progress("GENERATING THE ANSWER");
                 break;
             case agent::AgentProgressEvent::answer_ready:
                 show_model_progress("ANSWER READY");
                 break;
             case agent::AgentProgressEvent::speech_start:
+                timing_.mark(runtime::TurnPhase::playback_start, now_ms);
                 interaction_.speech_started(now_ms);
                 show_state(interaction_.state());
                 break;
@@ -553,6 +578,13 @@ public:
         }
 
         const std::uint32_t now_ms = monotonic_ms();
+        timing_.mark(runtime::TurnPhase::first_answer_text, now_ms);
+        if (request_scratch_ == nullptr ||
+            !request_scratch_->stream_answer.assign(text, size) ||
+            !speech_segmenter_.update(text, size, speech_channel_)) {
+            return cancellation_.cancelled() ? agent::Error::cancelled
+                                             : agent::Error::model_failed;
+        }
         if (size == 0 || !stream_text_shown_ ||
             now_ms - stream_text_refreshed_at_ms_ >=
                 kAnswerStreamRefreshMs) {
@@ -568,12 +600,206 @@ public:
     }
 
 private:
+    void cancel_transports() {
+        openrouter_control_transport_.cancel_active();
+        openrouter_audio_transport_.cancel_active();
+        search_transport_.cancel_active();
+        image_transport_.cancel_active();
+    }
+
+    void reset_transports() {
+        openrouter_control_transport_.reset_session();
+        openrouter_audio_transport_.reset_session();
+        search_transport_.reset_session();
+        image_transport_.reset_session();
+    }
+
     static void task_entry(void *context) {
         static_cast<Impl *>(context)->run();
     }
 
     static void passkey_task_entry(void *context) {
         static_cast<Impl *>(context)->run_passkey_ui();
+    }
+
+    static void speech_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_speech_worker();
+    }
+
+    static void network_warm_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_network_warm_worker();
+    }
+
+    static void image_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_image_worker();
+    }
+
+    void start_image_worker() {
+        if (image_task_ != nullptr || speech_cancellation_ == nullptr ||
+            speech_events_ == nullptr ||
+            !image_tool_.take_selected(selected_image_result_)) {
+            return;
+        }
+        image_frame_.reset();
+        image_cancellation_ = speech_cancellation_;
+        image_error_.store(agent::Error::none, std::memory_order_release);
+        xEventGroupClearBits(speech_events_, kImageDoneBit);
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            image_task_entry, "image_download", kImageStackBytes, this,
+            kImagePriority, &image_task_, 0);
+        if (created != pdPASS) {
+            image_task_ = nullptr;
+            image_cancellation_ = nullptr;
+            selected_image_result_.clear();
+        }
+    }
+
+    void run_image_worker() {
+        agent::Error error = agent::Error::model_failed;
+        if (image_cancellation_ != nullptr) {
+            image::JpegImageSink sink(*image_cancellation_);
+            const agent::ImageFetchRequest request{
+                selected_image_result_.thumbnail_url.c_str(),
+                agent::Limits::max_image_download_bytes,
+                agent::Limits::max_image_dimension,
+                0,
+                agent::image_fetch_policy(),
+            };
+            error = image_fetch_provider_.fetch(
+                request, sink, *image_cancellation_);
+            if (error == agent::Error::none && sink.ready()) {
+                image_frame_ = sink.take_frame();
+            } else if (error == agent::Error::none) {
+                error = agent::Error::malformed_response;
+            }
+        }
+        selected_image_result_.clear();
+        image_error_.store(error, std::memory_order_release);
+        xEventGroupSetBits(speech_events_, kImageDoneBit);
+        vTaskDelete(nullptr);
+    }
+
+    void join_image_worker() {
+        if (image_task_ == nullptr) {
+            return;
+        }
+        xEventGroupWaitBits(
+            speech_events_, kImageDoneBit, pdFALSE, pdTRUE, portMAX_DELAY);
+        image_task_ = nullptr;
+        image_cancellation_ = nullptr;
+        const agent::Error error =
+            image_error_.load(std::memory_order_acquire);
+        if (image_frame_.available()) {
+            timing_.mark(runtime::TurnPhase::image_ready, monotonic_ms());
+        } else if (error != agent::Error::cancelled) {
+            ESP_LOGW(
+                kTag, "Optional image was not available (category %u)",
+                static_cast<unsigned>(error));
+        }
+    }
+
+    void start_network_during_recording() {
+        if (!settings_.configured || network_initialized_ ||
+            network_warm_task_ != nullptr || speech_events_ == nullptr) {
+            return;
+        }
+        if (network_.connected() || network_.connecting()) {
+            return;
+        }
+        xEventGroupClearBits(speech_events_, kNetworkWarmDoneBit);
+        network_warm_initialized_.store(false, std::memory_order_release);
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            network_warm_task_entry, "wifi_recording",
+            kNetworkWarmStackBytes, this, kNetworkWarmPriority,
+            &network_warm_task_, 0);
+        if (created != pdPASS) {
+            network_warm_task_ = nullptr;
+        }
+    }
+
+    void run_network_warm_worker() {
+        const bool initialized = network_.initialize() == ESP_OK;
+        network_warm_initialized_.store(initialized, std::memory_order_release);
+        if (initialized) {
+            const agent::Error error =
+                network_.start_connect(settings_.wifi());
+            if (error != agent::Error::none) {
+                ESP_LOGW(
+                    kTag,
+                    "Recording-time Wi-Fi connect did not start (category %u)",
+                    static_cast<unsigned>(error));
+            }
+        }
+        xEventGroupSetBits(speech_events_, kNetworkWarmDoneBit);
+        vTaskDelete(nullptr);
+    }
+
+    void join_network_warm_worker() {
+        if (network_warm_task_ == nullptr) {
+            return;
+        }
+        xEventGroupWaitBits(
+            speech_events_, kNetworkWarmDoneBit, pdFALSE, pdTRUE,
+            portMAX_DELAY);
+        network_warm_task_ = nullptr;
+        if (network_warm_initialized_.load(std::memory_order_acquire)) {
+            network_initialized_ = true;
+        }
+    }
+
+    bool start_speech_worker(DeadlineCancellation &cancellation) {
+        if (speech_events_ == nullptr || speech_task_ != nullptr ||
+            !speech_channel_.start(cancellation)) {
+            return false;
+        }
+        speech_segmenter_.reset();
+        xEventGroupClearBits(speech_events_, kSpeechDoneBit);
+        speech_cancellation_ = &cancellation;
+        speech_result_.store(
+            agent::Error::model_failed, std::memory_order_release);
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            speech_task_entry, "tts_requests", kSpeechStackBytes, this,
+            kSpeechPriority, &speech_task_, 1);
+        if (created != pdPASS) {
+            speech_task_ = nullptr;
+            speech_cancellation_ = nullptr;
+            speech_channel_.cancel();
+            return false;
+        }
+        return true;
+    }
+
+    void run_speech_worker() {
+        agent::Error result = agent::Error::model_failed;
+        if (speech_cancellation_ != nullptr) {
+            SpeechStartSink speech_sink(pcm_sink_, *agent_loop_);
+            result = speech_provider_.speak_segments(
+                speech_channel_, speech_sink, *speech_cancellation_);
+        }
+        speech_result_.store(result, std::memory_order_release);
+        xEventGroupSetBits(speech_events_, kSpeechDoneBit);
+        vTaskDelete(nullptr);
+    }
+
+    agent::Error wait_for_speech_worker() {
+        if (speech_task_ == nullptr) {
+            return speech_result_.load(std::memory_order_acquire);
+        }
+        while (true) {
+            const EventBits_t bits = xEventGroupWaitBits(
+                speech_events_, kSpeechDoneBit, pdFALSE, pdFALSE,
+                pdMS_TO_TICKS(20));
+            if ((bits & kSpeechDoneBit) != 0) {
+                break;
+            }
+            if (cancellation_.cancelled()) {
+                speech_channel_.cancel();
+            }
+        }
+        speech_task_ = nullptr;
+        speech_cancellation_ = nullptr;
+        speech_channel_.reset();
+        return speech_result_.load(std::memory_order_acquire);
     }
 
     static void passkey_callback(
@@ -736,6 +962,15 @@ private:
             }
 
             const std::uint32_t now_ms = monotonic_ms();
+            const network::NetworkState network_state = network_.state();
+            if (network_state != last_network_state_) {
+                if (last_network_state_ ==
+                        network::NetworkState::connected &&
+                    network_state != network::NetworkState::connected) {
+                    reset_transports();
+                }
+                last_network_state_ = network_state;
+            }
             interaction_.tick(now_ms);
             process_state_change(now_ms);
             const bool recording =
@@ -798,6 +1033,7 @@ private:
             }
         } else if (command.kind == CommandKind::button_up) {
             ESP_LOGI(kTag, "Action button was released");
+            timing_.reset(command.at_ms);
             interaction_.button_up(command.at_ms);
             if (interaction_.state() == InteractionState::idle) {
                 voice_priority_.store(false, std::memory_order_release);
@@ -939,12 +1175,16 @@ private:
                 cancel_current();
             } else if (capture_.sample_count() >=
                        AudioCapture::kMaximumSamples) {
+                timing_.reset(now_ms);
                 interaction_.button_up(now_ms);
                 process_state_change(now_ms);
             } else {
                 fail("MICROPHONE READ FAILED");
             }
             return;
+        }
+        if (capture_.sample_count() >= kMinimumRecordingSamples) {
+            start_network_during_recording();
         }
         if (now_ms - level_refreshed_at_ms_ >= kLevelRefreshMs) {
             level_refreshed_at_ms_ = now_ms;
@@ -976,6 +1216,8 @@ private:
         DeadlineCancellation request_cancellation(
             cancellation_, monotonic_ms(), kInteractionTimeoutMs);
 
+        join_network_warm_worker();
+
         if (!network_initialized_) {
             const esp_err_t network_result = network_.initialize();
             if (network_result != ESP_OK) {
@@ -1002,6 +1244,8 @@ private:
             finish_with_error(error);
             return;
         }
+        timing_.mark(runtime::TurnPhase::network_ready, monotonic_ms());
+        timing_.set_rssi_band(network_.rssi_band());
         show_state(InteractionState::transcribing);
 
         auto &transcript = request_scratch_->transcript;
@@ -1014,8 +1258,10 @@ private:
             AudioCapture::kChannelCount,
             AudioCapture::kBitsPerSample,
         };
+        timing_.mark(runtime::TurnPhase::stt_start, monotonic_ms());
         error = transcription_provider_.transcribe(
             audio, transcript, request_cancellation);
+        timing_.mark(runtime::TurnPhase::stt_finish, monotonic_ms());
         error = request_cancellation.normalize(error);
         capture_.discard();
         if (error != agent::Error::none) {
@@ -1031,41 +1277,72 @@ private:
             ui::show_transcript(
                 {transcript.data(), transcript.size()});
         });
-        if (!cancellable_delay(
-                kTranscriptVisibleMs, request_cancellation)) {
-            finish_with_error(request_cancellation.normalize(
-                agent::Error::cancelled));
-            return;
-        }
 
         auto &answer = request_scratch_->answer;
         answer.clear();
+        request_scratch_->stream_answer.clear();
         stream_text_shown_ = false;
         stream_text_refreshed_at_ms_ = 0;
         SecureTextGuard answer_guard(answer);
+        SecureTextGuard stream_answer_guard(
+            request_scratch_->stream_answer);
+        if (!start_speech_worker(request_cancellation)) {
+            fail("SPEECH PIPELINE COULD NOT START");
+            return;
+        }
         error = agent_loop_->run(
             transcript.data(), transcript.size(), answer,
             request_cancellation);
+        image_tool_.clear_results();
         error = request_cancellation.normalize(error);
         if (error != agent::Error::none) {
-            finish_with_error(error);
+            image_transport_.cancel_active();
+            speech_segmenter_.reset();
+            speech_channel_.discard_pending_and_finish();
+            const agent::Error speech_error = wait_for_speech_worker();
+            (void)speech_error;
+            join_image_worker();
+            image_frame_.reset();
+            if (error == agent::Error::cancelled ||
+                cancellation_.cancelled()) {
+                cancel_current();
+                return;
+            }
+            auto &partial = request_scratch_->stream_answer;
+            if (!partial.empty()) {
+                with_display([&partial]() {
+                    ui::show_answer_notice(
+                        {partial.data(), partial.size()},
+                        "ANSWER INTERRUPTED");
+                });
+                interaction_.interaction_finished(monotonic_ms());
+                previous_state_ = interaction_.state();
+                voice_priority_.store(false, std::memory_order_release);
+                timing_.mark(
+                    runtime::TurnPhase::completion, monotonic_ms());
+                log_turn_timing();
+            } else {
+                finish_with_error(error);
+            }
             return;
         }
+
+        if (!speech_segmenter_.finish(speech_channel_)) {
+            speech_channel_.cancel();
+            const agent::Error speech_error = wait_for_speech_worker();
+            (void)speech_error;
+            fail("SPEECH PIPELINE FAILED");
+            return;
+        }
+        speech_channel_.finish();
 
         with_display([&answer]() {
             ui::show_answer({answer.data(), answer.size()});
         });
-        const std::size_t speech_size =
-            bounded_speech_size(answer.data(), answer.size());
-        if (speech_size == 0) {
-            fail("THE ANSWER COULD NOT BE SPOKEN");
-            return;
-        }
-        SpeechStartSink speech_sink(pcm_sink_, *agent_loop_);
-        error = speech_provider_.speak(
-            answer.data(), speech_size, speech_sink,
-            request_cancellation);
-        error = request_cancellation.normalize(error);
+
+        error = request_cancellation.normalize(wait_for_speech_worker());
+        timing_.mark(runtime::TurnPhase::playback_finish, monotonic_ms());
+        join_image_worker();
         bool speech_failed = false;
         if (error != agent::Error::none) {
             pcm_sink_.cancel_and_stop();
@@ -1086,8 +1363,7 @@ private:
             });
         }
 
-        if (!show_selected_image(request_cancellation) &&
-            cancellation_.cancelled()) {
+        if (cancellation_.cancelled()) {
             cancel_current();
             return;
         }
@@ -1097,6 +1373,9 @@ private:
         if (!speech_failed) {
             show_state(previous_state_);
         }
+        publish_selected_image(image_frame_);
+        timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
+        log_turn_timing();
         voice_priority_.store(false, std::memory_order_release);
         ESP_LOGI(kTag, "Interaction complete; idle timer started");
         ESP_LOGI(
@@ -1105,51 +1384,17 @@ private:
             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
     }
 
-    bool cancellable_delay(
-        std::uint32_t duration_ms,
-        agent::CancellationToken &cancellation) {
-        const std::uint32_t started = monotonic_ms();
-        while (monotonic_ms() - started < duration_ms) {
-            if (cancellation.cancelled()) {
-                return false;
-            }
-            vTaskDelay(pdMS_TO_TICKS(20));
+    void log_turn_timing() {
+        std::array<char, 256> summary{};
+        if (timing_.format_summary(summary.data(), summary.size())) {
+            ESP_LOGI(kTag, "%s", summary.data());
         }
-        return true;
     }
 
-    bool show_selected_image(DeadlineCancellation &cancellation) {
-        agent::ImageResult selected;
-        if (!image_tool_.take_selected_or_first(selected)) {
-            return true;
+    void publish_selected_image(image::Rgb565Frame &frame) {
+        if (!frame.available()) {
+            return;
         }
-
-        ESP_LOGI(kTag, "A bounded image result was selected");
-
-        show_model_progress("GETTING THE IMAGE");
-        image::JpegImageSink sink(cancellation);
-        const agent::ImageFetchRequest request{
-            selected.thumbnail_url.c_str(),
-            agent::Limits::max_image_download_bytes,
-            agent::Limits::max_image_dimension,
-            0,
-            agent::image_fetch_policy(),
-        };
-        agent::Error error = image_fetch_provider_.fetch(
-            request, sink, cancellation);
-        error = cancellation.normalize(error);
-        if (cancellation_.cancelled()) {
-            return false;
-        }
-        if (error != agent::Error::none || !sink.ready()) {
-            ESP_LOGW(
-                kTag,
-                "Optional image was not available (category %u)",
-                static_cast<unsigned>(error));
-            return true;
-        }
-
-        image::Rgb565Frame frame = sink.take_frame();
         bool shown = false;
         with_display([&frame, &shown]() {
             shown = ui::show_fullscreen_image(std::move(frame));
@@ -1159,7 +1404,6 @@ private:
         } else {
             ESP_LOGI(kTag, "The bounded image is on the display");
         }
-        return true;
     }
 
     void finish_with_error(agent::Error error) {
@@ -1177,8 +1421,11 @@ private:
 
     void cancel_current() {
         capture_.discard();
+        speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
         image_tool_.clear_results();
+        selected_image_result_.clear();
+        image_frame_.reset();
         hide_image();
         interaction_.ready(monotonic_ms());
         previous_state_ = interaction_.state();
@@ -1188,8 +1435,11 @@ private:
 
     void fail(const char *message) {
         capture_.discard();
+        speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
         image_tool_.clear_results();
+        selected_image_result_.clear();
+        image_frame_.reset();
         interaction_.fail(monotonic_ms());
         previous_state_ = interaction_.state();
         show_error(message);
@@ -1217,8 +1467,11 @@ private:
         if (network_initialized_) {
             network_.disconnect();
         }
+        reset_transports();
         agent_loop_->clear_thread();
         image_tool_.clear_results();
+        selected_image_result_.clear();
+        image_frame_.reset();
         hide_image();
         show_state(interaction_.state());
         if (!interaction_.button_is_down()) {
@@ -1249,7 +1502,8 @@ private:
         display_sleep_pending_ = display_sleep_result != ESP_OK;
         display_sleep_attempted_at_ms_ = monotonic_ms();
         cancellation_.cancel();
-        transport_.cancel_active();
+        speech_channel_.cancel();
+        cancel_transports();
         capture_.discard();
         pcm_sink_.cancel_and_stop();
         agent_loop_->clear_thread();
@@ -1259,6 +1513,7 @@ private:
             network_.shutdown();
             network_initialized_ = false;
         }
+        reset_transports();
         early_connect_attempted_at_ms_ = 0;
         const std::uint32_t grace_started_ms = monotonic_ms();
         while (monotonic_ms() - grace_started_ms < kPoweroffGraceMs) {
@@ -1320,7 +1575,10 @@ private:
     RuntimeSettings settings_;
     SettingsStore settings_store_;
     network::NetworkManager network_;
-    transport::HttpTransport transport_;
+    transport::HttpTransport openrouter_control_transport_;
+    transport::HttpTransport openrouter_audio_transport_;
+    transport::HttpTransport search_transport_;
+    transport::HttpTransport image_transport_;
     image::HttpImageFetchProvider image_fetch_provider_;
     AudioCapture capture_;
     AudioPlayback playback_;
@@ -1338,12 +1596,28 @@ private:
     agent::AgentLoop *agent_loop_ = nullptr;
     RequestScratch *request_scratch_ = nullptr;
     PcmPlaybackSink pcm_sink_;
+    runtime::SpeechSegmenter speech_segmenter_;
+    runtime::TurnTiming timing_;
+    SpeechSegmentChannel speech_channel_;
+    agent::ImageResult selected_image_result_;
+    image::Rgb565Frame image_frame_;
     InteractionStateMachine interaction_;
     InteractionState previous_state_ = InteractionState::booting;
+    network::NetworkState last_network_state_ =
+        network::NetworkState::off;
     QueueHandle_t command_queue_ = nullptr;
     QueueHandle_t passkey_queue_ = nullptr;
     TaskHandle_t task_ = nullptr;
     TaskHandle_t passkey_task_ = nullptr;
+    TaskHandle_t speech_task_ = nullptr;
+    TaskHandle_t network_warm_task_ = nullptr;
+    TaskHandle_t image_task_ = nullptr;
+    EventGroupHandle_t speech_events_ = nullptr;
+    DeadlineCancellation *speech_cancellation_ = nullptr;
+    DeadlineCancellation *image_cancellation_ = nullptr;
+    std::atomic<agent::Error> speech_result_{agent::Error::model_failed};
+    std::atomic<bool> network_warm_initialized_{false};
+    std::atomic<agent::Error> image_error_{agent::Error::none};
     std::atomic<bool> queue_overflow_{false};
     std::atomic<bool> voice_priority_{false};
     std::atomic<bool> display_available_{true};

@@ -321,6 +321,88 @@ Error build_openrouter_chat_request(
                                                               : Error::malformed_response;
 }
 
+Error build_openrouter_route_request(
+    const OpenRouterConfig &config, const ConversationHistory &history,
+    const ToolRegistry &tools, bool stream, ChatRequestBody &body) {
+    body.clear();
+    if (!valid_config_token(config.chat_model)) return Error::invalid_argument;
+    if (!body.append("{\"model\":") ||
+        !detail::append_json_string(body, config.chat_model) ||
+        !body.append(",\"messages\":[{\"role\":\"system\",\"content\":") ||
+        !detail::append_json_string(body, routing_prompt) ||
+        !body.push_back('}')) {
+        return Error::limit_exceeded;
+    }
+    for (std::size_t index = 0; index < history.size(); ++index) {
+        if (!body.push_back(',') || !append_message(body, history.at(index))) {
+            body.clear();
+            return Error::limit_exceeded;
+        }
+    }
+    if (!body.append(
+            "],\"tools\":[{\"type\":\"function\",\"function\":{"
+            "\"name\":\"answer_direct\","
+            "\"description\":\"Use the model without current or visual data.\","
+            "\"parameters\":{\"type\":\"object\",\"properties\":{},"
+            "\"additionalProperties\":false}}}")) {
+        return Error::limit_exceeded;
+    }
+    for (std::size_t index = 0; index < tools.size(); ++index) {
+        const Tool &tool = tools.at(index);
+        if (!body.append(",{\"type\":\"function\",\"function\":{") ||
+            !append_key(body, "name") ||
+            !detail::append_json_string(body, tool.name()) ||
+            !body.push_back(',') || !append_key(body, "description") ||
+            !detail::append_json_string(body, tool.description()) ||
+            !body.append(",\"parameters\":") ||
+            !body.append(tool.parameters_schema()) || !body.append("}}")) {
+            body.clear();
+            return Error::limit_exceeded;
+        }
+    }
+    if (!body.append(
+            "],\"tool_choice\":\"required\",\"parallel_tool_calls\":false,"
+            "\"reasoning\":{\"effort\":\"none\",\"exclude\":true},"
+            "\"max_tokens\":96,\"temperature\":0,\"stream\":") ||
+        !body.append(stream ? "true}" : "false}")) {
+        body.clear();
+        return Error::limit_exceeded;
+    }
+    return detail::valid_json_value(body.data(), body.size())
+               ? Error::none
+               : Error::malformed_response;
+}
+
+Error build_openrouter_answer_request(
+    const OpenRouterConfig &config, const ConversationHistory &history,
+    bool stream, ChatRequestBody &body) {
+    body.clear();
+    if (!valid_config_token(config.chat_model)) return Error::invalid_argument;
+    if (!body.append("{\"model\":") ||
+        !detail::append_json_string(body, config.chat_model) ||
+        !body.append(",\"messages\":[{\"role\":\"system\",\"content\":") ||
+        !detail::append_json_string(body, answer_prompt) ||
+        !body.push_back('}')) {
+        return Error::limit_exceeded;
+    }
+    for (std::size_t index = 0; index < history.size(); ++index) {
+        if (!body.push_back(',') || !append_message(body, history.at(index))) {
+            body.clear();
+            return Error::limit_exceeded;
+        }
+    }
+    if (!body.append(
+            "],\"reasoning\":{\"effort\":\"none\",\"exclude\":true},"
+            "\"max_tokens\":160,\"temperature\":0.2,\"stream\":") ||
+        !body.append(stream ? "true}" : "false}")) {
+        body.clear();
+        return Error::limit_exceeded;
+    }
+    return detail::valid_json_value(body.data(), body.size())
+               ? Error::none
+               : Error::malformed_response;
+}
+
 Error build_openrouter_transcription_plan(
     const OpenRouterConfig &config, std::size_t audio_file_bytes,
     MultipartTranscriptionPlan &plan) {

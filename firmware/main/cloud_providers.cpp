@@ -8,6 +8,7 @@
 
 #include "chatesp/transport_policy.hpp"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -18,6 +19,7 @@ namespace cloud {
 namespace {
 
 constexpr char kChatPath[] = "/chat/completions";
+constexpr char kTag[] = "cloud_provider";
 constexpr char kTranscriptionPath[] = "/audio/transcriptions";
 constexpr char kSpeechPath[] = "/audio/speech";
 constexpr char kBraveEndpoint[] = "https://api.search.brave.com";
@@ -169,6 +171,10 @@ public:
         if (cancellation_.cancelled()) {
             return agent::Error::cancelled;
         }
+        if (!first_response_byte_ && size != 0) {
+            first_response_byte_ = true;
+            ESP_LOGI(kTag, "Phase event: first model byte");
+        }
         const agent::Error error = parser_.feed(
             reinterpret_cast<const char *>(data), size);
         output_started_ = output_started_ || parser_.output_started();
@@ -202,6 +208,7 @@ private:
     agent::ChatTurn &turn_;
     agent::CancellationToken &cancellation_;
     bool output_started_ = false;
+    bool first_response_byte_ = false;
 };
 
 class WavBodySource final : public transport::BodySource {
@@ -261,6 +268,9 @@ agent::Error execute_with_retry(
                 error, completed, output_started(), request.timeouts)) {
             return error;
         }
+        ESP_LOGI(
+            kTag, "Network retry count: %u",
+            static_cast<unsigned>(completed));
         const std::uint32_t after_attempt_ms = monotonic_ms() - started_ms;
         if (after_attempt_ms >= request.timeouts.total_timeout_ms ||
             request.timeouts.total_timeout_ms - after_attempt_ms <=
@@ -364,6 +374,83 @@ agent::Error OpenRouterChatProvider::complete_streaming(
     const agent::ConversationHistory &history, agent::ChatTurn &turn,
     agent::ChatTextSink &text_sink,
     agent::CancellationToken &cancellation) {
+    return complete_answer_streaming(
+        history, turn, text_sink, cancellation);
+}
+
+agent::Error OpenRouterChatProvider::route_turn(
+    const agent::ConversationHistory &history, agent::TurnRoute &route,
+    agent::CancellationToken &cancellation) {
+    route.clear();
+    agent::ChatTurn turn;
+    agent::Error error = require_network(network_, cancellation);
+    agent::FixedText<agent::Limits::max_url_bytes> url;
+    if (error == agent::Error::none) {
+        error = make_openrouter_url(connection_, kChatPath, url);
+    }
+    PsramObject<agent::ChatRequestBody> body;
+    PsramObject<agent::OpenRouterSseParser> parser;
+    if (error == agent::Error::none &&
+        (body.get() == nullptr || parser.get() == nullptr)) {
+        error = agent::Error::model_failed;
+    }
+    if (error == agent::Error::none) {
+        error = agent::build_openrouter_route_request(
+            connection_.models, history, tools_, true, *body.get());
+    }
+    std::array<char, kAuthorizationBytes> authorization{};
+    if (error == agent::Error::none) {
+        error = provider::build_bearer_header(
+            connection_.api_key, authorization.data(), authorization.size());
+    }
+    if (error == agent::Error::none) {
+        transport::MemoryBodySource body_source(
+            reinterpret_cast<const std::uint8_t *>(body.get()->data()),
+            body.get()->size());
+        ChatSseResponseSink response_sink(*parser.get(), turn, cancellation);
+        transport::HttpRequest request;
+        request.method = transport::HttpMethod::post;
+        request.url = url.c_str();
+        request.headers[0] = {"Authorization", authorization.data()};
+        request.headers[1] = {"Content-Type", kJsonContentType};
+        request.headers[2] = {"Accept", kEventStreamContentType};
+        request.header_count = 3;
+        request.body = &body_source;
+        request.max_request_bytes = transport::max_http_request_bytes;
+        request.response = {
+            kEventStreamTypes, 1, agent::Limits::max_chat_response_bytes};
+        request.timeouts = agent::chat_policy();
+        error = execute_with_retry(
+            transport_, request, response_sink, cancellation,
+            [&response_sink]() { return response_sink.output_started(); });
+    }
+    secure_wipe(authorization.data(), authorization.size());
+    if (error == agent::Error::none) {
+        if (turn.kind != agent::ChatTurnKind::tool_call) {
+            error = agent::Error::malformed_response;
+        } else if (turn.tool_call.name.equals("answer_direct")) {
+            if (!turn.tool_call.arguments.equals("{}")) {
+                error = agent::Error::malformed_response;
+            }
+        } else if (turn.tool_call.name.equals("search_web")) {
+            route.kind = agent::TurnRouteKind::web_search;
+            route.tool_call = turn.tool_call;
+        } else if (turn.tool_call.name.equals("search_images")) {
+            route.kind = agent::TurnRouteKind::image_search;
+            route.tool_call = turn.tool_call;
+        } else if (tools_.find(turn.tool_call.name.c_str()) == nullptr) {
+            error = agent::Error::tool_not_found;
+        } else {
+            error = agent::Error::malformed_response;
+        }
+    }
+    return cancellation.cancelled() ? agent::Error::cancelled : error;
+}
+
+agent::Error OpenRouterChatProvider::complete_answer_streaming(
+    const agent::ConversationHistory &history, agent::ChatTurn &turn,
+    agent::ChatTextSink &text_sink,
+    agent::CancellationToken &cancellation) {
     turn.clear();
     agent::Error error = require_network(network_, cancellation);
     agent::FixedText<agent::Limits::max_url_bytes> url;
@@ -377,8 +464,8 @@ agent::Error OpenRouterChatProvider::complete_streaming(
         error = agent::Error::model_failed;
     }
     if (error == agent::Error::none) {
-        error = agent::build_openrouter_chat_request(
-            connection_.models, history, tools_, true, *body.get());
+        error = agent::build_openrouter_answer_request(
+            connection_.models, history, true, *body.get());
     }
     std::array<char, kAuthorizationBytes> authorization{};
     if (error == agent::Error::none) {
@@ -521,9 +608,76 @@ agent::Error OpenRouterSpeechProvider::speak(
         error = execute_with_retry(
             transport_, request, response_sink, cancellation,
             [&response_sink]() { return response_sink.output_started(); });
+        if (error == agent::Error::none) {
+            error = response_sink.finish_sequence();
+        }
     }
     secure_wipe(authorization.data(), authorization.size());
     secure_wipe(body.data(), body.capacity());
+    return cancellation.cancelled() ? agent::Error::cancelled : error;
+}
+
+agent::Error OpenRouterSpeechProvider::speak_segments(
+    SegmentSource &source, agent::PcmSink &sink,
+    agent::CancellationToken &cancellation) {
+    agent::Error error = require_network(network_, cancellation);
+    agent::FixedText<agent::Limits::max_url_bytes> url;
+    if (error == agent::Error::none) {
+        error = make_openrouter_url(connection_, kSpeechPath, url);
+    }
+    std::array<char, kAuthorizationBytes> authorization{};
+    if (error == agent::Error::none) {
+        error = provider::build_bearer_header(
+            connection_.api_key, authorization.data(), authorization.size());
+    }
+
+    StreamingPcmResponseSink response_sink(sink, cancellation);
+    std::size_t segment_count = 0;
+    while (error == agent::Error::none &&
+           segment_count < agent::Limits::max_tts_segments) {
+        agent::FixedText<agent::Limits::max_tts_segment_bytes> segment;
+        bool done = false;
+        error = source.next(segment, done, cancellation);
+        if (error != agent::Error::none || done) {
+            break;
+        }
+
+        agent::SpeechRequestBody body;
+        error = agent::build_openrouter_speech_request(
+            connection_.models, segment.data(), segment.size(), body);
+        ESP_LOGI(
+            kTag, "Phase event: TTS request %u",
+            static_cast<unsigned>(segment_count + 1));
+        if (error == agent::Error::none) {
+            transport::MemoryBodySource body_source(
+                reinterpret_cast<const std::uint8_t *>(body.data()),
+                body.size());
+            transport::HttpRequest request;
+            request.method = transport::HttpMethod::post;
+            request.url = url.c_str();
+            request.headers[0] = {"Authorization", authorization.data()};
+            request.headers[1] = {"Content-Type", kJsonContentType};
+            request.headers[2] = {"Accept", "audio/pcm"};
+            request.header_count = 3;
+            request.body = &body_source;
+            request.max_request_bytes = transport::max_http_request_bytes;
+            request.response = {
+                kPcmTypes, 1, agent::Limits::max_tts_pcm_bytes};
+            request.timeouts = agent::speech_policy();
+            error = execute_with_retry(
+                transport_, request, response_sink, cancellation,
+                [&response_sink]() {
+                    return response_sink.current_segment_started();
+                });
+        }
+        secure_wipe(body.data(), body.capacity());
+        ++segment_count;
+    }
+    if (error == agent::Error::none) {
+        error = segment_count == 0 ? agent::Error::malformed_response
+                                   : response_sink.finish_sequence();
+    }
+    secure_wipe(authorization.data(), authorization.size());
     return cancellation.cancelled() ? agent::Error::cancelled : error;
 }
 

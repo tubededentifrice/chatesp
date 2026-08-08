@@ -15,6 +15,7 @@ idf_component_register(
         "power_control.cpp"
         "pcm_playback_sink.cpp"
         "settings_store.cpp"
+        "speech_segment_channel.cpp"
         "streaming_pcm_response_sink.cpp"
         "ui.cpp"
         "voice_runtime.cpp"

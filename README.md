@@ -8,9 +8,10 @@ companion for secure BLE configuration.
 
 1. Hold the bottom PWR button and speak.
 2. Release it. The display shows the transcript.
-3. The device gets a concise answer. Text appears as the model sends it. Speech
-   starts after a short buffer on a fast link. A slow link buffers enough audio
-   to keep playback clear.
+3. The device selects a direct, web, or image route. It then gets a concise
+   answer with tools disabled. Text appears as the model sends it. Complete
+   sentences go to speech at once. One playback session joins up to four
+   speech segments in order.
 4. Continue within 30 seconds to use the same thread.
 5. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
    starts a new thread.
@@ -39,7 +40,8 @@ ScrapingDog without a change to the conversation state machine.
 
 The project is in active development. The firmware implements the black
 terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
-Wi-Fi, HTTPS, streamed model text, streamed speech, search, BLE provisioning,
+Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
+parallel image download, search, BLE provisioning,
 and sleep paths. The iOS companion can store settings in Keychain and send them
 over encrypted BLE. A selected, bounded JPEG can appear full-screen after the
 spoken answer.
@@ -105,6 +107,10 @@ request the ESP32-S3 ROM loader when it opens this board:
 ```sh
 uv run --locked python tools/watch_monitor.py --port LOCAL_PORT --duration 10
 ```
+
+Add `--latency-report` to calculate p50 and p90 values from the privacy-safe
+`LATENCY` records. These records contain durations only. They do not contain
+audio, chat text, URLs, credentials, or device identifiers.
 
 Run all PlatformIO commands through `tools/pio.py`. The wrapper checks the
 dependency cooldown first. For the watch build, it also creates the ESP-IDF

@@ -48,6 +48,9 @@ public:
     esp_err_t set_request_active(bool active);
     [[nodiscard]] bool connected() const;
     [[nodiscard]] bool connecting() const;
+    // 0 is unknown, 1 is at least -65 dBm, 2 is -66 through -75 dBm, and 3 is
+    // below -75 dBm. The exact RSSI is never returned to the log path.
+    [[nodiscard]] std::uint8_t rssi_band() const;
 
 private:
     static void event_handler(

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
 
 #include "chatesp/tool_registry.hpp"
 
@@ -12,6 +13,7 @@ enum class AgentProgressEvent : std::uint8_t {
     transcription_complete,
     model_start,
     tool_start,
+    answer_start,
     answer_ready,
     speech_start,
 };
@@ -40,9 +42,10 @@ public:
     void report_speech_start();
     void clear_thread() {
         history_.clear();
+        route_.clear();
         turn_.clear();
         tool_result_.clear();
-        answer_pending_speech_ = false;
+        answer_pending_speech_.store(false, std::memory_order_release);
     }
     [[nodiscard]] const ConversationHistory &history() const {
         return history_;
@@ -56,9 +59,10 @@ private:
     AgentProgressObserver *observer_ = nullptr;
     ChatTextSink *text_sink_ = nullptr;
     ConversationHistory history_;
+    TurnRoute route_;
     ChatTurn turn_;
     FixedText<Limits::max_tool_result_bytes> tool_result_;
-    bool answer_pending_speech_ = false;
+    std::atomic<bool> answer_pending_speech_{false};
 };
 
 }  // namespace agent

@@ -42,6 +42,18 @@ void test_header_validation_rejects_injection() {
     TEST_ASSERT_TRUE(header_allowed_on_redirect("Accept"));
 }
 
+void test_persistent_sessions_are_bound_to_one_https_origin() {
+    TEST_ASSERT_TRUE(same_https_origin(
+        "https://api.example.test/v1/chat",
+        "https://API.example.test:443/v1/audio"));
+    TEST_ASSERT_FALSE(same_https_origin(
+        "https://api.example.test/v1/chat",
+        "https://images.example.test/file.jpg"));
+    TEST_ASSERT_FALSE(same_https_origin(
+        "https://api.example.test/v1/chat",
+        "http://api.example.test/v1/audio"));
+}
+
 void test_transfer_limits_have_absolute_and_request_caps() {
     assert_error(Error::none, validate_transfer_limits(100, 100, 200));
     assert_error(Error::limit_exceeded, validate_transfer_limits(101, 100, 200));
@@ -117,6 +129,7 @@ int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_https_url_rejects_insecure_credentials_fragments_and_controls);
     RUN_TEST(test_header_validation_rejects_injection);
+    RUN_TEST(test_persistent_sessions_are_bound_to_one_https_origin);
     RUN_TEST(test_transfer_limits_have_absolute_and_request_caps);
     RUN_TEST(test_content_type_is_case_insensitive_and_allows_parameters);
     RUN_TEST(test_response_head_checks_status_media_and_declared_size);

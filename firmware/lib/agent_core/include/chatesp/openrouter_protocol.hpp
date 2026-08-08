@@ -28,6 +28,14 @@ Error build_openrouter_chat_request(
     const OpenRouterConfig &config, const ConversationHistory &history,
     const ToolRegistry &tools, bool stream, ChatRequestBody &body);
 
+Error build_openrouter_route_request(
+    const OpenRouterConfig &config, const ConversationHistory &history,
+    const ToolRegistry &tools, bool stream, ChatRequestBody &body);
+
+Error build_openrouter_answer_request(
+    const OpenRouterConfig &config, const ConversationHistory &history,
+    bool stream, ChatRequestBody &body);
+
 Error build_openrouter_transcription_plan(
     const OpenRouterConfig &config, std::size_t audio_file_bytes,
     MultipartTranscriptionPlan &plan);

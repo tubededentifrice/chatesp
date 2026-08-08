@@ -27,6 +27,7 @@ struct ResponsePolicy {
 };
 
 [[nodiscard]] bool valid_https_url(const char *url);
+[[nodiscard]] bool same_https_origin(const char *left, const char *right);
 [[nodiscard]] bool valid_header_name(const char *name);
 [[nodiscard]] bool valid_header_value(const char *value);
 [[nodiscard]] bool header_allowed_on_redirect(const char *name);

@@ -324,10 +324,12 @@ void test_agent_loop_reports_bounded_progress_in_order() {
     loop.report_speech_start();
     loop.report_speech_start();
 
-    const std::array<AgentProgressEvent, 6> expected = {
+    const std::array<AgentProgressEvent, 8> expected = {
         AgentProgressEvent::transcription_complete,
         AgentProgressEvent::model_start,
         AgentProgressEvent::tool_start,
+        AgentProgressEvent::model_start,
+        AgentProgressEvent::answer_start,
         AgentProgressEvent::model_start,
         AgentProgressEvent::answer_ready,
         AgentProgressEvent::speech_start,
@@ -571,7 +573,7 @@ void test_agent_loop_searches_selects_and_then_answers() {
     assert_error(
         Error::none, loop.run("Show Dubai", 10, answer, cancellation));
     TEST_ASSERT_EQUAL_STRING("Here is the image.", answer.c_str());
-    TEST_ASSERT_EQUAL_INT(3, chat.calls);
+    TEST_ASSERT_EQUAL_INT(4, chat.calls);
     TEST_ASSERT_EQUAL_INT(1, provider.calls);
     TEST_ASSERT_EQUAL_UINT32(6, loop.history().size());
 
@@ -598,6 +600,23 @@ void test_openrouter_chat_builder_has_bounded_contract() {
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":160"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"stream\":true"));
     TEST_ASSERT_NULL(std::strstr(body.c_str(), "Authorization"));
+
+    assert_error(
+        Error::none,
+        build_openrouter_route_request(
+            OpenRouterConfig{}, history, registry, true, body));
+    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "answer_direct"));
+    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "search_web"));
+    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"tool_choice\":\"required\""));
+    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":96"));
+
+    assert_error(
+        Error::none,
+        build_openrouter_answer_request(
+            OpenRouterConfig{}, history, true, body));
+    TEST_ASSERT_NULL(std::strstr(body.c_str(), "search_web"));
+    TEST_ASSERT_NULL(std::strstr(body.c_str(), "tool_choice"));
+    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":160"));
 
     OpenRouterConfig invalid;
     invalid.chat_model = "model\r\nbad";

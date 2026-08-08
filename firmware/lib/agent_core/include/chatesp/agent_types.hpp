@@ -91,6 +91,25 @@ struct ChatTurn {
     }
 };
 
+enum class TurnRouteKind : std::uint8_t {
+    direct_answer,
+    web_search,
+    image_search,
+    tool_call,
+};
+
+struct TurnRoute {
+    TurnRouteKind kind = TurnRouteKind::direct_answer;
+    ToolInvocation tool_call;
+
+    void clear() {
+        kind = TurnRouteKind::direct_answer;
+        tool_call.id.clear();
+        tool_call.name.clear();
+        tool_call.arguments.clear();
+    }
+};
+
 struct WebResult {
     FixedText<Limits::max_title_bytes> title;
     FixedText<Limits::max_url_bytes> url;

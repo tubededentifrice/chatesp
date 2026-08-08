@@ -43,9 +43,13 @@ public:
         const std::uint8_t *data, std::size_t size) override;
     agent::Error finish() override;
     void abort() override;
+    agent::Error finish_sequence();
 
     [[nodiscard]] bool output_started() const {
         return output_started_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] bool current_segment_started() const {
+        return output_started();
     }
 
 private:
@@ -57,6 +61,7 @@ private:
     void stop_and_cleanup();
     bool lock();
     void unlock();
+    agent::Error start_session();
 
     static constexpr EventBits_t kDataReadyBit = BIT0;
     static constexpr EventBits_t kSpaceReadyBit = BIT1;
@@ -73,11 +78,15 @@ private:
     EventGroupHandle_t events_ = nullptr;
     TaskHandle_t task_ = nullptr;
     std::size_t total_bytes_ = 0;
+    std::size_t response_bytes_ = 0;
+    std::int64_t response_length_ = -1;
     agent::Error worker_result_ = agent::Error::none;
     bool producer_done_ = false;
     bool stop_requested_ = false;
     bool worker_done_ = false;
     bool session_active_ = false;
+    bool response_active_ = false;
+    bool first_response_complete_ = false;
     std::atomic<bool> output_started_{false};
 };
 

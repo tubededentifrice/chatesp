@@ -70,6 +70,32 @@ public:
         return text_sink.write_chat_text(
             turn.answer.data(), turn.answer.size());
     }
+
+    // Routing is complete before final answer text can reach a speech sink.
+    // Providers can override this method with a short required-tool request.
+    virtual Error route_turn(
+        const ConversationHistory &history, TurnRoute &route,
+        CancellationToken &cancellation) {
+        ChatTurn turn;
+        const Error error = complete(history, turn, cancellation);
+        if (error != Error::none || cancellation.cancelled()) {
+            return cancellation.cancelled() ? Error::cancelled : error;
+        }
+        route.clear();
+        if (turn.kind == ChatTurnKind::tool_call) {
+            route.kind = TurnRouteKind::tool_call;
+            route.tool_call = turn.tool_call;
+        }
+        return Error::none;
+    }
+
+    // This request must not permit tool calls. Every published byte is final
+    // answer text and is safe to send to the sentence speech pipeline.
+    virtual Error complete_answer_streaming(
+        const ConversationHistory &history, ChatTurn &turn,
+        ChatTextSink &text_sink, CancellationToken &cancellation) {
+        return complete_streaming(history, turn, text_sink, cancellation);
+    }
 };
 
 class TranscriptionProvider {
@@ -87,6 +113,38 @@ public:
     virtual Error speak(
         const char *text, std::size_t size, PcmSink &sink,
         CancellationToken &cancellation) = 0;
+
+    class SegmentSource {
+    public:
+        virtual ~SegmentSource() = default;
+        virtual Error next(
+            FixedText<Limits::max_tts_segment_bytes> &segment, bool &done,
+            CancellationToken &cancellation) = 0;
+    };
+
+    // The production provider keeps one playback session open for all
+    // segments. This fallback keeps test providers source-compatible.
+    virtual Error speak_segments(
+        SegmentSource &source, PcmSink &sink,
+        CancellationToken &cancellation) {
+        FixedText<Limits::max_tts_segment_bytes> segment;
+        for (std::size_t count = 0; count < Limits::max_tts_segments;
+             ++count) {
+            bool done = false;
+            Error error = source.next(segment, done, cancellation);
+            if (error != Error::none || done) {
+                return error;
+            }
+            error = speak(
+                segment.data(), segment.size(), sink, cancellation);
+            if (error != Error::none) {
+                return error;
+            }
+        }
+        bool done = false;
+        const Error error = source.next(segment, done, cancellation);
+        return error == Error::none && !done ? Error::limit_exceeded : error;
+    }
 };
 
 class WebSearchProvider {

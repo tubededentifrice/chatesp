@@ -79,5 +79,24 @@ std::size_t ByteRing::read(
     return provided;
 }
 
+bool ByteRing::unwrite(std::size_t size) {
+    if (storage_ == nullptr || capacity_ == 0 || size > size_) {
+        return false;
+    }
+    const std::size_t new_write_at =
+        (write_at_ + capacity_ - (size % capacity_)) % capacity_;
+    const std::size_t first = std::min(size, capacity_ - new_write_at);
+    if (first != 0) {
+        secure_wipe(storage_ + new_write_at, first);
+    }
+    const std::size_t second = size - first;
+    if (second != 0) {
+        secure_wipe(storage_, second);
+    }
+    write_at_ = new_write_at;
+    size_ -= size;
+    return true;
+}
+
 }  // namespace runtime
 }  // namespace chatesp

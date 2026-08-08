@@ -16,6 +16,7 @@ public:
         const std::uint8_t *data, std::size_t size);
     [[nodiscard]] std::size_t read(
         std::uint8_t *output, std::size_t capacity);
+    [[nodiscard]] bool unwrite(std::size_t size);
 
     [[nodiscard]] std::size_t size() const { return size_; }
     [[nodiscard]] std::size_t free_size() const { return capacity_ - size_; }

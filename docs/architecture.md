@@ -35,8 +35,9 @@ When settings are available, the Wi-Fi station starts an asynchronous
 connection as soon as the runtime starts. This does not block the button or
 microphone path. A request waits for that connection or starts a bounded retry
 if the early attempt did not finish. If the device starts with the PWR button
-held, microphone capture starts first and Wi-Fi starts after release. This
-keeps radio setup out of the first audio reads.
+held, microphone capture starts first. After 100 ms of audio arrives, a
+low-priority worker starts Wi-Fi while capture continues. The capture task does
+not run Wi-Fi setup.
 
 The station scans all 2.4 GHz channels and selects the strongest matching
 access point. It rejects access points below -75 dBm and retries the strongest
@@ -48,18 +49,38 @@ timer so that a test result stays visible. Sleep stops the station. This gives
 later requests in the same session a fast path without keeping the radio active
 after the display turns off.
 
-OpenRouter sends model text as an event stream. The UI receives bounded copies
+Each turn first uses a short required-tool route. The route is direct answer,
+web search, or image search. Image search still needs a separate model-selected
+result ID. After routing and tool work, the final model request has no tools.
+OpenRouter sends that answer as an event stream. The UI receives bounded copies
 of the complete answer so far. It limits display updates to keep the button and
-network paths responsive. Tool-call data does not go to the answer view. Only
-the final validated answer enters chat history.
+network paths responsive. Tool-call data cannot enter the answer or speech
+path. Only the final validated answer enters chat history.
 
-Speech PCM goes into a bounded PSRAM ring sized to the declared response or the
-2.16 MB response cap. After a 9,600-byte sample, playback starts early only
-when ingress has safe headroom above the 48,000-byte-per-second playback rate.
-A slow response buffers completely to prevent codec underrun noise. HTTPS and
-codec writes run on separate tasks. A button press cancels both tasks. An abort
-stops playback and erases buffered audio. The provider does not retry after
-playback starts.
+The answer stream forms a segment at a question mark, exclamation mark,
+newline, or safe period. After 96 bytes, a comma, semicolon, or colon is also a
+safe boundary. A 160-byte hard limit splits at a complete UTF-8 word. The
+speech path accepts at most four segments and 640 bytes. It wipes each segment
+after use.
+
+One TTS worker sends each complete segment to OpenRouter in FIFO order. One
+playback task and codec session stay active for the full sequence. PCM goes
+into one bounded 2.16 MB PSRAM ring. After a 9,600-byte sample, playback starts
+early only when ingress has safe headroom above the 48,000-byte-per-second
+playback rate. A slow first segment buffers completely. The next TTS request
+can fill the ring while prior PCM plays. A response can retry only before PCM
+playback starts. A button press cancels model, search, image, TTS, and playback
+work and erases transient buffers.
+
+HTTPS uses four bounded lanes: OpenRouter control, OpenRouter audio, Brave
+search, and optional image download. Each lane keeps one client handle for one
+HTTPS origin. Settings changes, Wi-Fi disconnect, sleep, cancellation, or a
+transport error closes the handle. Request headers are removed before the next
+request, and no authorization header can move to another origin.
+
+The optional image worker starts after the model selects a current image ID.
+It downloads and decodes on a lower-priority task while final model text and
+speech continue. The device publishes the image only after speech ends.
 
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
@@ -113,9 +134,9 @@ To show an image, the model must first search and then select one result by its
 current ID. The firmware does not accept a URL from the model. A new search
 removes the old result set, and a selection can be used only once.
 
-After it shows and speaks the text answer, the device can get the selected
-Brave thumbnail from the trusted `imgs.search.brave.com` proxy. It does not
-send a credential with this request and it does not follow a redirect. The
+After model selection, the device can get the selected Brave thumbnail from
+the trusted `imgs.search.brave.com` proxy. It does not send a credential with
+this request and it does not follow a redirect. The
 download has a 768 KiB limit and a 20-second provider limit inside the full
 180-second interaction limit.
 
@@ -138,4 +159,6 @@ reports the applied revision and fingerprint. Device settings use encrypted
 NVS. The production profile uses the ESP32-S3 HMAC NVS security provider. Its
 first start can create the HMAC key in the configured eFuse key block. The
 development profile keeps BLE settings in memory and does not make this eFuse
-change. Logs show only redacted error categories.
+change. Logs show only redacted error categories. Turn timing records contain
+phase durations and bounded counters only. They do not contain text, audio,
+URLs, credentials, stable identifiers, or precise location.

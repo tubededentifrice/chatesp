@@ -408,6 +408,20 @@ bool NetworkManager::connecting() const {
     return initialized_ && state() == NetworkState::connecting;
 }
 
+std::uint8_t NetworkManager::rssi_band() const {
+    if (!connected()) {
+        return 0;
+    }
+    wifi_ap_record_t access_point{};
+    if (esp_wifi_sta_get_ap_info(&access_point) != ESP_OK) {
+        return 0;
+    }
+    if (access_point.rssi >= -65) {
+        return 1;
+    }
+    return access_point.rssi >= -75 ? 2 : 3;
+}
+
 void NetworkManager::event_handler(
     void *argument, esp_event_base_t event_base, std::int32_t event_id,
     void *event_data) {

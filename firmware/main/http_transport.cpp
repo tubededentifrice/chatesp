@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "esp_crt_bundle.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 
 namespace chatesp {
@@ -12,12 +13,6 @@ namespace transport {
 namespace {
 
 constexpr std::size_t kTransferBufferBytes = 2'048;
-
-struct ResponseHeaders {
-    agent::FixedText<96> content_type;
-    agent::FixedText<max_http_url_bytes> location;
-    bool invalid = false;
-};
 
 std::uint32_t monotonic_ms() {
     return static_cast<std::uint32_t>(esp_timer_get_time() / 1'000ULL);
@@ -36,24 +31,6 @@ bool text_equal_fold(const char *left, const char *right) {
         }
     }
     return *left == '\0' && *right == '\0';
-}
-
-esp_err_t capture_header(esp_http_client_event_t *event) {
-    if (event == nullptr || event->event_id != HTTP_EVENT_ON_HEADER ||
-        event->user_data == nullptr) {
-        return ESP_OK;
-    }
-    auto &headers = *static_cast<ResponseHeaders *>(event->user_data);
-    if (text_equal_fold(event->header_key, "Content-Type")) {
-        if (!headers.content_type.assign(event->header_value)) {
-            headers.invalid = true;
-        }
-    } else if (text_equal_fold(event->header_key, "Location")) {
-        if (!headers.location.assign(event->header_value)) {
-            headers.invalid = true;
-        }
-    }
-    return ESP_OK;
 }
 
 agent::Error map_esp_error(esp_err_t error, bool received_headers) {
@@ -137,11 +114,141 @@ int phase_timeout(
     return static_cast<int>(selected > INT_MAX ? INT_MAX : selected);
 }
 
+bool extract_origin(
+    const char *url, agent::FixedText<max_http_url_bytes> &origin) {
+    origin.clear();
+    if (url == nullptr || std::strncmp(url, "https://", 8) != 0) {
+        return false;
+    }
+    std::size_t size = 8;
+    while (url[size] != '\0' && url[size] != '/' &&
+           size <= max_http_url_bytes) {
+        ++size;
+    }
+    return size > 8 && size <= max_http_url_bytes && origin.assign(url, size);
+}
+
 }  // namespace
+
+HttpTransport::~HttpTransport() { reset_session(); }
+
+esp_err_t HttpTransport::capture_header(esp_http_client_event_t *event) {
+    if (event == nullptr || event->event_id != HTTP_EVENT_ON_HEADER ||
+        event->user_data == nullptr) {
+        return ESP_OK;
+    }
+    auto &headers = *static_cast<ResponseHeaders *>(event->user_data);
+    if (text_equal_fold(event->header_key, "Content-Type")) {
+        if (!headers.content_type.assign(event->header_value)) {
+            headers.invalid = true;
+        }
+    } else if (text_equal_fold(event->header_key, "Location")) {
+        if (!headers.location.assign(event->header_value)) {
+            headers.invalid = true;
+        }
+    }
+    return ESP_OK;
+}
+
+bool HttpTransport::prepare_client(
+    const HttpRequest &request, const char *url,
+    const agent::RequestPolicy &timeouts,
+    const ElapsedTimer &total_timer) {
+    agent::FixedText<max_http_url_bytes> next_origin;
+    if (!extract_origin(url, next_origin)) {
+        return false;
+    }
+    bool reused_client = client_ != nullptr;
+    if (client_ != nullptr &&
+        !same_https_origin(origin_.c_str(), next_origin.c_str())) {
+        close_client();
+        reused_client = false;
+    }
+    response_headers_.clear();
+    if (client_ == nullptr) {
+        esp_http_client_config_t config{};
+        config.url = url;
+        config.auth_type = HTTP_AUTH_TYPE_NONE;
+        config.user_agent = "ChatESP/0.1";
+        config.method = request.method == HttpMethod::get ? HTTP_METHOD_GET
+                                                          : HTTP_METHOD_POST;
+        config.timeout_ms = phase_timeout(
+            total_timer, timeouts.total_timeout_ms,
+            timeouts.connect_timeout_ms);
+        config.disable_auto_redirect = true;
+        config.max_authorization_retries = -1;
+        config.event_handler = capture_header;
+        config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+        config.buffer_size = static_cast<int>(kTransferBufferBytes);
+        config.buffer_size_tx = static_cast<int>(kTransferBufferBytes);
+        config.user_data = &response_headers_;
+        config.crt_bundle_attach = esp_crt_bundle_attach;
+        client_ = esp_http_client_init(&config);
+        if (client_ == nullptr || !origin_.assign(next_origin.c_str())) {
+            close_client();
+            return false;
+        }
+    } else if (
+        esp_http_client_set_url(client_, url) != ESP_OK ||
+        esp_http_client_set_method(
+            client_, request.method == HttpMethod::get ? HTTP_METHOD_GET
+                                                       : HTTP_METHOD_POST) !=
+            ESP_OK ||
+        esp_http_client_set_timeout_ms(
+            client_,
+            phase_timeout(
+                total_timer, timeouts.total_timeout_ms,
+                timeouts.connect_timeout_ms)) != ESP_OK) {
+        close_client();
+        return false;
+    }
+    clear_request_headers();
+    ESP_LOGI(
+        "http_transport", "HTTPS connection reuse: %u",
+        static_cast<unsigned>(reused_client));
+    for (std::size_t index = 0; index < request.header_count; ++index) {
+        if (esp_http_client_set_header(
+                client_, request.headers[index].name,
+                request.headers[index].value) != ESP_OK ||
+            !applied_header_names_[applied_header_count_].assign(
+                request.headers[index].name)) {
+            close_client();
+            return false;
+        }
+        ++applied_header_count_;
+    }
+    return true;
+}
+
+void HttpTransport::clear_request_headers() {
+    if (client_ != nullptr) {
+        for (std::size_t index = 0; index < applied_header_count_; ++index) {
+            esp_http_client_delete_header(
+                client_, applied_header_names_[index].c_str());
+            applied_header_names_[index].clear();
+        }
+    }
+    applied_header_count_ = 0;
+}
+
+void HttpTransport::close_client() {
+    if (client_ != nullptr) {
+        esp_http_client_close(client_);
+        esp_http_client_cleanup(client_);
+        client_ = nullptr;
+    }
+    response_headers_.clear();
+    origin_.clear();
+    for (auto &name : applied_header_names_) {
+        name.clear();
+    }
+    applied_header_count_ = 0;
+}
 
 agent::Error HttpTransport::execute(
     const HttpRequest &request, ResponseSink &sink,
     agent::CancellationToken &cancellation) {
+    std::lock_guard<std::mutex> request_lock(request_mutex_);
     agent::Error result = validate_request(request);
     if (result != agent::Error::none) {
         return result;
@@ -149,6 +256,7 @@ agent::Error HttpTransport::execute(
     const ElapsedTimer total_timer{monotonic_ms()};
     const std::size_t body_size =
         request.body == nullptr ? 0 : request.body->size();
+    std::size_t response_bytes = 0;
     agent::FixedText<max_http_url_bytes> current_url;
     if (!current_url.assign(request.url)) {
         return agent::Error::limit_exceeded;
@@ -160,40 +268,13 @@ agent::Error HttpTransport::execute(
             return result;
         }
 
-        ResponseHeaders response_headers;
-        esp_http_client_config_t config{};
-        config.url = current_url.c_str();
-        config.auth_type = HTTP_AUTH_TYPE_NONE;
-        config.user_agent = "ChatESP/0.1";
-        config.method = request.method == HttpMethod::get ? HTTP_METHOD_GET
-                                                          : HTTP_METHOD_POST;
-        config.timeout_ms = phase_timeout(
-            total_timer, request.timeouts.total_timeout_ms,
-            request.timeouts.connect_timeout_ms);
-        config.disable_auto_redirect = true;
-        config.max_authorization_retries = -1;
-        config.event_handler = capture_header;
-        config.transport_type = HTTP_TRANSPORT_OVER_SSL;
-        config.buffer_size = static_cast<int>(kTransferBufferBytes);
-        config.buffer_size_tx = static_cast<int>(kTransferBufferBytes);
-        config.user_data = &response_headers;
-        config.crt_bundle_attach = esp_crt_bundle_attach;
-        esp_http_client_handle_t client = esp_http_client_init(&config);
-        if (client == nullptr) {
+        if (!prepare_client(
+                request, current_url.c_str(), request.timeouts, total_timer)) {
             return agent::Error::disconnected;
         }
         {
             std::lock_guard<std::mutex> lock(active_mutex_);
-            active_ = client;
-        }
-
-        for (std::size_t index = 0; index < request.header_count; ++index) {
-            if (esp_http_client_set_header(
-                    client, request.headers[index].name,
-                    request.headers[index].value) != ESP_OK) {
-                result = agent::Error::invalid_argument;
-                break;
-            }
+            active_ = client_;
         }
 
         if (result == agent::Error::none && request.body != nullptr) {
@@ -202,7 +283,7 @@ agent::Error HttpTransport::execute(
         if (result == agent::Error::none) {
             result = map_esp_error(
                 esp_http_client_open(
-                    client,
+                    client_,
                     request.body == nullptr
                         ? 0
                         : static_cast<int>(body_size)),
@@ -234,7 +315,7 @@ agent::Error HttpTransport::execute(
                         break;
                     }
                     const int written = esp_http_client_write(
-                        client,
+                        client_,
                         reinterpret_cast<const char *>(buffer.data()) +
                             chunk_sent,
                         static_cast<int>(read_size - chunk_sent));
@@ -250,46 +331,46 @@ agent::Error HttpTransport::execute(
 
         if (result == agent::Error::none) {
             esp_http_client_set_timeout_ms(
-                client,
+                client_,
                 phase_timeout(
                     total_timer, request.timeouts.total_timeout_ms,
                     request.timeouts.first_byte_timeout_ms));
-            const std::int64_t fetched = esp_http_client_fetch_headers(client);
+            const std::int64_t fetched = esp_http_client_fetch_headers(client_);
             if (fetched < 0) {
                 result = fetched == -ESP_ERR_HTTP_EAGAIN
                              ? agent::Error::first_byte_timeout
                              : agent::Error::disconnected;
-            } else if (response_headers.invalid) {
+            } else if (response_headers_.invalid) {
                 result = agent::Error::limit_exceeded;
             }
         }
 
-        const int status = esp_http_client_get_status_code(client);
+        const int status = esp_http_client_get_status_code(client_);
         const std::int64_t content_length =
-            esp_http_client_get_content_length(client);
+            esp_http_client_get_content_length(client_);
         const bool redirect =
             result == agent::Error::none && is_redirect_status(status);
         if (redirect) {
             if (!request.allow_image_redirects ||
                 redirect_count >= request.max_redirects ||
-                !valid_https_url(response_headers.location.c_str()) ||
-                !current_url.assign(response_headers.location.c_str())) {
+                !valid_https_url(response_headers_.location.c_str()) ||
+                !current_url.assign(response_headers_.location.c_str())) {
                 result = agent::Error::malformed_response;
             }
         } else if (result == agent::Error::none) {
             result = validate_response_head(
-                status, response_headers.content_type.c_str(), content_length,
+                status, response_headers_.content_type.c_str(), content_length,
                 request.response);
         }
 
         if (!redirect && result == agent::Error::none) {
             bool output_started = false;
             result = sink.begin(
-                status, response_headers.content_type.c_str(), content_length);
+                status, response_headers_.content_type.c_str(), content_length);
             output_started = result == agent::Error::none;
             ResponseBudget budget{request.response.max_response_bytes};
             esp_http_client_set_timeout_ms(
-                client,
+                client_,
                 phase_timeout(
                     total_timer, request.timeouts.total_timeout_ms,
                     request.timeouts.idle_timeout_ms));
@@ -300,12 +381,12 @@ agent::Error HttpTransport::execute(
                     break;
                 }
                 const int read = esp_http_client_read(
-                    client, reinterpret_cast<char *>(buffer.data()),
+                    client_, reinterpret_cast<char *>(buffer.data()),
                     static_cast<int>(buffer.size()));
                 if (read == 0) {
                     result = validate_response_completion(
                         content_length, budget.used(),
-                        esp_http_client_is_complete_data_received(client));
+                        esp_http_client_is_complete_data_received(client_));
                     break;
                 }
                 if (read < 0) {
@@ -324,6 +405,7 @@ agent::Error HttpTransport::execute(
             if (result == agent::Error::none) {
                 result = sink.finish();
             }
+            response_bytes = budget.used();
             if (output_started && result != agent::Error::none) {
                 sink.abort();
             }
@@ -332,15 +414,28 @@ agent::Error HttpTransport::execute(
         {
             std::lock_guard<std::mutex> lock(active_mutex_);
             active_ = nullptr;
-            esp_http_client_close(client);
-            esp_http_client_cleanup(client);
         }
 
         if (redirect && result == agent::Error::none) {
+            close_client();
             continue;
         }
+        if (result != agent::Error::none || cancellation.cancelled()) {
+            close_client();
+        }
+        ESP_LOGI(
+            "http_transport",
+            "HTTPS byte counts: request=%u response=%u",
+            static_cast<unsigned>(body_size),
+            static_cast<unsigned>(response_bytes));
         return cancellation.cancelled() ? agent::Error::cancelled : result;
     }
+}
+
+void HttpTransport::reset_session() {
+    std::lock_guard<std::mutex> request_lock(request_mutex_);
+    std::lock_guard<std::mutex> active_lock(active_mutex_);
+    close_client();
 }
 
 void HttpTransport::cancel_active() {

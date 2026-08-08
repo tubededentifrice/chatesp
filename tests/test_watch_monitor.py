@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from tools.watch_monitor import (
+    LatencySummary,
     SerialRedactor,
     open_safe_serial,
     redact_serial_text,
@@ -65,6 +66,21 @@ class WatchMonitorTests(unittest.TestCase):
         self.assertNotIn("private-tail", first + second)
         self.assertEqual(second, "next ip: [redacted address]\n")
         self.assertEqual(redactor.finish(), "")
+
+    def test_latency_summary_calculates_p50_and_p90(self) -> None:
+        summary = LatencySummary()
+        for value in range(1, 11):
+            summary.add_line(
+                f"I voice_runtime: LATENCY first_audio_ms={value * 100} "
+                f"turn_ms={value * 200}"
+            )
+        summary.add_line("private answer text must not be parsed")
+
+        report = summary.report()
+
+        self.assertIn("first_audio_ms: n=10 p50=500 p90=900", report)
+        self.assertIn("turn_ms: n=10 p50=1000 p90=1800", report)
+        self.assertNotIn("private answer", report)
 
 if __name__ == "__main__":
     unittest.main()

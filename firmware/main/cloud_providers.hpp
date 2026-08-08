@@ -40,6 +40,13 @@ public:
         const agent::ConversationHistory &history, agent::ChatTurn &turn,
         agent::ChatTextSink &text_sink,
         agent::CancellationToken &cancellation) override;
+    agent::Error route_turn(
+        const agent::ConversationHistory &history, agent::TurnRoute &route,
+        agent::CancellationToken &cancellation) override;
+    agent::Error complete_answer_streaming(
+        const agent::ConversationHistory &history, agent::ChatTurn &turn,
+        agent::ChatTextSink &text_sink,
+        agent::CancellationToken &cancellation) override;
     void set_connection(const OpenRouterConnectionView &connection) {
         connection_ = connection;
     }
@@ -86,6 +93,9 @@ public:
 
     agent::Error speak(
         const char *text, std::size_t size, agent::PcmSink &sink,
+        agent::CancellationToken &cancellation) override;
+    agent::Error speak_segments(
+        SegmentSource &source, agent::PcmSink &sink,
         agent::CancellationToken &cancellation) override;
     void set_connection(const OpenRouterConnectionView &connection) {
         connection_ = connection;

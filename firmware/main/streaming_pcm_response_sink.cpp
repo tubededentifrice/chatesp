@@ -48,7 +48,6 @@ StreamingPcmResponseSink::~StreamingPcmResponseSink() {
 
 agent::Error StreamingPcmResponseSink::begin(
     int status, const char *content_type, std::int64_t content_length) {
-    stop_and_cleanup();
     const agent::Error status_error = transport::map_http_status(status);
     if (status_error != agent::Error::none) {
         return status_error;
@@ -68,9 +67,27 @@ agent::Error StreamingPcmResponseSink::begin(
         return agent::Error::cancelled;
     }
 
-    buffer_capacity_ = content_length > 0
-        ? static_cast<std::size_t>(content_length)
-        : kMaximumBufferBytes;
+    if (!session_active_) {
+        const agent::Error start_error = start_session();
+        if (start_error != agent::Error::none) {
+            return start_error;
+        }
+    }
+    if (response_active_ || producer_done_ ||
+        (content_length > 0 &&
+         static_cast<std::size_t>(content_length) >
+             kMaximumBufferBytes - total_bytes_)) {
+        return agent::Error::limit_exceeded;
+    }
+    response_active_ = true;
+    response_bytes_ = 0;
+    response_length_ = content_length;
+    return agent::Error::none;
+}
+
+agent::Error StreamingPcmResponseSink::start_session() {
+    stop_and_cleanup();
+    buffer_capacity_ = kMaximumBufferBytes;
     storage_ = static_cast<std::uint8_t *>(heap_caps_malloc(
         buffer_capacity_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     playback_chunk_ = static_cast<std::uint8_t *>(heap_caps_malloc(
@@ -90,6 +107,10 @@ agent::Error StreamingPcmResponseSink::begin(
     stop_requested_ = false;
     worker_done_ = false;
     start_policy_.reset();
+    response_bytes_ = 0;
+    response_length_ = -1;
+    response_active_ = false;
+    first_response_complete_ = false;
     session_active_ = true;
     const BaseType_t created = xTaskCreatePinnedToCore(
         playback_task_entry, "tts_playback", kPlaybackStackBytes, this,
@@ -104,7 +125,8 @@ agent::Error StreamingPcmResponseSink::begin(
 
 agent::Error StreamingPcmResponseSink::write(
     const std::uint8_t *data, std::size_t size) {
-    if (!session_active_ || (size != 0 && data == nullptr)) {
+    if (!session_active_ || !response_active_ ||
+        (size != 0 && data == nullptr)) {
         return agent::Error::invalid_argument;
     }
     if (size > agent::Limits::max_tts_pcm_bytes - total_bytes_) {
@@ -134,7 +156,11 @@ agent::Error StreamingPcmResponseSink::write(
         bool policy_decided = false;
         bool streams_early = false;
         if (accepted != 0) {
+            if (total_bytes_ == 0) {
+                ESP_LOGI(kTag, "Phase event: first PCM byte");
+            }
             total_bytes_ += accepted;
+            response_bytes_ += accepted;
             const bool was_decided = start_policy_.decided();
             start_policy_.observe(total_bytes_, monotonic_ms());
             policy_decided = !was_decided && start_policy_.decided();
@@ -166,13 +192,27 @@ agent::Error StreamingPcmResponseSink::write(
 }
 
 agent::Error StreamingPcmResponseSink::finish() {
-    if (!session_active_) {
+    if (!session_active_ || !response_active_) {
         return agent::Error::invalid_argument;
     }
-    if (total_bytes_ == 0 || total_bytes_ % 2 != 0) {
+    if (response_bytes_ == 0 || response_bytes_ % 2 != 0 ||
+        (response_length_ >= 0 &&
+         response_bytes_ != static_cast<std::size_t>(response_length_))) {
+        return agent::Error::malformed_response;
+    }
+    if (!lock()) {
         request_stop();
-        const agent::Error ignored = wait_for_worker(kWorkerStopTimeoutMs);
-        (void)ignored;
+        return agent::Error::model_failed;
+    }
+    response_active_ = false;
+    first_response_complete_ = true;
+    unlock();
+    xEventGroupSetBits(events_, kDataReadyBit);
+    return agent::Error::none;
+}
+
+agent::Error StreamingPcmResponseSink::finish_sequence() {
+    if (!session_active_ || response_active_ || !first_response_complete_) {
         stop_and_cleanup();
         return agent::Error::malformed_response;
     }
@@ -197,7 +237,28 @@ agent::Error StreamingPcmResponseSink::finish() {
 }
 
 void StreamingPcmResponseSink::abort() {
-    stop_and_cleanup();
+    if (!session_active_) {
+        return;
+    }
+    // A retry can replace a response only before playback starts. Once PCM is
+    // audible, stop the sequence so the listener cannot hear duplicate data.
+    if (response_active_ && !output_started() && lock()) {
+        const bool removed = ring_.unwrite(response_bytes_);
+        if (removed) {
+            total_bytes_ -= response_bytes_;
+            response_bytes_ = 0;
+            response_length_ = -1;
+            response_active_ = false;
+            if (!first_response_complete_) {
+                start_policy_.reset();
+            }
+        }
+        unlock();
+        if (removed) {
+            return;
+        }
+    }
+    request_stop();
 }
 
 void StreamingPcmResponseSink::playback_task_entry(void *context) {
@@ -218,7 +279,7 @@ void StreamingPcmResponseSink::playback_task() {
         const bool stop = stop_requested_ || cancellation_.cancelled();
         const bool producer_done = producer_done_;
         const runtime::PcmStartDecision start_decision =
-            start_policy_.decision(producer_done);
+            start_policy_.decision(first_response_complete_);
         const bool ready_to_start = !output_open &&
             available != 0 &&
             start_decision != runtime::PcmStartDecision::wait;
@@ -379,12 +440,17 @@ void StreamingPcmResponseSink::stop_and_cleanup() {
     }
     task_ = nullptr;
     total_bytes_ = 0;
+    response_bytes_ = 0;
+    response_length_ = -1;
     buffer_capacity_ = 0;
     start_policy_.reset();
     producer_done_ = false;
     stop_requested_ = false;
     worker_done_ = false;
     session_active_ = false;
+    response_active_ = false;
+    first_response_complete_ = false;
+    output_started_.store(false, std::memory_order_release);
 }
 
 bool StreamingPcmResponseSink::lock() {

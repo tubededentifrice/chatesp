@@ -114,6 +114,44 @@ bool valid_https_url(const char *url) {
     return true;
 }
 
+bool same_https_origin(const char *left, const char *right) {
+    if (!valid_https_url(left) || !valid_https_url(right)) {
+        return false;
+    }
+    constexpr std::size_t prefix_size = sizeof("https://") - 1;
+    const char *left_authority = left + prefix_size;
+    const char *right_authority = right + prefix_size;
+    const char *left_end = std::strpbrk(left_authority, "/?");
+    const char *right_end = std::strpbrk(right_authority, "/?");
+    if (left_end == nullptr) {
+        left_end = left + std::strlen(left);
+    }
+    if (right_end == nullptr) {
+        right_end = right + std::strlen(right);
+    }
+    if (left_end - left_authority >= 4 &&
+        std::memcmp(left_end - 4, ":443", 4) == 0) {
+        left_end -= 4;
+    }
+    if (right_end - right_authority >= 4 &&
+        std::memcmp(right_end - 4, ":443", 4) == 0) {
+        right_end -= 4;
+    }
+    const std::size_t left_size =
+        static_cast<std::size_t>(left_end - left_authority);
+    const std::size_t right_size =
+        static_cast<std::size_t>(right_end - right_authority);
+    if (left_size != right_size) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left_size; ++index) {
+        if (!ascii_equal_fold(left_authority[index], right_authority[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool valid_header_name(const char *name) {
     if (name == nullptr) {
         return false;

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 import time
@@ -28,6 +29,37 @@ _CONNECTED_NETWORK = re.compile(r"(?i)(connected with )([^,\r\n]+)")
 _SSID_VALUE = re.compile(
     r"(?i)((?<![a-z0-9_])ssid[ \t]*[:=][ \t]*)([^,\r\n]+)"
 )
+_LATENCY_FIELD = re.compile(r"\b([a-z_]+_ms)=([0-9]+)\b")
+
+
+class LatencySummary:
+    """Collect privacy-safe latency fields and calculate p50 and p90."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, list[int]] = {}
+
+    def add_line(self, line: str) -> None:
+        if "LATENCY " not in line:
+            return
+        for name, value in _LATENCY_FIELD.findall(line):
+            self._values.setdefault(name, []).append(int(value))
+
+    @staticmethod
+    def _percentile(values: list[int], percentile: float) -> int:
+        ordered = sorted(values)
+        index = max(0, math.ceil(percentile * len(ordered)) - 1)
+        return ordered[index]
+
+    def report(self) -> str:
+        lines = ["Latency summary (milliseconds):"]
+        for name in sorted(self._values):
+            values = self._values[name]
+            lines.append(
+                f"{name}: n={len(values)} "
+                f"p50={self._percentile(values, 0.50)} "
+                f"p90={self._percentile(values, 0.90)}"
+            )
+        return "\n".join(lines) if self._values else "No latency events found."
 
 
 def redact_serial_text(text: str) -> str:
@@ -88,9 +120,12 @@ def open_safe_serial(
     return connection
 
 
-def monitor(port: str, duration_seconds: float) -> int:
+def monitor(
+    port: str, duration_seconds: float, *, latency_report: bool = False
+) -> int:
     connection = open_safe_serial(port)
     redactor = SerialRedactor()
+    latency = LatencySummary()
     try:
         deadline = time.monotonic() + duration_seconds
         while time.monotonic() < deadline:
@@ -98,14 +133,19 @@ def monitor(port: str, duration_seconds: float) -> int:
             if data:
                 output = redactor.feed(data.decode("utf-8", errors="replace"))
                 if output:
+                    for line in output.splitlines():
+                        latency.add_line(line)
                     sys.stdout.write(output)
                     sys.stdout.flush()
     finally:
         output = redactor.finish()
         if output:
+            latency.add_line(output)
             sys.stdout.write(output)
             sys.stdout.flush()
         connection.close()
+    if latency_report:
+        print(latency.report())
     return 0
 
 
@@ -115,6 +155,11 @@ def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--port", required=True, help="Local watch serial port")
     parser.add_argument("--duration", type=float, default=10.0)
+    parser.add_argument(
+        "--latency-report",
+        action="store_true",
+        help="Print p50 and p90 for privacy-safe LATENCY fields.",
+    )
     return parser.parse_args(arguments)
 
 
@@ -123,7 +168,9 @@ def main(arguments: list[str] | None = None) -> int:
     if args.duration <= 0:
         print("The duration must be greater than zero.", file=sys.stderr)
         return 2
-    return monitor(args.port, args.duration)
+    return monitor(
+        args.port, args.duration, latency_report=args.latency_report
+    )
 
 
 if __name__ == "__main__":
