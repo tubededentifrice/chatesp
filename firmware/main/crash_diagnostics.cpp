@@ -49,6 +49,18 @@ const char *event_name(runtime::CrashEvent event) {
             return "network_context_complete";
         case Event::ble_passkey_begin: return "ble_passkey_begin";
         case Event::ble_passkey_complete: return "ble_passkey_complete";
+        case Event::ble_connected: return "ble_connected";
+        case Event::ble_secure: return "ble_secure";
+        case Event::ble_disconnected: return "ble_disconnected";
+        case Event::settings_transfer_begin: return "settings_transfer_begin";
+        case Event::settings_packet_complete:
+            return "settings_packet_complete";
+        case Event::settings_ack_waiting: return "settings_ack_waiting";
+        case Event::settings_ack_sent: return "settings_ack_sent";
+        case Event::settings_ack_confirmed: return "settings_ack_confirmed";
+        case Event::settings_ack_failed: return "settings_ack_failed";
+        case Event::settings_apply_begin: return "settings_apply_begin";
+        case Event::settings_apply_complete: return "settings_apply_complete";
         case Event::soft_sleep_begin: return "soft_sleep_begin";
         case Event::poweroff_begin: return "poweroff_begin";
     }

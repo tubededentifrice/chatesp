@@ -342,6 +342,15 @@ Facts and memory frames must not enter logs.
 The device sends one 44-byte indication after it processes a complete packet.
 A GATT write response is not provisioning success.
 
+The acknowledgement, device-context, and memory characteristics share the one
+ATT indication transaction that is available on a connection. The firmware
+queues one bounded settings or context acknowledgement when a memory indication
+is in progress. It sends the settings acknowledgement first after the earlier
+indication completes. It does not discard an acknowledgement because the ATT
+transaction is busy. The runtime does not apply new settings or change Wi-Fi
+state until the phone confirms a successful settings indication. An immediate
+send failure leaves the bounded response queued for the phone's transfer retry.
+
 | Offset | Size | Value |
 | --- | ---: | --- |
 | 0 | 4 | ASCII `CESA` |

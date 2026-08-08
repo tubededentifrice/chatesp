@@ -2205,6 +2205,11 @@ private:
     }
 
     void refresh_settings() {
+        // Keep the current radio state until the phone confirms the settings
+        // indication. A Wi-Fi reconnect must not interrupt that confirmation.
+        if (ble_provisioning::settings_confirmation_pending()) {
+            return;
+        }
         const provisioning::StoredVersion version =
             settings_store_.stored_version();
         if (!version.present || version.revision == applied_revision_) {
@@ -2214,6 +2219,7 @@ private:
         if (!settings_store_.read(&record) || !settings_.load(record)) {
             return;
         }
+        crash_diagnostics::mark(runtime::CrashEvent::settings_apply_begin);
         applied_revision_ = version.revision;
         openrouter_connection_ = settings_.openrouter();
         brave_key_ = settings_.brave();
@@ -2247,6 +2253,7 @@ private:
             app_mode_.load(std::memory_order_acquire) == AppMode::chat) {
             start_network_early(true);
         }
+        crash_diagnostics::mark(runtime::CrashEvent::settings_apply_complete);
     }
 
     void enter_sleep() {

@@ -269,6 +269,9 @@ visible splash or ready view.
 - Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
   the station connects.
 - Verify encrypted BLE provisioning and acknowledgement with a physical iPhone.
+- Verify that automatic memory loading and a settings transfer can start on the
+  same connection, that the settings acknowledgement arrives, and that the
+  device does not reset while it applies the new radio settings.
 - Verify cold-start memory persistence, full-list automatic compaction,
   user-requested compaction, and rollback after an injected NVS failure.
 - Verify secure BLE rejection, one-fact paging, revision conflicts, retry
