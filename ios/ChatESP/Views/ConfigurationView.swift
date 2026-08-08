@@ -16,9 +16,6 @@ struct ConfigurationView: View {
                     } label: {
                         Label("Edit global settings", systemImage: "slider.horizontal.3")
                     }
-                    Text("Each ChatESP device inherits these values unless you add an override on its page.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
 
                 Section("ChatESP Devices") {
@@ -32,28 +29,26 @@ struct ConfigurationView: View {
                                 deviceID: device.id,
                                 modelCatalog: modelCatalog)
                         } label: {
-                            VStack(alignment: .leading, spacing: 3) {
+                            HStack(alignment: .firstTextBaseline) {
                                 Text(device.name)
+                                    .lineLimit(1)
+                                Spacer()
                                 Text(deviceStatus(device.id))
                                     .font(.caption)
-                                    .foregroundStyle(
-                                        provisioner.selectedID == device.id &&
-                                            provisioner.isDeviceConnected
-                                            ? .green : .secondary)
+                                    .multilineTextAlignment(.trailing)
+                                    .foregroundStyle(deviceStatusColor(device.id))
                             }
                         }
                     }
 
-                    Button("Find a ChatESP Device", systemImage: "plus.circle") {
+                    Button("Add a new device", systemImage: "plus.circle") {
                         showingDiscovery = true
                     }
                     .disabled(provisioner.isProvisioning)
                 }
 
-                Section {
-                    Text(provisioner.phase.text)
-                        .foregroundStyle(.secondary)
-                    if let error = store.errorText {
+                if let error = store.errorText {
+                    Section("Needs Attention") {
                         Text(error).foregroundStyle(.red)
                     }
                 }
@@ -156,7 +151,24 @@ struct ConfigurationView: View {
 
     private func deviceStatus(_ id: UUID) -> String {
         guard provisioner.selectedID == id else { return "Not connected" }
-        return provisioner.isDeviceConnected ? "Connected" : "Connecting"
+        switch provisioner.phase {
+        case .failed(let message):
+            return message
+        case .pairing, .transferring, .waitingForConfirmation:
+            return provisioner.phase.text
+        case .scanning, .connecting:
+            return provisioner.phase.text
+        default:
+            return provisioner.isDeviceConnected
+                ? "Connected"
+                : "Connecting"
+        }
+    }
+
+    private func deviceStatusColor(_ id: UUID) -> Color {
+        guard provisioner.selectedID == id else { return .secondary }
+        if case .failed = provisioner.phase { return .red }
+        return provisioner.isDeviceConnected ? .green : .secondary
     }
 }
 
@@ -182,7 +194,7 @@ private struct DeviceDiscoveryView: View {
                 }
                 ForEach(provisioner.discoveredDevices) { device in
                     Button {
-                        store.addDevice(id: device.id, suggestedName: device.name)
+                        store.addDevice(id: device.id)
                         provisioner.select(device)
                         dismiss()
                     } label: {
@@ -198,7 +210,7 @@ private struct DeviceDiscoveryView: View {
                     }
                 }
             }
-            .navigationTitle("Add a ChatESP Device")
+            .navigationTitle("Add a new device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -270,12 +282,8 @@ private struct DeviceSettingsView: View {
                 deviceID: deviceID,
                 modelCatalog: modelCatalog)
             memorySection
-            Section {
-                Button("Remove ChatESP Device", role: .destructive) {
-                    confirmRemove = true
-                }
-            }
             statusSection
+            removeSection
         }
         .navigationTitle(device?.name ?? "ChatESP Device")
         .navigationBarTitleDisplayMode(.inline)
@@ -290,21 +298,6 @@ private struct DeviceSettingsView: View {
             }
         } message: {
             Text("This deletes all saved facts from this ChatESP device.")
-        }
-        .confirmationDialog(
-            "Remove this ChatESP device?",
-            isPresented: $confirmRemove,
-            titleVisibility: .visible
-        ) {
-            Button("Remove ChatESP Device", role: .destructive) {
-                if provisioner.selectedID == deviceID {
-                    provisioner.forgetSelectedDevice()
-                }
-                store.removeDevice(id: deviceID)
-                dismiss()
-            }
-        } message: {
-            Text("The global settings stay available. You can add this ChatESP device again later.")
         }
     }
 
@@ -424,6 +417,29 @@ private struct DeviceSettingsView: View {
             Text("Memories")
         } footer: {
             Text("Facts are stored in plaintext on the ChatESP device. It sends them to the configured chat model with each request.")
+        }
+    }
+
+    private var removeSection: some View {
+        Section {
+            Button("Remove ChatESP Device", role: .destructive) {
+                confirmRemove = true
+            }
+            .confirmationDialog(
+                "Remove this ChatESP device?",
+                isPresented: $confirmRemove,
+                titleVisibility: .visible
+            ) {
+                Button("Remove ChatESP Device", role: .destructive) {
+                    if provisioner.selectedID == deviceID {
+                        provisioner.forgetSelectedDevice()
+                    }
+                    store.removeDevice(id: deviceID)
+                    dismiss()
+                }
+            } message: {
+                Text("The global settings stay available. You can add this ChatESP device again later.")
+            }
         }
     }
 

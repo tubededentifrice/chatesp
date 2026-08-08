@@ -57,6 +57,7 @@ struct BLEProvisionerPolicy {
     static let connectionTimeout: TimeInterval = 10
     static let frameTimeout: TimeInterval = 10
     static let deviceContextInterval: TimeInterval = 3_600
+    static let reconnectScanTimeout: TimeInterval = 10
     static let reconnectDelays: [TimeInterval] = [2, 4, 8, 16]
 
     static func canStartProvisioning(hasPendingRequest: Bool) -> Bool {
@@ -78,6 +79,15 @@ struct BLEProvisionerPolicy {
     static func reconnectDelay(attempt: Int) -> TimeInterval? {
         guard reconnectDelays.indices.contains(attempt) else { return nil }
         return reconnectDelays[attempt]
+    }
+
+    static func shouldReconnect(
+        selectedID: UUID?,
+        desiredID: UUID?,
+        discoveredID: UUID,
+        connected: Bool
+    ) -> Bool {
+        !connected && selectedID == discoveredID && desiredID == discoveredID
     }
 
     static func transferTimeoutAction(
@@ -166,6 +176,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var freshLocationWaitWork: DispatchWorkItem?
     private var waitingForFreshLocation = false
     private var reconnectWork: DispatchWorkItem?
+    private var reconnectScanTimeoutWork: DispatchWorkItem?
     private var reconnectAttempt = 0
     private var memoryRevision: UInt32 = 0
     private var memoryFingerprint = Data(repeating: 0, count: 32)
@@ -196,6 +207,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         deviceContextTimeoutWork?.cancel()
         freshLocationWaitWork?.cancel()
         reconnectWork?.cancel()
+        reconnectScanTimeoutWork?.cancel()
         memoryTimeoutWork?.cancel()
         locationManager.stopMonitoringSignificantLocationChanges()
     }
@@ -215,6 +227,10 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func startScan() {
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        reconnectScanTimeoutWork?.cancel()
+        reconnectScanTimeoutWork = nil
         scanTimeoutWork?.cancel()
         scanWhenReady = false
         discoveredDevices = []
@@ -229,6 +245,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
             self.central.stopScan()
             if self.phase == .scanning {
                 self.phase = .idle
+            }
+            if self.selected != nil, !self.isDeviceConnected {
+                self.scheduleReconnect()
             }
         }
         scanTimeoutWork = work
@@ -276,7 +295,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 }
             } else {
                 isDeviceConnected = false
-                if reconnectWork == nil {
+                if reconnectWork == nil,
+                   reconnectScanTimeoutWork == nil {
+                    reconnectAttempt = 0
                     connectSelected()
                 }
             }
@@ -299,6 +320,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
         scanTimeoutWork = nil
         reconnectWork?.cancel()
         reconnectWork = nil
+        reconnectScanTimeoutWork?.cancel()
+        reconnectScanTimeoutWork = nil
         connectionTimeoutWork?.cancel()
         connectionTimeoutWork = nil
         contextTimer?.invalidate()
@@ -343,6 +366,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
         scanTimeoutWork = nil
         reconnectWork?.cancel()
         reconnectWork = nil
+        reconnectScanTimeoutWork?.cancel()
+        reconnectScanTimeoutWork = nil
         connectionTimeoutWork?.cancel()
         connectionTimeoutWork = nil
         let oldSelection = selected
@@ -871,6 +896,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
 
     private func scheduleReconnect() {
         guard reconnectWork == nil,
+              reconnectScanTimeoutWork == nil,
               pendingPacket == nil,
               let selected,
               let delay = BLEProvisionerPolicy.reconnectDelay(
@@ -889,7 +915,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
                   self.isSelected(selected),
                   self.central.state == .poweredOn,
                   selected.state == .disconnected else { return }
-            self.connectSelected()
+            self.startReconnectScan()
         }
         reconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -935,6 +961,31 @@ final class BLEProvisioner: NSObject, ObservableObject {
         connectionTimeoutWork = work
         DispatchQueue.main.asyncAfter(
             deadline: .now() + BLEProvisionerPolicy.connectionTimeout,
+            execute: work)
+    }
+
+    private func startReconnectScan() {
+        guard let selected, isSelected(selected),
+              central.state == .poweredOn,
+              selected.state == .disconnected else {
+            scheduleReconnect()
+            return
+        }
+        phase = .connecting
+        central.scanForPeripherals(
+            withServices: [Self.service],
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        let work = DispatchWorkItem { [weak self, weak selected] in
+            guard let self else { return }
+            self.reconnectScanTimeoutWork = nil
+            guard let selected, self.isSelected(selected),
+                  !self.isDeviceConnected else { return }
+            self.central.stopScan()
+            self.scheduleReconnect()
+        }
+        reconnectScanTimeoutWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + BLEProvisionerPolicy.reconnectScanTimeout,
             execute: work)
     }
 
@@ -1046,6 +1097,10 @@ final class BLEProvisioner: NSObject, ObservableObject {
         if shouldSendContext {
             sendDeviceContext()
         }
+        if !isDeviceConnected, selected != nil,
+           central.state == .poweredOn {
+            scheduleReconnect()
+        }
     }
 }
 
@@ -1078,6 +1133,8 @@ extension BLEProvisioner: CBCentralManagerDelegate {
                 self.connectionTimeoutWork = nil
                 self.reconnectWork?.cancel()
                 self.reconnectWork = nil
+                self.reconnectScanTimeoutWork?.cancel()
+                self.reconnectScanTimeoutWork = nil
                 self.isDeviceConnected = false
                 self.clearMemoryConnectionState()
                 self.resetDeviceContextTransfer()
@@ -1122,6 +1179,26 @@ extension BLEProvisioner: CBCentralManagerDelegate {
             self.discoveredDevices = self.discovered.values
                 .map { DiscoveredDevice(peripheral: $0, name: $0.name ?? "ChatESP") }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            if self.reconnectScanTimeoutWork != nil,
+               BLEProvisionerPolicy.shouldReconnect(
+                selectedID: self.selectedID,
+                desiredID: self.desiredSelectedID,
+                discoveredID: peripheral.identifier,
+                connected: self.isDeviceConnected
+            ) {
+                self.reconnectScanTimeoutWork?.cancel()
+                self.reconnectScanTimeoutWork = nil
+                self.scanTimeoutWork?.cancel()
+                self.scanTimeoutWork = nil
+                central.stopScan()
+                if self.selected !== peripheral {
+                    self.selected?.delegate = nil
+                    self.selected = peripheral
+                }
+                peripheral.delegate = self
+                self.connectSelected()
+                return
+            }
             if self.selected == nil,
                self.desiredSelectedID == peripheral.identifier {
                 self.select(peripheral, notifySelectionChange: false)
@@ -1139,6 +1216,8 @@ extension BLEProvisioner: CBCentralManagerDelegate {
             }
             self.reconnectWork?.cancel()
             self.reconnectWork = nil
+            self.reconnectScanTimeoutWork?.cancel()
+            self.reconnectScanTimeoutWork = nil
             self.connectionTimeoutWork?.cancel()
             self.connectionTimeoutWork = nil
             self.reconnectAttempt = 0

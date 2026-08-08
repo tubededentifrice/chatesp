@@ -94,18 +94,13 @@ final class ConfigurationStore: ObservableObject {
         settings(for: deviceID)?.validationIssues ?? []
     }
 
-    func addDevice(id: UUID, suggestedName: String) {
+    func addDevice(id: UUID) {
         var next = preferences
-        if let index = next.devices.firstIndex(where: { $0.id == id }) {
-            if next.devices[index].name == "ChatESP",
-               let name = Self.validName(suggestedName) {
-                next.devices[index].name = name
-            }
-        } else {
+        if !next.devices.contains(where: { $0.id == id }) {
             next.devices.append(
                 ChatESPDeviceRecord(
                     id: id,
-                    name: Self.validName(suggestedName) ?? "ChatESP"))
+                    name: "ChatESP"))
         }
         next.activeDeviceIdentifier = id
         savePreferences(next)

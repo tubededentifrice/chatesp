@@ -38,8 +38,10 @@ write can cause the system pairing prompt.
 The ChatESP device can stop BLE after a voice recording to release internal memory for
 the cloud TLS request. This closes an active phone connection. The ChatESP device starts
 advertising again when it returns to idle. The iOS app must treat this as a
-normal, recoverable disconnect. It must not report a completed settings write
-unless it received the application acknowledgement before the disconnect.
+normal, recoverable disconnect. A bounded reconnect retry scans for the saved
+Core Bluetooth identifier before it starts a new connection. It must not
+report a completed settings write unless it received the application
+acknowledgement before the disconnect.
 
 One transfer contains one complete settings packet. The maximum packet size is
 1,024 bytes. iOS sends one control frame and then ordered data frames. It waits
@@ -169,12 +171,12 @@ is not recovery metadata. This rule prevents a response from old firmware from
 being used as active metadata.
 
 The iOS app keeps one non-secret device record for each added Core Bluetooth
-identifier. Each record has a user-visible name, non-secret overrides, and its
-own acknowledged and pending revision state. The same versioned preferences
-record contains the global non-secret values, all device records, and the
-active-device identifier. A prior single-device record migrates to this form.
-Credentials stay in Keychain. Keychain contains the global secret values and
-optional secret overrides for each device.
+identifier. Each new record has the default user-visible name `ChatESP`,
+non-secret overrides, and its own acknowledged and pending revision state. The
+same versioned preferences record contains the global non-secret values, all
+device records, and the active-device identifier. A prior single-device record
+migrates to this form. Credentials stay in Keychain. Keychain contains the
+global secret values and optional secret overrides for each device.
 
 The app saves each field edit to its local store at once. It does not validate
 the complete settings packet before it saves another field. The app combines

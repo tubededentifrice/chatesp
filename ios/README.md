@@ -10,8 +10,10 @@ global values, device records, overrides, active-device selection, and
 per-device provisioning revisions in one versioned preferences record. The
 app can migrate the prior single-device record. It restores the active
 ChatESP device after iOS restarts it for Bluetooth work. Scan, connect,
-reconnect, frame, and confirmation operations have fixed time limits. Remove a
-device from its settings page to stop its BLE work and delete its overrides.
+reconnect-scan, frame, and confirmation operations have fixed time limits. A
+reconnect retry scans for the saved Core Bluetooth identifier before it starts
+a new connection. Remove a device from the last row of its settings page to
+stop its BLE work and delete its overrides.
 The app does not send settings after a Keychain read error. It retries the read
 when the app becomes active.
 
@@ -23,9 +25,12 @@ English and French voices that the firmware uses. The catalog request has
 fixed time and response-size limits. An invalid partial key does not block the
 public model catalog.
 
-The app opens device discovery in a separate Add page. It does not keep a
-second nearby-device section on the main page. A device page contains settings,
-memories, and one status section. It has no manual provisioning controls.
+The app opens device discovery in a separate Add page. A new record has the
+default name `ChatESP`. The main device list shows each connection status on
+the same row as its device. It does not keep a second nearby-device section on
+the main page. A device page contains settings, memories, and one status
+section. The remove row is last and owns its confirmation dialog. The page has
+no manual provisioning controls.
 
 The app automatically sends one atomic settings packet over the authenticated
 and encrypted BLE service after connection or a settings change. Empty Wi-Fi,

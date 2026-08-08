@@ -51,10 +51,40 @@ final class BLEProvisionerPolicyTests: XCTestCase {
 
     func testScanAndReconnectOperationsHaveFixedBounds() {
         XCTAssertEqual(BLEProvisionerPolicy.scanTimeout, 10)
+        XCTAssertEqual(BLEProvisionerPolicy.reconnectScanTimeout, 10)
         XCTAssertEqual(BLEProvisionerPolicy.reconnectDelays, [2, 4, 8, 16])
         XCTAssertNil(
             BLEProvisionerPolicy.reconnectDelay(
                 attempt: BLEProvisionerPolicy.reconnectDelays.count))
+    }
+
+    func testReconnectAcceptsOnlyTheSelectedDeviceAdvertisement() {
+        let selected = UUID()
+
+        XCTAssertTrue(
+            BLEProvisionerPolicy.shouldReconnect(
+                selectedID: selected,
+                desiredID: selected,
+                discoveredID: selected,
+                connected: false))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.shouldReconnect(
+                selectedID: selected,
+                desiredID: selected,
+                discoveredID: UUID(),
+                connected: false))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.shouldReconnect(
+                selectedID: selected,
+                desiredID: nil,
+                discoveredID: selected,
+                connected: false))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.shouldReconnect(
+                selectedID: selected,
+                desiredID: selected,
+                discoveredID: selected,
+                connected: true))
     }
 
     func testEachTransferFrameHasADeadline() {
