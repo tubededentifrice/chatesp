@@ -1,0 +1,11 @@
+# Synthetic data only. The command output never contains these text values.
+ready
+wifi online
+battery 84
+action down
+advance 350
+action up
+transcript What is two plus two?
+answer Four.
+finish
+status
