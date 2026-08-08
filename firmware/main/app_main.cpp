@@ -2,6 +2,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "chatesp/app_mode.hpp"
+#include "crash_diagnostics.hpp"
 #include "device_write_policy.hpp"
 #include "device_memory_store.hpp"
 #include "device_preferences_store.hpp"
@@ -42,6 +43,7 @@ void request_failure_sleep() {
 }  // namespace
 
 extern "C" void app_main() {
+    chatesp::crash_diagnostics::initialize();
     ESP_LOGI(
         kTag,
         "Starting application in %s mode",
@@ -51,6 +53,8 @@ extern "C" void app_main() {
         ESP_LOGE(kTag, "Power button start failed");
         return;
     }
+    chatesp::crash_diagnostics::mark(
+        chatesp::runtime::CrashEvent::power_ready);
     const bool startup_button_down =
         chatesp::power::action_button_is_pressed();
     const std::uint32_t startup_button_at_ms = monotonic_ms();
@@ -84,6 +88,8 @@ extern "C" void app_main() {
         kTag,
         "Display ready at %u percent",
         static_cast<unsigned>(device_preferences.brightness_percent));
+    chatesp::crash_diagnostics::mark(
+        chatesp::runtime::CrashEvent::display_ready);
 
     static chatesp::VoiceRuntime runtime;
     const esp_err_t runtime_result = runtime.start(
@@ -114,6 +120,8 @@ extern "C" void app_main() {
         }
     }
     ESP_LOGI(kTag, "Voice runtime ready");
+    chatesp::crash_diagnostics::mark(
+        chatesp::runtime::CrashEvent::runtime_ready);
     ESP_LOGI(
         kTag,
         "Main stack minimum free bytes: %u",

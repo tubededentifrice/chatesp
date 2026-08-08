@@ -8,9 +8,11 @@
 #include "chatesp/ble_shutdown.hpp"
 #include "chatesp/provisioning_session.hpp"
 #include "chatesp/runtime_control.hpp"
+#include "crash_diagnostics.hpp"
 #include "device_memory_store.hpp"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_task_wdt.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
@@ -686,6 +688,7 @@ esp_err_t stop_host() {
         return ESP_OK;
     }
     if (s_shutdown.step() == runtime::BleShutdown::Step::stop_host) {
+        crash_diagnostics::mark(runtime::CrashEvent::ble_host_stop_begin);
         const int advertisement_stop_result = ble_gap_adv_stop();
         if (nimble_port_stop() != 0) {
             if (advertisement_stop_result == 0) {
@@ -693,17 +696,23 @@ esp_err_t stop_host() {
             }
             return ESP_FAIL;
         }
+        crash_diagnostics::mark(runtime::CrashEvent::ble_host_stop_complete);
+        crash_diagnostics::mark(runtime::CrashEvent::ble_store_capture_begin);
         if (!capture_volatile_store()) {
             ESP_LOGE(kLogTag, "Could not retain the volatile BLE bond store");
         }
+        crash_diagnostics::mark(
+            runtime::CrashEvent::ble_store_capture_complete);
         s_shutdown.host_stopped();
     }
     if (s_shutdown.step() ==
         runtime::BleShutdown::Step::deinitialize_host) {
+        crash_diagnostics::mark(runtime::CrashEvent::ble_deinit_begin);
         const esp_err_t deinit_result = nimble_port_deinit();
         if (deinit_result != ESP_OK) {
             return deinit_result;
         }
+        crash_diagnostics::mark(runtime::CrashEvent::ble_deinit_complete);
         s_shutdown.host_deinitialized();
     }
     if (s_memory_store != nullptr) {
@@ -733,7 +742,17 @@ esp_err_t stop_host() {
 }
 
 void stop_task(void *) {
-    s_stop_result.store(stop_host(), std::memory_order_release);
+    crash_diagnostics::mark(runtime::CrashEvent::ble_stop_task_start);
+    const bool watchdog_active = esp_task_wdt_add(nullptr) == ESP_OK;
+    const esp_err_t result = stop_host();
+    crash_diagnostics::mark(runtime::CrashEvent::ble_stop_complete);
+    ESP_LOGI(
+        kLogTag, "BLE stop stack minimum free bytes: %u",
+        static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    if (watchdog_active) {
+        (void)esp_task_wdt_delete(nullptr);
+    }
+    s_stop_result.store(result, std::memory_order_release);
     s_stop_gate.complete();
     if (s_stop_done != nullptr) {
         xSemaphoreGive(s_stop_done);
@@ -1124,6 +1143,7 @@ esp_err_t stop(std::uint32_t timeout_ms) {
         if (!s_stop_gate.begin()) {
             return ESP_ERR_INVALID_STATE;
         }
+        crash_diagnostics::mark(runtime::CrashEvent::ble_stop_requested);
         const BaseType_t task_result = xTaskCreate(
             stop_task, "ble_stop", kStopTaskStackBytes, nullptr,
             kStopTaskPriority, nullptr);
