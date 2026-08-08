@@ -608,7 +608,8 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertTrue(speech.supports(.speech))
         XCTAssertEqual(speech.preferredVoice(for: .english), "Zephyr")
         XCTAssertEqual(speech.preferredVoice(for: .french), "Zephyr")
-        XCTAssertEqual(speech.pricingSummary, "Input $1/M · Output $20/M")
+        XCTAssertEqual(speech.pricingSummary, "In $1/M · Out $20/M")
+        XCTAssertEqual(chat.pricingSummary, "Not listed")
         XCTAssertFalse(chat.supports(.transcription))
         XCTAssertFalse(transcription.supports(.speech))
     }

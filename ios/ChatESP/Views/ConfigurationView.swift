@@ -889,12 +889,7 @@ private struct ModelBrowserView: View {
                                             .foregroundStyle(.green)
                                     }
                                 }
-                                Text(model.id)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                Text(model.pricingSummary)
-                                    .font(.caption)
-                                    .foregroundStyle(.blue)
+                                ModelIDPriceRow(model: model)
                                 if purpose == .speech {
                                     Text("\(model.supportedVoices.count) voices")
                                         .font(.caption)
@@ -937,6 +932,27 @@ private struct ModelBrowserView: View {
     }
 }
 
+private struct ModelIDPriceRow: View {
+    let model: OpenRouterModel
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(model.id)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            Text(model.pricingSummary)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.blue)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .layoutPriority(1)
+        }
+    }
+}
+
 private struct VoiceBrowserView: View {
     let language: SpeechVoiceLanguage
     let modelID: String
@@ -948,11 +964,10 @@ private struct VoiceBrowserView: View {
     var body: some View {
         List {
             Section("Text-to-Speech Model") {
-                Text(modelID).font(.caption.monospaced())
                 if let model {
-                    Text(model.pricingSummary)
-                        .font(.caption)
-                        .foregroundStyle(.blue)
+                    ModelIDPriceRow(model: model)
+                } else {
+                    Text(modelID).font(.caption.monospaced())
                 }
             }
             if catalog.isLoading && model == nil {

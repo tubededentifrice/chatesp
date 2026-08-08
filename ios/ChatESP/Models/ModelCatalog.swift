@@ -161,27 +161,27 @@ struct OpenRouterModel: Decodable, Equatable, Identifiable {
     }
 
     var pricingSummary: String {
-        guard let pricing else { return "Pricing not listed" }
+        guard let pricing else { return "Not listed" }
         var parts: [String] = []
         if let prompt = Self.perMillionPrice(pricing.prompt) {
-            parts.append("Input \(prompt)/M")
+            parts.append("In \(prompt)/M")
         }
         if let completion = Self.perMillionPrice(pricing.completion) {
-            parts.append("Output \(completion)/M")
+            parts.append("Out \(completion)/M")
         }
         if let request = Self.unitPrice(pricing.request), request != "$0" {
-            parts.append("Request \(request)")
+            parts.append("Req \(request)")
         }
         if let image = Self.unitPrice(pricing.image), image != "$0" {
-            parts.append("Image \(image)")
+            parts.append("Img \(image)")
         }
         if let search = Self.unitPrice(pricing.webSearch), search != "$0" {
             parts.append("Search \(search)")
         }
-        if parts == ["Input $0/M", "Output $0/M"] {
+        if parts == ["In $0/M", "Out $0/M"] {
             return "Free"
         }
-        return parts.isEmpty ? "Pricing not listed" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "Not listed" : parts.joined(separator: " · ")
     }
 
     private static func voice(
