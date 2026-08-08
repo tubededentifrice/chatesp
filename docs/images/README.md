@@ -13,5 +13,6 @@ Apache License 2.0. See
 ## `chatesp-interface-states.webp`
 
 This file is a rendered copy of `chatesp-ui-states.svg`. The source uses the
-display sizes, positions, text, colors, control geometry, and Clock digit
-geometry from `firmware/main/ui.cpp`.
+display sizes, positions, text, colors, control geometry, and Clock type from
+`firmware/main/ui.cpp`. The listening view also uses the same 18
+frequency-bar positions, rounded bars, and peak markers.

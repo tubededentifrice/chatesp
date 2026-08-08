@@ -4,6 +4,7 @@ idf_component_register(
         "audio_capture.cpp"
         "audio_playback.cpp"
         "ble_provisioning.cpp"
+        "chatesp_clock_font_180.c"
         "chatesp_font_18.c"
         "cloud_providers.cpp"
         "device_control.cpp"

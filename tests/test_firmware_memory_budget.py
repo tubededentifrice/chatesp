@@ -34,6 +34,19 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
             runtime.index("command_queue_ = xQueueCreate"),
         )
 
+    def test_passkey_ui_has_stack_for_a_synchronous_display_refresh(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("kPasskeyStackBytes = 8 * 1024", runtime)
+        passkey_task = runtime[
+            runtime.index("const BaseType_t passkey_task_result") : runtime.index(
+                "if (passkey_task_result != pdPASS)"
+            )
+        ]
+        self.assertIn("kPasskeyStackBytes", passkey_task)
+
     def test_ble_memory_is_released_before_transcription(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"

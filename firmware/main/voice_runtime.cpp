@@ -82,7 +82,7 @@ static_assert(
 constexpr UBaseType_t kRuntimePriority = 5;
 constexpr std::uint32_t kRuntimeStackBytes = 32 * 1024;
 constexpr UBaseType_t kPasskeyPriority = 6;
-constexpr std::uint32_t kPasskeyStackBytes = 4 * 1024;
+constexpr std::uint32_t kPasskeyStackBytes = 8 * 1024;
 constexpr UBaseType_t kSpeechPriority = 5;
 constexpr std::uint32_t kSpeechStackBytes = 16 * 1024;
 constexpr EventBits_t kSpeechDoneBit = BIT0;
@@ -1390,12 +1390,13 @@ private:
             const PasskeyEvent desired{current.passkey, visible};
             if (!has_shown || desired.passkey != shown.passkey ||
                 desired.visible != shown.visible) {
-                with_display([desired]() {
+                if (bsp_display_lock(100)) {
                     ui::show_ble_passkey(
                         desired.passkey, desired.visible);
-                });
-                shown = desired;
-                has_shown = true;
+                    bsp_display_unlock();
+                    shown = desired;
+                    has_shown = true;
+                }
             }
         }
     }
@@ -1600,6 +1601,14 @@ private:
             return;
         }
         if (command.kind == CommandKind::provisioning_activity) {
+            if (!display_available_.load(std::memory_order_acquire)) {
+                display_available_.store(true, std::memory_order_release);
+                display_sleep_pending_ = false;
+                poweroff_gate_.recover();
+                interaction_.ready(command.at_ms);
+                previous_state_ = interaction_.state();
+                request_display_wake(command.at_ms);
+            }
             interaction_.note_idle_activity(command.at_ms);
             return;
         }

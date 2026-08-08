@@ -543,14 +543,23 @@ void test_clock_snake_fills_and_drains_around_the_minute() {
     TEST_ASSERT_EQUAL_UINT8(0, span.count);
 }
 
-void test_clock_configuration_and_digit_masks_are_bounded() {
+void test_clock_configuration_and_time_text_are_bounded() {
     TEST_ASSERT_TRUE(chatesp::ClockStyle{}.valid());
     chatesp::ClockStyle invalid;
     invalid.seconds_width_px = 21;
     TEST_ASSERT_FALSE(invalid.valid());
-    TEST_ASSERT_EQUAL_HEX8(0x3f, chatesp::clock_digit_segments(0));
-    TEST_ASSERT_EQUAL_HEX8(0x6f, chatesp::clock_digit_segments(9));
-    TEST_ASSERT_EQUAL_HEX8(0, chatesp::clock_digit_segments(10));
+
+    const auto available = chatesp::clock_time_text(
+        true, chatesp::ClockTime{23, 59, 59});
+    TEST_ASSERT_EQUAL_STRING("23:59", available.data());
+    const auto midnight = chatesp::clock_time_text(
+        true, chatesp::ClockTime{0, 0, 0});
+    TEST_ASSERT_EQUAL_STRING("00:00", midnight.data());
+    const auto unavailable = chatesp::clock_time_text(false, {});
+    TEST_ASSERT_EQUAL_STRING("--:--", unavailable.data());
+    const auto invalid_time = chatesp::clock_time_text(
+        true, chatesp::ClockTime{24, 0, 0});
+    TEST_ASSERT_EQUAL_STRING("--:--", invalid_time.data());
 }
 
 void test_pairing_code_always_uses_chat_orientation() {
@@ -625,7 +634,7 @@ int main(int, char **) {
     RUN_TEST(test_mode_button_accepts_only_a_short_complete_press);
     RUN_TEST(test_clock_time_acquisition_has_a_bounded_network_window);
     RUN_TEST(test_clock_snake_fills_and_drains_around_the_minute);
-    RUN_TEST(test_clock_configuration_and_digit_masks_are_bounded);
+    RUN_TEST(test_clock_configuration_and_time_text_are_bounded);
     RUN_TEST(test_pairing_code_always_uses_chat_orientation);
     RUN_TEST(test_clock_return_needs_a_finished_idle_chat_session);
     return UNITY_END();

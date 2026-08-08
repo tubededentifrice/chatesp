@@ -9,7 +9,7 @@ Cloud voice needs Wi-Fi and service credentials from one of these sources.
 
 ## BLE service
 
-The device advertises the local name `ChatESP Setup` and this primary service:
+The device advertises the local name `ChatESP` and this primary service:
 
 | Item | UUID | Property |
 | --- | --- | --- |

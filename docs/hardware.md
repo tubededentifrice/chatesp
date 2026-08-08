@@ -132,7 +132,8 @@ The connected V2 board must pass these checks for this control change:
 - Clock rotates 90 degrees counterclockwise, has the USB port at the bottom,
   and maps the touch control panel to that orientation;
 - a BLE pairing code uses the portrait ChatESP orientation with the buttons on
-  the right, and Clock returns to its prior orientation when the code closes;
+  the right, a pairing request wakes the AMOLED, and Clock returns to its prior
+  orientation when the code closes;
 - Clock shows only large white 24-hour time and a white seconds path on black;
 - the seconds path follows the rounded screen shape, starts at 12 o'clock,
   fills on even minutes, and drains on odd minutes;

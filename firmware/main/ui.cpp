@@ -15,6 +15,7 @@
 #include "recording_spectrum_view.hpp"
 
 LV_FONT_DECLARE(chatesp_font_18);
+LV_FONT_DECLARE(chatesp_clock_font_180);
 
 namespace chatesp::ui {
 namespace {
@@ -65,15 +66,11 @@ struct ControlSlider {
     std::uint8_t minimum_percent = 0;
     std::uint8_t value_percent = 0;
 };
-constexpr std::size_t kClockDigitCount = 4;
-constexpr std::size_t kClockSegmentCount = 7;
 constexpr std::size_t kClockSnakePointsPerSecond = 2;
 constexpr std::size_t kClockSnakePointCount =
     60 * kClockSnakePointsPerSecond;
 constexpr std::int32_t kClockWidth = image::kDisplayHeight;
 constexpr std::int32_t kClockHeight = image::kDisplayWidth;
-constexpr std::int32_t kClockDigitHeight = 220;
-constexpr std::int32_t kClockDigitStroke = 18;
 constexpr double kPi = 3.14159265358979323846;
 
 lv_obj_t *status_label = nullptr;
@@ -101,13 +98,13 @@ ControlSlider volume_control;
 ControlSlider *active_control = nullptr;
 lv_display_t *display_handle = nullptr;
 lv_obj_t *clock_root = nullptr;
+lv_obj_t *clock_time_label = nullptr;
 
 struct ClockPoint {
     std::int16_t x = 0;
     std::int16_t y = 0;
 };
 
-std::array<std::uint8_t, kClockDigitCount> clock_digit_masks{};
 std::array<ClockPoint, kClockSnakePointCount> clock_snake_points{};
 ClockSnakeSpan shown_clock_snake{};
 
@@ -119,6 +116,7 @@ std::array<char, kMaximumProgressBytes + 1> hint_buffer{};
 std::array<char, 7> passkey_buffer{};
 std::array<char, kMaximumWifiStatusBytes + 1> wifi_status_buffer{};
 std::array<char, 12> battery_status_buffer{};
+std::array<char, 6> clock_time_buffer{'-', '-', ':', '-', '-', '\0'};
 QuickControlsGesture controls_gesture;
 QuickControlsCallback controls_callback = nullptr;
 void *controls_callback_context = nullptr;
@@ -474,37 +472,6 @@ void draw_clock(lv_event_t *event) {
     descriptor.base.layer = layer;
     descriptor.bg_opa = LV_OPA_COVER;
     descriptor.radius = LV_RADIUS_CIRCLE;
-    descriptor.bg_color = lv_color_hex(clock_style.time_rgb);
-
-    constexpr std::array<std::array<std::int32_t, 4>, kClockSegmentCount>
-        geometry{{
-            {{9, 0, 58, kClockDigitStroke}},
-            {{58, 9, kClockDigitStroke, 96}},
-            {{58, 115, kClockDigitStroke, 96}},
-            {{9, 202, 58, kClockDigitStroke}},
-            {{0, 115, kClockDigitStroke, 96}},
-            {{0, 9, kClockDigitStroke, 96}},
-            {{9, 101, 58, kClockDigitStroke}},
-        }};
-    constexpr std::array<std::int32_t, kClockDigitCount> digit_x{
-        36, 122, 250, 336};
-    constexpr std::int32_t digit_y =
-        (kClockHeight - kClockDigitHeight) / 2;
-    for (std::size_t digit = 0; digit < clock_digit_masks.size(); ++digit) {
-        for (std::size_t segment = 0; segment < geometry.size(); ++segment) {
-            if ((clock_digit_masks[digit] & (1U << segment)) == 0U) {
-                continue;
-            }
-            draw_clock_block(
-                layer, root, descriptor,
-                digit_x[digit] + geometry[segment][0],
-                digit_y + geometry[segment][1], geometry[segment][2],
-                geometry[segment][3]);
-        }
-    }
-    draw_clock_block(layer, root, descriptor, 215, 122, 18, 18);
-    draw_clock_block(layer, root, descriptor, 215, 228, 18, 18);
-
     descriptor.bg_color = lv_color_hex(clock_style.seconds_rgb);
     const std::int32_t point_size = clock_style.seconds_width_px;
     for (std::size_t index = 0; index < clock_snake_points.size(); ++index) {
@@ -526,6 +493,11 @@ void apply_clock_style() {
     }
     lv_obj_set_style_bg_color(
         clock_root, lv_color_hex(clock_style.background_rgb), LV_PART_MAIN);
+    if (clock_time_label != nullptr) {
+        lv_obj_set_style_text_color(
+            clock_time_label, lv_color_hex(clock_style.time_rgb),
+            LV_PART_MAIN);
+    }
     layout_clock_snake();
     lv_obj_invalidate(clock_root);
 }
@@ -539,6 +511,16 @@ void create_clock_face(lv_obj_t *screen) {
     lv_obj_clear_flag(clock_root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(clock_root, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(clock_root, draw_clock, LV_EVENT_DRAW_MAIN, nullptr);
+
+    clock_time_label = lv_label_create(clock_root);
+    lv_obj_remove_style_all(clock_time_label);
+    lv_label_set_text_static(clock_time_label, clock_time_buffer.data());
+    lv_obj_set_style_text_font(
+        clock_time_label, &chatesp_clock_font_180, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(clock_time_label, -10, LV_PART_MAIN);
+    lv_obj_set_style_text_opa(clock_time_label, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_center(clock_time_label);
+
     apply_clock_style();
     set_hidden(clock_root, true);
 }
@@ -1391,16 +1373,10 @@ void show_clock_time(bool available, ClockTime time) {
     shown_clock_second = available ? time.second : 0xff;
     shown_clock_hour = available ? time.hour : 0xff;
 
-    const std::array<std::uint8_t, kClockDigitCount> values{
-        static_cast<std::uint8_t>(time.hour / 10U),
-        static_cast<std::uint8_t>(time.hour % 10U),
-        static_cast<std::uint8_t>(time.minute / 10U),
-        static_cast<std::uint8_t>(time.minute % 10U),
-    };
-    for (std::size_t digit = 0; digit < clock_digit_masks.size(); ++digit) {
-        clock_digit_masks[digit] = available
-            ? clock_digit_segments(values[digit])
-            : clock_digit_segments(10) | 0x40U;
+    clock_time_buffer = clock_time_text(available, time);
+    if (clock_time_label != nullptr) {
+        lv_label_set_text_static(clock_time_label, clock_time_buffer.data());
+        lv_obj_center(clock_time_label);
     }
 
     shown_clock_snake = available
