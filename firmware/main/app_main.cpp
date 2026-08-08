@@ -114,6 +114,10 @@ extern "C" void app_main() {
         }
     }
     ESP_LOGI(kTag, "Voice runtime ready");
+    ESP_LOGI(
+        kTag,
+        "Main stack minimum free bytes: %u",
+        static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
 
     chatesp::ShortPressGesture mode_button;
     bool mode_button_error_reported = false;

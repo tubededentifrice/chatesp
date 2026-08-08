@@ -190,13 +190,14 @@ speech path accepts at most four segments and 640 bytes. It wipes each segment
 after use.
 
 One TTS worker sends each complete segment to OpenRouter in FIFO order. One
-playback task and codec session stay active for the full sequence. PCM goes
-into one bounded 2.16 MB PSRAM ring. After a 9,600-byte sample, playback starts
-early only when ingress has safe headroom above the 48,000-byte-per-second
-playback rate. A slow first segment buffers completely. The next TTS request
-can fill the ring while prior PCM plays. A response can retry only before PCM
-playback starts. A button press cancels model, search, image, TTS, and playback
-work and erases transient buffers.
+playback task and codec session stay active for the full sequence. The playback
+task uses one fixed 16 KiB PSRAM stack so limited internal RAM cannot prevent
+speech from starting. PCM goes into one bounded 2.16 MB PSRAM ring. After a
+9,600-byte sample, playback starts early only when ingress has safe headroom
+above the 48,000-byte-per-second playback rate. A slow first segment buffers
+completely. The next TTS request can fill the ring while prior PCM plays. A
+response can retry only before PCM playback starts. A button press cancels
+model, search, image, TTS, and playback work and erases transient buffers.
 
 HTTPS uses four bounded lanes: OpenRouter control, OpenRouter audio, Brave
 search, and optional image download. Each lane keeps one client handle for one

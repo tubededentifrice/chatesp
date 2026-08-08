@@ -9,9 +9,9 @@ inline const char *request_error_message(agent::Error error) {
         case agent::Error::none:
             return "THE REQUEST COMPLETED";
         case agent::Error::invalid_argument:
-            return "THE WATCH COULD NOT PROCESS THE REQUEST";
+            return "UNABLE TO PROCESS THE REQUEST";
         case agent::Error::limit_exceeded:
-            return "THE WATCH REACHED A REQUEST LIMIT";
+            return "REQUEST LIMIT REACHED";
         case agent::Error::request_too_large:
             return "THE REQUEST WAS TOO LARGE";
         case agent::Error::response_too_large:
@@ -44,7 +44,7 @@ inline const char *request_error_message(agent::Error error) {
         case agent::Error::model_failed:
             return "THE MODEL COULD NOT COMPLETE THE ANSWER";
     }
-    return "THE WATCH COULD NOT COMPLETE THE REQUEST";
+    return "UNABLE TO COMPLETE THE REQUEST";
 }
 
 inline const char *speech_error_message(agent::Error error) {
@@ -56,7 +56,7 @@ inline const char *speech_error_message(agent::Error error) {
         case agent::Error::request_too_large:
         case agent::Error::tool_not_found:
         case agent::Error::tool_failed:
-            return "THE WATCH COULD NOT PREPARE SPEECH";
+            return "UNABLE TO PREPARE SPEECH";
         case agent::Error::response_too_large:
             return "THE SPEECH AUDIO WAS TOO LARGE";
         case agent::Error::malformed_response:
@@ -80,9 +80,9 @@ inline const char *speech_error_message(agent::Error error) {
         case agent::Error::server_error:
             return "THE SPEECH SERVICE FAILED";
         case agent::Error::model_failed:
-            return "THE WATCH COULD NOT PLAY THE ANSWER";
+            return "UNABLE TO PLAY THE ANSWER";
     }
-    return "THE WATCH COULD NOT PLAY THE ANSWER";
+    return "UNABLE TO PLAY THE ANSWER";
 }
 
 }  // namespace chatesp
