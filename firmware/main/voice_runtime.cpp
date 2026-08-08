@@ -19,7 +19,7 @@
 #include "bsp/esp-bsp.h"
 #include "chatesp/agent_loop.hpp"
 #include "chatesp/app_mode.hpp"
-#include "chatesp/audio_level.hpp"
+#include "chatesp/audio_spectrum.hpp"
 #include "chatesp/ble_settings.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/quick_controls.hpp"
@@ -74,6 +74,9 @@ constexpr std::uint32_t kModeDisplayRetryMs = 100;
 constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
 constexpr std::size_t kMinimumRecordingSamples =
     AudioCapture::kSampleRateHz / 10;
+static_assert(
+    AudioCapture::kSampleRateHz == kAudioSpectrumSampleRateHz,
+    "The spectrum bin frequencies must match the capture sample rate");
 constexpr UBaseType_t kRuntimePriority = 5;
 constexpr std::uint32_t kRuntimeStackBytes = 32 * 1024;
 constexpr UBaseType_t kPasskeyPriority = 6;
@@ -1795,12 +1798,12 @@ private:
         }
         if (now_ms - level_refreshed_at_ms_ >= kLevelRefreshMs) {
             level_refreshed_at_ms_ = now_ms;
-            const std::uint8_t level = pcm_peak_percent(
+            const AudioSpectrum spectrum = pcm_frequency_spectrum(
                 capture_.samples(),
                 capture_.sample_count(),
                 AudioCapture::kChunkSamples);
             with_display(
-                [level]() { ui::show_recording_level(level); });
+                [&spectrum]() { ui::show_recording_spectrum(spectrum); });
         }
     }
 

@@ -101,6 +101,8 @@ The connected V2 board must pass these checks for this control change:
   no added minimum delay;
 - an in-session display wake shows the current state and not the boot splash;
 - a held bottom PWR press shows `LISTENING`, and release shows `TRANSCRIBING`;
+- the `LISTENING` view shows responsive low-to-high frequency bars and does
+  not show one total-volume bar;
 - a held PWR press longer than six seconds does not stop the board during a
   recording;
 - unplugging or reconnecting USB power does not start, stop, or submit a

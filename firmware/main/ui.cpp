@@ -12,6 +12,7 @@
 #include "chatesp/device_preferences.hpp"
 #include "chatesp/quick_controls.hpp"
 #include "lvgl.h"
+#include "recording_spectrum_view.hpp"
 
 LV_FONT_DECLARE(chatesp_font_18);
 
@@ -78,7 +79,6 @@ constexpr double kPi = 3.14159265358979323846;
 lv_obj_t *status_label = nullptr;
 lv_obj_t *hint_label = nullptr;
 lv_obj_t *content_label = nullptr;
-lv_obj_t *level_bar = nullptr;
 lv_obj_t *activity_spinner = nullptr;
 lv_obj_t *wifi_status_label = nullptr;
 lv_obj_t *battery_status_label = nullptr;
@@ -907,9 +907,7 @@ void hide_passkey() {
 void prepare_voice_view() {
     hide_fullscreen_visual();
     hide_passkey();
-    if (level_bar != nullptr) {
-        lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
-    }
+    recording_spectrum::show(false);
 }
 
 lv_obj_t *create_controls_text(
@@ -1143,18 +1141,7 @@ void create_screen() {
     lv_obj_align(content_label, LV_ALIGN_TOP_LEFT, 16, 126);
     set_static_text(content_label, content_buffer.data());
 
-    level_bar = lv_bar_create(screen);
-    lv_obj_set_size(level_bar, 336, 3);
-    lv_obj_align(level_bar, LV_ALIGN_BOTTOM_LEFT, 16, -48);
-    lv_obj_set_style_bg_color(
-        level_bar, lv_color_hex(0x202020), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(level_bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(
-        level_bar, lv_color_hex(0xffffff), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(level_bar, LV_OPA_COVER, LV_PART_INDICATOR);
-    lv_bar_set_range(level_bar, 0, 100);
-    lv_bar_set_value(level_bar, 0, LV_ANIM_OFF);
-    lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+    recording_spectrum::create(screen);
 
 #if LVGL_VERSION_MAJOR >= 9
     activity_spinner = lv_spinner_create(screen);
@@ -1479,23 +1466,12 @@ void show_state(InteractionState state) {
     set_static_text(hint_label, hint(state));
     show_activity(
         false);
-    if (level_bar != nullptr) {
-        if (state == InteractionState::recording) {
-            lv_bar_set_value(level_bar, 0, LV_ANIM_OFF);
-            lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
+    recording_spectrum::show(state == InteractionState::recording);
 }
 
-void show_recording_level(std::uint8_t percent) {
-    if (level_bar == nullptr) {
-        return;
-    }
+void show_recording_spectrum(const AudioSpectrum &levels) {
     hide_passkey();
-    lv_bar_set_value(
-        level_bar, std::min<int>(percent, 100), LV_ANIM_ON);
+    recording_spectrum::update(levels);
 }
 
 void show_transcript(std::string_view transcript) {
@@ -1571,9 +1547,7 @@ void show_ble_passkey(std::uint32_t passkey, bool visible) {
     apply_display_orientation();
     set_static_text(passkey_label, passkey_buffer.data());
     show_activity(false);
-    if (level_bar != nullptr) {
-        lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
-    }
+    recording_spectrum::show(false);
     lv_obj_move_foreground(passkey_overlay);
     lv_obj_clear_flag(passkey_overlay, LV_OBJ_FLAG_HIDDEN);
 }
