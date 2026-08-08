@@ -26,19 +26,22 @@ struct MultipartTranscriptionPlan {
 
 Error build_openrouter_chat_request(
     const OpenRouterConfig &config, const ConversationHistory &history,
-    const ToolRegistry &tools, const char *approximate_location,
+    const ToolRegistry &tools, const MemorySnapshot &memories,
+    const char *approximate_location,
     std::size_t approximate_location_size, const char *current_utc_minute,
     bool stream, ChatRequestBody &body);
 
 Error build_openrouter_route_request(
     const OpenRouterConfig &config, const ConversationHistory &history,
-    const ToolRegistry &tools, const char *approximate_location,
+    const ToolRegistry &tools, const MemorySnapshot &memories,
+    const char *approximate_location,
     std::size_t approximate_location_size, const char *current_utc_minute,
     bool stream, ChatRequestBody &body);
 
 Error build_openrouter_answer_request(
     const OpenRouterConfig &config, const ConversationHistory &history,
-    const char *approximate_location, std::size_t approximate_location_size,
+    const MemorySnapshot &memories, const char *approximate_location,
+    std::size_t approximate_location_size,
     const char *current_utc_minute, bool stream, ChatRequestBody &body);
 
 Error build_openrouter_transcription_plan(

@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "chatesp/agent_types.hpp"
+#include "chatesp/memory.hpp"
 
 namespace chatesp {
 namespace agent {
@@ -23,6 +24,20 @@ public:
     virtual Error set_volume(
         std::uint8_t percent, bool &persisted) = 0;
     virtual Error schedule_power_off(PowerOffMode &mode) = 0;
+};
+
+class MemoryControlProvider {
+public:
+    virtual ~MemoryControlProvider() = default;
+    virtual Error snapshot(MemorySnapshot &snapshot) = 0;
+    virtual Error remember(
+        const char *fact, std::size_t size, MemoryMutationResult &result) = 0;
+    virtual Error forget(
+        std::uint32_t id, MemoryMutationResult &result) = 0;
+    virtual Error clear_memories(MemoryMutationResult &result) = 0;
+    virtual Error compact(
+        const MemoryCompactionPlan &plan, MemoryMutationResult &result) = 0;
+    virtual void clear_turn_state() = 0;
 };
 
 class ByteSink {

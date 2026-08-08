@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "chatesp/provisioning_session.hpp"
+#include "device_memory_store.hpp"
 #include "esp_random.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
@@ -13,6 +14,8 @@
 #include "host/ble_sm.h"
 #include "host/ble_store.h"
 #include "host/util/util.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "os/os_mbuf.h"
@@ -46,8 +49,15 @@ const ble_uuid128_t kAcknowledgementUuid = BLE_UUID128_INIT(
 const ble_uuid128_t kDeviceContextUuid = BLE_UUID128_INIT(
     0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
     0x8a, 0x4b, 0x3c, 0x6f, 0x04, 0x10, 0x2e, 0x7b);
+const ble_uuid128_t kMemoryCommandUuid = BLE_UUID128_INIT(
+    0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
+    0x8a, 0x4b, 0x3c, 0x6f, 0x05, 0x10, 0x2e, 0x7b);
+const ble_uuid128_t kMemoryResponseUuid = BLE_UUID128_INIT(
+    0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
+    0x8a, 0x4b, 0x3c, 0x6f, 0x06, 0x10, 0x2e, 0x7b);
 
 SettingsStore *s_settings_store = nullptr;
+DeviceMemoryStore *s_memory_store = nullptr;
 PasskeyCallback s_passkey_callback = nullptr;
 DeviceContextCallback s_device_context_callback = nullptr;
 void *s_callback_context = nullptr;
@@ -55,6 +65,24 @@ provisioning::ProvisioningSession s_session;
 std::uint16_t s_owner_connection = kNoConnection;
 std::uint16_t s_passkey_connection = kNoConnection;
 std::uint16_t s_acknowledgement_handle = 0;
+std::uint16_t s_memory_response_handle = 0;
+std::uint16_t s_active_connection = kNoConnection;
+SemaphoreHandle_t s_memory_ble_mutex = nullptr;
+std::array<std::uint8_t, agent::max_memory_ble_response_bytes>
+    s_queued_memory_response{};
+std::size_t s_queued_memory_response_size = 0;
+std::uint16_t s_queued_memory_connection = kNoConnection;
+agent::MemorySnapshot s_pending_memory_change;
+bool s_memory_change_pending = false;
+bool s_memory_indication_in_flight = false;
+bool s_memory_command_active = false;
+std::array<std::uint8_t, agent::max_memory_ble_command_bytes>
+    s_cached_memory_command{};
+std::size_t s_cached_memory_command_size = 0;
+std::array<std::uint8_t, agent::max_memory_ble_response_bytes>
+    s_cached_memory_response{};
+std::size_t s_cached_memory_response_size = 0;
+std::uint16_t s_cached_memory_connection = kNoConnection;
 std::uint8_t s_address_type = 0;
 bool s_running = false;
 
@@ -109,6 +137,29 @@ ble_gatt_chr_def s_characteristics[] = {
             BLE_GATT_CHR_F_WRITE_AUTHEN,
         .min_key_size = BLE_SM_PAIR_KEY_SZ_MAX,
         .val_handle = nullptr,
+        .cpfd = nullptr,
+    },
+    {
+        .uuid = &kMemoryCommandUuid.u,
+        .access_cb = gatt_access,
+        .arg = reinterpret_cast<void *>(4),
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC |
+            BLE_GATT_CHR_F_WRITE_AUTHEN,
+        .min_key_size = BLE_SM_PAIR_KEY_SZ_MAX,
+        .val_handle = nullptr,
+        .cpfd = nullptr,
+    },
+    {
+        .uuid = &kMemoryResponseUuid.u,
+        .access_cb = gatt_access,
+        .arg = nullptr,
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_INDICATE |
+            BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC |
+            BLE_GATT_CHR_F_NOTIFY_INDICATE_AUTHEN,
+        .min_key_size = BLE_SM_PAIR_KEY_SZ_MAX,
+        .val_handle = &s_memory_response_handle,
         .cpfd = nullptr,
     },
     {},
@@ -195,6 +246,262 @@ void send_device_context_acknowledgement(
     }
 }
 
+bool memory_ble_lock() {
+    return s_memory_ble_mutex != nullptr &&
+        xSemaphoreTake(s_memory_ble_mutex, pdMS_TO_TICKS(1'000)) == pdTRUE;
+}
+
+void memory_ble_unlock() {
+    if (s_memory_ble_mutex != nullptr) {
+        xSemaphoreGive(s_memory_ble_mutex);
+    }
+}
+
+agent::MemoryBleStatus memory_ble_status(
+    agent::MemoryMutationStatus status) {
+    switch (status) {
+        case agent::MemoryMutationStatus::applied:
+            return agent::MemoryBleStatus::applied;
+        case agent::MemoryMutationStatus::unchanged:
+            return agent::MemoryBleStatus::unchanged;
+        case agent::MemoryMutationStatus::full:
+            return agent::MemoryBleStatus::full;
+        case agent::MemoryMutationStatus::not_found:
+            return agent::MemoryBleStatus::not_found;
+        case agent::MemoryMutationStatus::revision_conflict:
+            return agent::MemoryBleStatus::revision_conflict;
+        case agent::MemoryMutationStatus::invalid_field:
+            return agent::MemoryBleStatus::invalid_field;
+        case agent::MemoryMutationStatus::storage_failure:
+            return agent::MemoryBleStatus::storage_failure;
+    }
+    return agent::MemoryBleStatus::invalid_field;
+}
+
+void try_send_memory_indication_locked() {
+    if (s_memory_indication_in_flight || s_memory_response_handle == 0 ||
+        s_active_connection == kNoConnection) {
+        return;
+    }
+    std::array<std::uint8_t, agent::max_memory_ble_response_bytes> encoded{};
+    const std::uint8_t *data = nullptr;
+    std::size_t size = 0;
+    bool sending_change = false;
+    if (s_queued_memory_response_size != 0 &&
+        s_queued_memory_connection == s_active_connection) {
+        data = s_queued_memory_response.data();
+        size = s_queued_memory_response_size;
+    } else if (s_memory_change_pending) {
+        agent::MemoryBleResponse response;
+        response.status = agent::MemoryBleStatus::applied;
+        response.operation = agent::MemoryBleOperation::changed;
+        response.revision = s_pending_memory_change.revision;
+        response.fingerprint = s_pending_memory_change.fingerprint;
+        response.total_count =
+            static_cast<std::uint8_t>(s_pending_memory_change.size);
+        response.changed_event = true;
+        if (!agent::encode_memory_ble_response(response, encoded, size)) {
+            s_memory_change_pending = false;
+            return;
+        }
+        data = encoded.data();
+        sending_change = true;
+    } else {
+        return;
+    }
+    os_mbuf *packet = ble_hs_mbuf_from_flat(data, size);
+    if (packet == nullptr) {
+        return;
+    }
+    const int result = ble_gatts_indicate_custom(
+        s_active_connection, s_memory_response_handle, packet);
+    if (result == 0) {
+        s_memory_indication_in_flight = true;
+        if (sending_change) {
+            s_memory_change_pending = false;
+        } else {
+            s_queued_memory_response.fill(0);
+            s_queued_memory_response_size = 0;
+            s_queued_memory_connection = kNoConnection;
+        }
+    }
+}
+
+void queue_memory_response_locked(
+    std::uint16_t connection_handle,
+    const std::array<std::uint8_t, agent::max_memory_ble_response_bytes> &encoded,
+    std::size_t size) {
+    if (size == 0 || size > s_queued_memory_response.size()) {
+        return;
+    }
+    s_queued_memory_response = encoded;
+    s_queued_memory_response_size = size;
+    s_queued_memory_connection = connection_handle;
+    try_send_memory_indication_locked();
+}
+
+void memory_changed_callback(
+    const agent::MemorySnapshot &snapshot, void *) {
+    if (!memory_ble_lock()) {
+        return;
+    }
+    s_pending_memory_change = snapshot;
+    s_memory_change_pending = true;
+    if (!s_memory_command_active) {
+        try_send_memory_indication_locked();
+    }
+    memory_ble_unlock();
+}
+
+bool all_zero(const agent::MemoryFingerprint &fingerprint) {
+    std::uint8_t value = 0;
+    for (const std::uint8_t byte : fingerprint) {
+        value |= byte;
+    }
+    return value == 0;
+}
+
+std::uint32_t read_memory_u32(const std::uint8_t *data) {
+    return (static_cast<std::uint32_t>(data[0]) << 24U) |
+        (static_cast<std::uint32_t>(data[1]) << 16U) |
+        (static_cast<std::uint32_t>(data[2]) << 8U) |
+        static_cast<std::uint32_t>(data[3]);
+}
+
+void handle_memory_command(
+    std::uint16_t connection_handle, const std::uint8_t *frame,
+    std::size_t frame_size, bool secure, bool busy = false) {
+    if (s_memory_store == nullptr || !memory_ble_lock()) {
+        return;
+    }
+    if (connection_handle == s_cached_memory_connection &&
+        frame_size == s_cached_memory_command_size && frame != nullptr &&
+        std::memcmp(frame, s_cached_memory_command.data(), frame_size) == 0) {
+        queue_memory_response_locked(
+            connection_handle, s_cached_memory_response,
+            s_cached_memory_response_size);
+        memory_ble_unlock();
+        return;
+    }
+    s_memory_command_active = true;
+    memory_ble_unlock();
+
+    agent::MemoryBleCommand command;
+    agent::MemoryBleStatus status = agent::parse_memory_ble_command(
+        frame, frame_size, secure, command);
+    if (status == agent::MemoryBleStatus::authentication_required &&
+        frame != nullptr &&
+        frame_size >= agent::memory_ble_command_header_bytes &&
+        frame_size <= agent::max_memory_ble_command_bytes &&
+        std::memcmp(frame, "CEMC", 4) == 0 &&
+        frame[4] == agent::memory_ble_version &&
+        frame[5] >= static_cast<std::uint8_t>(
+            agent::MemoryBleOperation::list_page) &&
+        frame[5] <= static_cast<std::uint8_t>(
+            agent::MemoryBleOperation::clear)) {
+        command.operation =
+            static_cast<agent::MemoryBleOperation>(frame[5]);
+        command.request_id = read_memory_u32(frame + 8);
+    }
+    if (status == agent::MemoryBleStatus::applied && busy) {
+        status = agent::MemoryBleStatus::busy;
+    }
+    agent::MemorySnapshot snapshot;
+    const agent::Error snapshot_error = s_memory_store->snapshot(snapshot);
+    agent::MemoryBleResponse response;
+    response.status = status;
+    response.operation = command.operation;
+    response.request_id = command.request_id;
+    if (snapshot_error == agent::Error::none) {
+        response.revision = snapshot.revision;
+        response.fingerprint = snapshot.fingerprint;
+        response.total_count = static_cast<std::uint8_t>(snapshot.size);
+    } else {
+        response.status = agent::MemoryBleStatus::storage_failure;
+    }
+
+    if (status == agent::MemoryBleStatus::applied &&
+        snapshot_error == agent::Error::none) {
+        const bool initial_list = command.operation ==
+                agent::MemoryBleOperation::list_page &&
+            command.memory_id == 0 && command.expected_revision == 0 &&
+            all_zero(command.expected_fingerprint);
+        const bool version_matches = initial_list ||
+            (command.expected_revision == snapshot.revision &&
+             agent::memory_fingerprints_equal(
+                 command.expected_fingerprint, snapshot.fingerprint));
+        if (!version_matches) {
+            response.status = agent::MemoryBleStatus::revision_conflict;
+        } else if (command.operation == agent::MemoryBleOperation::list_page) {
+            for (std::size_t index = 0; index < snapshot.size; ++index) {
+                if (snapshot.entries[index].id > command.memory_id) {
+                    response.memory_id = snapshot.entries[index].id;
+                    response.fact = snapshot.entries[index].fact;
+                    response.has_item = true;
+                    response.has_more = index + 1 < snapshot.size;
+                    break;
+                }
+            }
+        } else {
+            agent::MemoryMutationResult mutation;
+            agent::Error error = agent::Error::tool_failed;
+            if (command.operation == agent::MemoryBleOperation::add) {
+                error = s_memory_store->add_from_ble(
+                    command.fact.data(), command.fact.size(),
+                    command.expected_revision, command.expected_fingerprint,
+                    mutation);
+            } else if (command.operation == agent::MemoryBleOperation::forget) {
+                error = s_memory_store->forget_from_ble(
+                    command.memory_id, command.expected_revision,
+                    command.expected_fingerprint, mutation);
+            } else if (command.operation == agent::MemoryBleOperation::clear) {
+                error = s_memory_store->clear_from_ble(
+                    command.expected_revision, command.expected_fingerprint,
+                    mutation);
+            }
+            response.status = error == agent::Error::none
+                ? memory_ble_status(mutation.status)
+                : agent::MemoryBleStatus::storage_failure;
+            response.memory_id = mutation.id;
+            response.revision = mutation.revision;
+            response.fingerprint = mutation.fingerprint;
+            response.total_count = static_cast<std::uint8_t>(mutation.count);
+        }
+    }
+
+    std::array<std::uint8_t, agent::max_memory_ble_response_bytes> encoded{};
+    std::size_t encoded_size = 0;
+    if (!agent::encode_memory_ble_response(response, encoded, encoded_size)) {
+        response = {};
+        response.status = agent::MemoryBleStatus::invalid_field;
+        response.operation = command.operation;
+        response.request_id = command.request_id;
+        (void)agent::encode_memory_ble_response(
+            response, encoded, encoded_size);
+    }
+    if (!memory_ble_lock()) {
+        s_memory_command_active = false;
+        return;
+    }
+    s_memory_command_active = false;
+    if (s_memory_change_pending &&
+        s_pending_memory_change.revision == response.revision &&
+        agent::memory_fingerprints_equal(
+            s_pending_memory_change.fingerprint, response.fingerprint)) {
+        s_memory_change_pending = false;
+    }
+    if (frame != nullptr && frame_size <= s_cached_memory_command.size()) {
+        s_cached_memory_command.fill(0);
+        std::memcpy(s_cached_memory_command.data(), frame, frame_size);
+        s_cached_memory_command_size = frame_size;
+        s_cached_memory_response = encoded;
+        s_cached_memory_response_size = encoded_size;
+        s_cached_memory_connection = connection_handle;
+    }
+    queue_memory_response_locked(connection_handle, encoded, encoded_size);
+    memory_ble_unlock();
+}
+
 provisioning::SessionResult authentication_acknowledgement() {
     return {
         true,
@@ -209,6 +516,21 @@ void release_connection(std::uint16_t connection_handle) {
     if (s_owner_connection == connection_handle) {
         s_session.disconnect();
         s_owner_connection = kNoConnection;
+    }
+    if (s_active_connection == connection_handle && memory_ble_lock()) {
+        s_active_connection = kNoConnection;
+        s_memory_indication_in_flight = false;
+        s_memory_change_pending = false;
+        s_pending_memory_change.clear();
+        s_queued_memory_response.fill(0);
+        s_queued_memory_response_size = 0;
+        s_queued_memory_connection = kNoConnection;
+        s_cached_memory_command.fill(0);
+        s_cached_memory_command_size = 0;
+        s_cached_memory_response.fill(0);
+        s_cached_memory_response_size = 0;
+        s_cached_memory_connection = kNoConnection;
+        memory_ble_unlock();
     }
     hide_passkey(connection_handle);
 }
@@ -250,6 +572,16 @@ void on_sync() {
 void on_reset(int) {
     s_session.disconnect();
     s_owner_connection = kNoConnection;
+    if (memory_ble_lock()) {
+        s_active_connection = kNoConnection;
+        s_memory_indication_in_flight = false;
+        s_memory_command_active = false;
+        s_memory_change_pending = false;
+        s_queued_memory_response_size = 0;
+        s_cached_memory_command_size = 0;
+        s_cached_memory_response_size = 0;
+        memory_ble_unlock();
+    }
     hide_all_passkeys();
 }
 
@@ -262,6 +594,10 @@ int gap_event(ble_gap_event *event, void *) {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
+                if (memory_ble_lock()) {
+                    s_active_connection = event->connect.conn_handle;
+                    memory_ble_unlock();
+                }
                 ble_gap_security_initiate(event->connect.conn_handle);
             } else {
                 advertise();
@@ -314,6 +650,14 @@ int gap_event(ble_gap_event *event, void *) {
             }
             return BLE_GAP_REPEAT_PAIRING_RETRY;
         }
+        case BLE_GAP_EVENT_NOTIFY_TX:
+            if (event->notify_tx.attr_handle == s_memory_response_handle &&
+                memory_ble_lock()) {
+                s_memory_indication_in_flight = false;
+                try_send_memory_indication_locked();
+                memory_ble_unlock();
+            }
+            return 0;
         default:
             return 0;
     }
@@ -337,7 +681,22 @@ int gatt_access(
         if (s_owner_connection == connection_handle) {
             release_connection(connection_handle);
         }
-        if (characteristic == 3) {
+        if (characteristic == 4) {
+            const std::size_t frame_size = OS_MBUF_PKTLEN(context->om);
+            std::array<std::uint8_t, agent::max_memory_ble_command_bytes> frame{};
+            std::uint16_t copied_size = 0;
+            if (frame_size <= frame.size() &&
+                ble_hs_mbuf_to_flat(
+                    context->om, frame.data(), frame.size(), &copied_size) == 0 &&
+                copied_size == frame_size) {
+                handle_memory_command(
+                    connection_handle, frame.data(), copied_size, false);
+            } else {
+                handle_memory_command(
+                    connection_handle, nullptr, frame_size, false);
+            }
+            clear_bytes(frame.data(), frame.size());
+        } else if (characteristic == 3) {
             send_device_context_acknowledgement(
                 connection_handle,
                 provisioning::make_device_context_acknowledgement(
@@ -346,6 +705,24 @@ int gatt_access(
             send_acknowledgement(
                 connection_handle, authentication_acknowledgement());
         }
+        return 0;
+    }
+
+    if (characteristic == 4) {
+        const std::size_t frame_size = OS_MBUF_PKTLEN(context->om);
+        std::array<std::uint8_t, agent::max_memory_ble_command_bytes> frame{};
+        std::uint16_t copied_size = 0;
+        if (frame_size <= frame.size() &&
+            ble_hs_mbuf_to_flat(
+                context->om, frame.data(), frame.size(), &copied_size) == 0 &&
+            copied_size == frame_size) {
+            handle_memory_command(
+                connection_handle, frame.data(), copied_size, true,
+                s_owner_connection != kNoConnection);
+        } else {
+            handle_memory_command(connection_handle, nullptr, frame_size, true);
+        }
+        clear_bytes(frame.data(), frame.size());
         return 0;
     }
 
@@ -436,10 +813,12 @@ int gatt_access(
 
 esp_err_t start(
     SettingsStore *settings_store,
+    DeviceMemoryStore *memory_store,
     PasskeyCallback passkey_callback,
     DeviceContextCallback device_context_callback,
     void *callback_context) {
-    if (settings_store == nullptr || passkey_callback == nullptr ||
+    if (settings_store == nullptr || memory_store == nullptr ||
+        passkey_callback == nullptr ||
         device_context_callback == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -458,15 +837,40 @@ esp_err_t start(
 #endif
 
     s_settings_store = settings_store;
+    s_memory_store = memory_store;
     s_passkey_callback = passkey_callback;
     s_device_context_callback = device_context_callback;
     s_callback_context = callback_context;
     s_session.disconnect();
     s_owner_connection = kNoConnection;
+    s_memory_ble_mutex = xSemaphoreCreateMutex();
+    if (s_memory_ble_mutex == nullptr) {
+        s_settings_store = nullptr;
+        s_memory_store = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    s_active_connection = kNoConnection;
+    s_memory_response_handle = 0;
+    s_memory_indication_in_flight = false;
+    s_memory_command_active = false;
+    s_memory_change_pending = false;
+    s_queued_memory_response.fill(0);
+    s_queued_memory_response_size = 0;
+    s_queued_memory_connection = kNoConnection;
+    s_cached_memory_command.fill(0);
+    s_cached_memory_command_size = 0;
+    s_cached_memory_response.fill(0);
+    s_cached_memory_response_size = 0;
+    s_cached_memory_connection = kNoConnection;
+    s_memory_store->set_change_callback(memory_changed_callback, nullptr);
 
     const esp_err_t init_result = nimble_port_init();
     if (init_result != ESP_OK) {
+        s_memory_store->set_change_callback(nullptr, nullptr);
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
         s_settings_store = nullptr;
+        s_memory_store = nullptr;
         s_passkey_callback = nullptr;
         s_device_context_callback = nullptr;
         s_callback_context = nullptr;
@@ -496,7 +900,11 @@ esp_err_t start(
     }
     if (result != 0) {
         nimble_port_deinit();
+        s_memory_store->set_change_callback(nullptr, nullptr);
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
         s_settings_store = nullptr;
+        s_memory_store = nullptr;
         s_passkey_callback = nullptr;
         s_device_context_callback = nullptr;
         s_callback_context = nullptr;
@@ -513,13 +921,28 @@ esp_err_t stop() {
     if (!s_running) {
         return ESP_OK;
     }
+    if (s_memory_store != nullptr) {
+        s_memory_store->set_change_callback(nullptr, nullptr);
+    }
     ble_gap_adv_stop();
     const int stop_result = nimble_port_stop();
     const esp_err_t deinit_result = nimble_port_deinit();
     s_session.disconnect();
     s_owner_connection = kNoConnection;
     hide_all_passkeys();
+    if (s_memory_ble_mutex != nullptr) {
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
+    }
+    s_pending_memory_change.clear();
+    s_queued_memory_response.fill(0);
+    s_queued_memory_response_size = 0;
+    s_cached_memory_command.fill(0);
+    s_cached_memory_command_size = 0;
+    s_cached_memory_response.fill(0);
+    s_cached_memory_response_size = 0;
     s_settings_store = nullptr;
+    s_memory_store = nullptr;
     s_passkey_callback = nullptr;
     s_device_context_callback = nullptr;
     s_callback_context = nullptr;

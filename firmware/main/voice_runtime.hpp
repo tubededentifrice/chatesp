@@ -7,6 +7,7 @@
 namespace chatesp {
 
 class DevicePreferencesStore;
+class DeviceMemoryStore;
 
 class VoiceRuntime {
 public:
@@ -18,7 +19,8 @@ public:
 
     esp_err_t start(
         bool startup_button_down, std::uint32_t startup_at_ms,
-        DevicePreferencesStore &device_preferences_store);
+        DevicePreferencesStore &device_preferences_store,
+        DeviceMemoryStore &device_memory_store);
     void action_button_edge(bool pressed, std::uint32_t at_ms);
     [[nodiscard]] bool mode_button_available() const;
     void mode_button_short_press(std::uint32_t at_ms);

@@ -8,6 +8,7 @@
 namespace chatesp {
 
 class SettingsStore;
+class DeviceMemoryStore;
 
 namespace ble_provisioning {
 
@@ -22,6 +23,7 @@ using DeviceContextCallback = void (*)(
 
 esp_err_t start(
     SettingsStore *settings_store,
+    DeviceMemoryStore *memory_store,
     PasskeyCallback passkey_callback,
     DeviceContextCallback device_context_callback,
     void *callback_context);

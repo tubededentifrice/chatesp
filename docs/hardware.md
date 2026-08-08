@@ -214,6 +214,11 @@ secure than eFuse-backed encrypted NVS, but it is reversible. An attacker with
 physical flash access can read Wi-Fi and provider credentials. BLE transfer
 still requires an authenticated encrypted connection, and iOS secrets stay in
 Keychain.
+Saved memories also use plaintext NVS. Development and production use separate
+memory namespaces. Each update writes and reads back one complete inactive
+record before it changes the active slot. A person with physical flash access
+can read the facts. The firmware must not log facts, memory tool arguments, or
+BLE memory frames.
 
 Run `tools/device_doctor.py` with the explicit local port after each display or
 power change. Its serial checks can verify the image, V2 probe, command order,
@@ -232,6 +237,10 @@ visible splash or ready view.
 - Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
   the station connects.
 - Verify encrypted BLE provisioning and acknowledgement with a physical iPhone.
+- Verify cold-start memory persistence, full-list automatic compaction,
+  user-requested compaction, and rollback after an injected NVS failure.
+- Verify secure BLE rejection, one-fact paging, revision conflicts, retry
+  deduplication, voice-change refresh, and sleep while BLE memory work exists.
 - Verify that a wake connection sends current iPhone time, UTC offset, and a
   location rounded to 0.1 degree to the model context.
 - Verify that Clock matches the iPhone local time before and after a timezone
@@ -247,6 +256,8 @@ visible splash or ready view.
   deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,
   stuck state, or unexpected NVS write.
+- Run 100 memory writes across sleep and wake without a lost old record,
+  duplicate retry write, reset, or stuck indication.
 - Compare the same 20 direct, 10 web, 10 image, and 10 calculation prompts
   before and after the change on 2.4 GHz Wi-Fi at -65 dBm or better. Test warm
   and held-cold starts.

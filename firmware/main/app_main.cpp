@@ -3,6 +3,7 @@
 #include "bsp/esp-bsp.h"
 #include "chatesp/app_mode.hpp"
 #include "device_write_policy.hpp"
+#include "device_memory_store.hpp"
 #include "device_preferences_store.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -66,6 +67,15 @@ extern "C" void app_main() {
     const chatesp::runtime::DevicePreferences device_preferences =
         device_preferences_store.preferences();
 
+    static chatesp::DeviceMemoryStore device_memory_store;
+    const esp_err_t memory_result = device_memory_store.initialize();
+    if (memory_result != ESP_OK) {
+        ESP_LOGW(
+            kTag,
+            "Saved memories are unavailable (category %s)",
+            esp_err_to_name(memory_result));
+    }
+
     if (!chatesp::ui::start(device_preferences.brightness_percent)) {
         ESP_LOGE(kTag, "Display start failed");
         return;
@@ -78,7 +88,7 @@ extern "C" void app_main() {
     static chatesp::VoiceRuntime runtime;
     const esp_err_t runtime_result = runtime.start(
         startup_button_down, startup_button_at_ms,
-        device_preferences_store);
+        device_preferences_store, device_memory_store);
     if (runtime_result != ESP_OK) {
         ESP_LOGE(kTag, "Voice runtime start failed");
         show_start_error("VOICE RUNTIME COULD NOT START");

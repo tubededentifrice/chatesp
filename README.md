@@ -11,7 +11,7 @@ companion for secure BLE configuration.
    shows a large white local time and a rounded seconds path. It stays on.
 2. Hold the bottom PWR button and speak. From Clock, the press first returns
    the display to ChatESP. Release the button to submit the recording.
-3. The device selects a direct, web, image, or calculation
+3. The device selects a direct, web, image, calculation, or memory
    route. It then gets a concise answer with tools disabled. Text appears as
    the model sends it. Complete
    sentences go to speech at once. One playback session joins up to four
@@ -59,8 +59,10 @@ Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
 parallel image download, search, BLE provisioning,
 device status and controls, touch quick controls, a travel-clock mode, and
 sleep paths. Brightness
-and volume changes use a small persistent device-preference record. The iOS
-companion can store
+and volume changes use a small persistent device-preference record. Up to ten
+short user-requested memories persist in plaintext NVS and enter each model
+request as untrusted context. A full list causes the model to compact the old
+facts before it saves the pending fact. The iOS companion can store
 settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
 can appear full-screen after the spoken answer. A restricted MicroPython tool
 can do short calculations and show a bounded line plot on the full screen.
@@ -71,9 +73,10 @@ frame, bottom-button hold-to-talk, streamed answer text, clear streamed speech,
 button preemption, strong-access-point selection, and modem power saving.
 Full-screen image color and crop, Clock rotation and rounded-corner rendering,
 top-button mode switching, physical iPhone provisioning, Clock current draw,
-production system-off, MicroPython limits and plot display, and long cycle
-tests are still acceptance gates. Do not use this status as a claim that these
-open physical checks passed.
+production system-off, memory persistence and compaction, secure BLE memory
+management, MicroPython limits and plot display, and long cycle tests are still
+acceptance gates. Do not use this status as a claim that these open physical
+checks passed.
 
 ## Development
 
@@ -121,8 +124,8 @@ is visible when the command reports that its automatic checks passed.
 
 Use production mode only for final power tests and release images. It enables
 persistent settings, persistent BLE bonds, and AXP2101 system-off after a sleep
-request. Settings and bonds use plaintext NVS. A person with physical flash
-access can read the stored credentials.
+request. Settings, bonds, and saved memories use plaintext NVS. A person with
+physical flash access can read the stored credentials and saved facts.
 You can build it without a device change:
 
 ```sh
@@ -155,8 +158,8 @@ Run all PlatformIO commands through `tools/pio.py`. The wrapper checks the
 dependency cooldown first. For the watch build, it also creates the ESP-IDF
 Python environment from a hash-locked requirements file.
 
-For an isolated agent task or a repeatable tooling failure, use the procedures
-in [agent tooling](docs/agent-tooling.md).
+For a user-requested task branch or a repeatable tooling failure, use the
+procedures in [agent tooling](docs/agent-tooling.md).
 
 Never put credentials in tracked files. Local development values belong in
 `.secrets/device.env`, which Git ignores. The iOS app will store secrets in

@@ -32,10 +32,12 @@ public:
         transport::HttpTransport &transport,
         network::NetworkManager &network,
         const OpenRouterConnectionView &connection,
-        const agent::ToolRegistry &tools, agent::UtcClock &utc_clock,
+        const agent::ToolRegistry &tools,
+        agent::MemoryControlProvider &memory_provider,
+        agent::UtcClock &utc_clock,
         std::string_view approximate_location)
         : transport_(transport), network_(network), connection_(connection),
-          tools_(tools), utc_clock_(utc_clock),
+          tools_(tools), memory_provider_(memory_provider), utc_clock_(utc_clock),
           approximate_location_(approximate_location) {}
 
     agent::Error complete(
@@ -65,6 +67,7 @@ private:
     network::NetworkManager &network_;
     OpenRouterConnectionView connection_;
     const agent::ToolRegistry &tools_;
+    agent::MemoryControlProvider &memory_provider_;
     agent::UtcClock &utc_clock_;
     std::string_view approximate_location_;
 };

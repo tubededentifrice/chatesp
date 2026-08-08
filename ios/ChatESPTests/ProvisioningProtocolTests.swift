@@ -173,4 +173,90 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(record?.keys.count, 1)
         XCTAssertEqual(store.load(), preferences)
     }
+
+    func testMemoryFingerprintMatchesFirmwareVector() throws {
+        let facts = [
+            MemoryFact(id: 2, fact: "User likes tea."),
+            MemoryFact(id: 7, fact: "Use short answers."),
+        ]
+        XCTAssertEqual(
+            try MemoryProtocolV1.fingerprint(for: facts).hexString,
+            "9b9a7dc2d6f8b263694fd1b4b02d675daa47cb56bb9d84b7219ee93309440d1d")
+        XCTAssertThrowsError(try MemoryProtocolV1.fingerprint(for: [
+            MemoryFact(id: 2, fact: "One"),
+            MemoryFact(id: 2, fact: "Two"),
+        ]))
+    }
+
+    func testMemoryCommandUsesExactNetworkOrderLayout() throws {
+        let fingerprint = Data((0..<32).map(UInt8.init))
+        let command = try MemoryCommand(
+            operation: .add,
+            requestID: 0x01020304,
+            expectedRevision: 0x05060708,
+            expectedFingerprint: fingerprint,
+            fact: "Tea")
+        XCTAssertEqual(command.data.count, 57)
+        XCTAssertEqual(command.data.prefix(4), Data("CEMC".utf8))
+        XCTAssertEqual(command.data[4], 1)
+        XCTAssertEqual(command.data[5], MemoryOperation.add.rawValue)
+        XCTAssertEqual(command.data.readBigEndianUInt32(at: 8), 0x01020304)
+        XCTAssertEqual(command.data.readBigEndianUInt32(at: 12), 0x05060708)
+        XCTAssertEqual(command.data.subdata(in: 16..<48), fingerprint)
+        XCTAssertEqual(command.data.readBigEndianUInt16(at: 52), 3)
+        XCTAssertEqual(command.data.suffix(3), Data("Tea".utf8))
+        XCTAssertThrowsError(try MemoryCommand(
+            operation: .add,
+            requestID: 1,
+            expectedRevision: 0,
+            expectedFingerprint: fingerprint,
+            fact: "Line\nbreak"))
+    }
+
+    func testMemoryResponseRequiresExactFlagsAndLength() throws {
+        let fingerprint = Data(repeating: 0x5a, count: 32)
+        var bytes = Data("CEMR".utf8)
+        bytes.append(MemoryProtocolV1.version)
+        bytes.append(MemoryStatus.applied.rawValue)
+        bytes.append(MemoryOperation.listPage.rawValue)
+        bytes.append(0x03)
+        bytes.appendBigEndian(UInt32(9))
+        bytes.appendBigEndian(UInt32(4))
+        bytes.append(fingerprint)
+        bytes.appendBigEndian(UInt32(7))
+        bytes.appendBigEndian(UInt16(3))
+        bytes.append(2)
+        bytes.append(0)
+        bytes.append(Data("Tea".utf8))
+        let response = try MemoryResponse(data: bytes)
+        XCTAssertEqual(response.requestID, 9)
+        XCTAssertEqual(response.revision, 4)
+        XCTAssertEqual(response.memoryID, 7)
+        XCTAssertEqual(response.fact, "Tea")
+        XCTAssertTrue(response.hasMore)
+        XCTAssertEqual(response.totalCount, 2)
+
+        var badFlags = bytes
+        badFlags[7] = 0x80
+        XCTAssertThrowsError(try MemoryResponse(data: badFlags))
+        XCTAssertThrowsError(try MemoryResponse(data: bytes.dropLast()))
+    }
+
+    func testMemoryChangeEventHasNoRequestOrFact() throws {
+        var bytes = Data("CEMR".utf8)
+        bytes.append(MemoryProtocolV1.version)
+        bytes.append(MemoryStatus.applied.rawValue)
+        bytes.append(MemoryOperation.changed.rawValue)
+        bytes.append(0x04)
+        bytes.appendBigEndian(UInt32(0))
+        bytes.appendBigEndian(UInt32(8))
+        bytes.append(Data(repeating: 0x31, count: 32))
+        bytes.appendBigEndian(UInt32(0))
+        bytes.appendBigEndian(UInt16(0))
+        bytes.append(3)
+        bytes.append(0)
+        let response = try MemoryResponse(data: bytes)
+        XCTAssertTrue(response.isChangeEvent)
+        XCTAssertEqual(response.operation, .changed)
+    }
 }
