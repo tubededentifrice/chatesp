@@ -23,8 +23,10 @@ records.
 Each watch upload ends with an ESP32 watchdog reset. This reset starts the app
 without a button action and does not leave the chip in the ROM loader.
 
-Use the repository monitor for device logs. It sets DTR and RTS before it opens
-the port, so an open operation cannot request the ROM loader:
+Use the repository monitor for device logs. It sets DTR and RTS to inactive
+values before it opens the port. On the ESP32-S3 native USB serial interface,
+the host open or reconnect can still cause a `USB_UART_CHIP_RESET`. Use it only
+when a reset is acceptable:
 
 ```sh
 uv run --locked python tools/watch_monitor.py --port LOCAL_PORT --duration 10
@@ -34,6 +36,20 @@ Do not use the generic PlatformIO serial monitor on this board. It can assert
 the USB control lines while it opens the port and request the ROM loader. Pass
 the local port to the repository monitor on the command line. Do not write it
 to a tracked file.
+
+For a black screen, or after a display or power change, use the device doctor:
+
+```sh
+uv run --locked python tools/device_doctor.py --port LOCAL_PORT
+```
+
+It uploads `watch_dev`, checks that the image matches the current Git commit,
+and reads one bounded boot window. It requires a V2 probe, panel-on, two equal
+nonzero brightness commands, display readiness, and voice runtime readiness.
+It redacts network addresses and the device address. Its automatic checks do
+not prove pixel output. Confirm that `CHAT ESP` or `READY` is visible before a
+physical display gate passes. Use `--no-upload` only to check an image that is
+already installed.
 
 Development mode uses a five-minute automatic idle timer. This keeps the ready
 screen visible during a test. A short PWR-button press still requests sleep at

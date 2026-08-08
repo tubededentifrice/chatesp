@@ -19,10 +19,12 @@ The target is the Waveshare ESP32-S3-Touch-AMOLED-1.8.
 The local `chatesp_board` component is based on the official
 `waveshare/esp32_s3_touch_amoled_1_8` component at a reviewed source commit. It
 starts the CO5300 at zero brightness. The app draws a black frame before it
-raises the brightness. The current package always creates a CO5300 panel. It
-probes both touch types, but it does not select an SH8601 display. The ChatESP
-board adapter must add the original-board SH8601 path before original-board
-support is complete.
+raises the brightness. After panel-on, it sends a second complete frame and the
+same brightness command. This bounded retry recovers a controller that accepts
+the first commands but keeps the first frame black. The current package always
+creates a CO5300 panel. It probes both touch types, but it does not select an
+SH8601 display. The ChatESP board adapter must add the original-board SH8601
+path before original-board support is complete.
 
 Probe the touch controller after reset release. Address `0x15` identifies V2.
 Address `0x38` identifies the original board. Do not infer the display revision
@@ -113,6 +115,11 @@ The full-screen image path must pass these checks on the V2 AMOLED:
 - repeated image requests do not cause a reset or a PSRAM leak.
 
 The current USB-power checks do not verify battery sleep current.
+
+Run `tools/device_doctor.py` with the explicit local port after each display or
+power change. Its serial checks can verify the image, V2 probe, command order,
+and runtime start. They cannot verify emitted pixels. A person must confirm the
+visible splash or ready view.
 
 ## Physical acceptance gates
 

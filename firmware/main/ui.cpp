@@ -337,6 +337,19 @@ bool start(std::uint8_t brightness_percent) {
     show_state(InteractionState::booting);
     lv_refr_now(display);
     bsp_display_unlock();
+    const esp_err_t wake_error =
+        bsp_display_brightness_set(brightness_percent);
+    if (wake_error != ESP_OK) {
+        return false;
+    }
+    // Send one more complete frame after panel-on. The CO5300 can accept the
+    // first command and stay black until a later pixel transfer.
+    if (!bsp_display_lock(1000)) {
+        return false;
+    }
+    lv_obj_invalidate(active_screen());
+    lv_refr_now(display);
+    bsp_display_unlock();
     return bsp_display_brightness_set(brightness_percent) == ESP_OK;
 }
 

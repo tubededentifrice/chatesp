@@ -17,7 +17,8 @@ documentation contracts consistent.
 - Firmware state or UI: update pure logic tests, firmware tests, and visible
   behavior documentation.
 - Board or driver: use the official Waveshare BSP, confirm the board revision,
-  build, flash, and run the affected physical gate.
+  build, flash, run `tools/device_doctor.py`, and run the affected physical
+  gate.
 - Audio or cloud provider: keep credentials out of logs, bound audio and HTTP
   data, test failure independence, and measure the user-visible latency.
 - Tools or model loop: preserve the small registry, validate arguments, limit
@@ -68,6 +69,17 @@ uv run --locked python tools/check_secrets.py
 Run only applicable firmware commands while firmware profiles are not yet
 present. Run iOS commands from `ios/README.md` for each iOS change. Do not use
 bare Python package tools or global PlatformIO.
+
+For a black display, or after a display or power change, run:
+
+```sh
+uv run --locked python tools/device_doctor.py --port LOCAL_PORT
+```
+
+It uploads development firmware and checks one bounded boot window. A native
+USB serial open can reset the ESP32-S3 even when DTR and RTS are inactive. Use
+the repository monitor only when this reset is acceptable. Serial command
+success does not prove pixel output. Record a visible AMOLED check separately.
 
 ## Verify
 

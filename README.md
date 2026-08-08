@@ -88,6 +88,18 @@ still turns off the display at once:
 uv run --locked python tools/pio.py run -e watch_dev -t upload
 ```
 
+For a black screen, or after each display or power change, use the device
+doctor with the explicit local watch port. It uploads the current development
+image and checks the version, board revision, two-step display wake, and voice
+runtime start:
+
+```sh
+uv run --locked python tools/device_doctor.py --port LOCAL_PORT
+```
+
+The command cannot inspect emitted pixels. Confirm that `CHAT ESP` or `READY`
+is visible when the command reports that its automatic checks passed.
+
 Use production mode only for final power tests and release images. It enables
 encrypted persistent settings and AXP2101 system-off after a sleep request.
 You can build it without a device change:
@@ -103,8 +115,9 @@ until the user gives explicit approval.
 See [development mode](docs/development-mode.md) for the mode contract and the
 recovery procedure.
 
-Read device logs with the repository monitor. The generic serial monitor can
-request the ESP32-S3 ROM loader when it opens this board:
+Read device logs with the repository monitor. Opening the ESP32-S3 native USB
+serial port can reset the chip. Use the monitor only when a reset is acceptable.
+The generic serial monitor can also request the ROM loader:
 
 ```sh
 uv run --locked python tools/watch_monitor.py --port LOCAL_PORT --duration 10

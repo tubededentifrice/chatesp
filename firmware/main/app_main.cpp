@@ -68,6 +68,10 @@ extern "C" void app_main() {
         ESP_LOGE(kTag, "Display start failed");
         return;
     }
+    ESP_LOGI(
+        kTag,
+        "Display ready at %u percent",
+        static_cast<unsigned>(device_preferences.brightness_percent));
 
     static chatesp::VoiceRuntime runtime;
     const esp_err_t runtime_result = runtime.start(
@@ -97,6 +101,7 @@ extern "C" void app_main() {
             vTaskDelay(pdMS_TO_TICKS(15));
         }
     }
+    ESP_LOGI(kTag, "Voice runtime ready");
 
     while (true) {
         chatesp::ButtonEdges edges;

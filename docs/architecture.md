@@ -9,9 +9,12 @@ The firmware uses one bounded state machine:
 Each `app_main` start shows a full-boot splash with `CHAT ESP` and `STARTING`.
 Power-button setup and the initial button sample occur first. The display then
 flushes the splash while the AMOLED is off and raises the brightness only after
-the complete black frame is ready. The runtime replaces the splash as soon as
-its task and button queue can accept input. It does not use a minimum splash
-timer. An in-session display wake shows the current interaction state instead.
+the complete black frame is ready. It sends a second complete frame and repeats
+the selected brightness command after panel-on. This recovers a CO5300 that
+accepts the first commands but does not show the first pixel transfer. The
+runtime replaces the splash as soon as its task and button queue can accept
+input. It does not use a minimum splash timer. An in-session display wake shows
+the current interaction state instead.
 
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short, useful message. Sleep stays available after a
