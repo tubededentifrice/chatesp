@@ -50,7 +50,10 @@ terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
 Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
 parallel image download, search, BLE provisioning,
 device status and controls, and sleep paths. Brightness and volume changes use
-a small persistent device-preference record. The iOS companion can store
+a small persistent device-preference record. Up to ten
+short user-requested memories persist in plaintext NVS and enter each model
+request as untrusted context. A full list causes the model to compact the old
+facts before it saves the pending fact. The iOS companion can store
 settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
 can appear full-screen after the spoken answer. A restricted MicroPython tool
 can do short calculations and show a bounded line plot on the full screen.
@@ -60,9 +63,10 @@ The V2 development device has passed black-screen startup without a white
 frame, bottom-button hold-to-talk, streamed answer text, clear streamed speech,
 button preemption, strong-access-point selection, and modem power saving.
 Full-screen image color and crop, physical iPhone provisioning, battery current,
-production system-off, MicroPython limits and plot display, and long cycle tests
-are still acceptance gates. Do not use this status as a claim that these open
-physical checks passed.
+production system-off, memory persistence and compaction, secure BLE memory
+management, MicroPython limits and plot display, and long cycle tests are still
+acceptance gates. Do not use this status as a claim that these open physical
+checks passed.
 
 ## Development
 
@@ -110,8 +114,8 @@ is visible when the command reports that its automatic checks passed.
 
 Use production mode only for final power tests and release images. It enables
 persistent settings, persistent BLE bonds, and AXP2101 system-off after a sleep
-request. Settings and bonds use plaintext NVS. A person with physical flash
-access can read the stored credentials.
+request. Settings, bonds, and saved memories use plaintext NVS. A person with
+physical flash access can read the stored credentials and saved facts.
 You can build it without a device change:
 
 ```sh

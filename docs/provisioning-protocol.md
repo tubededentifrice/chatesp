@@ -14,12 +14,14 @@ The device advertises the local name `ChatESP Setup` and this primary service:
 | Data | `7B2E1002-6F3C-4B8A-9D71-4C4553500001` | Write with response |
 | Acknowledgement | `7B2E1003-6F3C-4B8A-9D71-4C4553500001` | Indicate |
 | Device context | `7B2E1004-6F3C-4B8A-9D71-4C4553500001` | Write with response |
+| Memory command | `7B2E1005-6F3C-4B8A-9D71-4C4553500001` | Write with response |
+| Memory response | `7B2E1006-6F3C-4B8A-9D71-4C4553500001` | Indicate |
 
 The device must use LE Secure Connections bonding with man-in-the-middle
 protection. It shows a new six-digit passkey on its display. iOS shows the
 system pairing prompt. The firmware must check that the connection is
 encrypted, authenticated, bonded, and uses LE Secure Connections before it
-accepts a control, data, or device-context write. It returns
+accepts a control, data, device-context, or memory write. It returns
 `authentication_required` when the stack permits an application reply. It must
 not parse or keep settings or context from an insecure link.
 
@@ -195,6 +197,84 @@ Context status uses `applied`, `authentication_required`,
 application acknowledgement status table. For `applied`, iOS requires an exact
 epoch and fingerprint match.
 
+## Memory protocol version 1
+
+The watch stores at most ten ordered facts. Each fact has a stable nonzero
+32-bit ID and 1 through 128 valid UTF-8 bytes without control characters. The
+watch is the source of truth. iOS shows the list only while the selected watch
+is connected and does not save a mirror.
+
+The 54-byte memory command header can have up to 128 fact bytes:
+
+| Offset | Size | Value |
+| --- | ---: | --- |
+| 0 | 4 | ASCII `CEMC` |
+| 4 | 1 | Memory protocol version, `1` |
+| 5 | 1 | Operation |
+| 6 | 2 | Flags, zero |
+| 8 | 4 | Nonzero request ID |
+| 12 | 4 | Expected revision |
+| 16 | 32 | Expected content fingerprint |
+| 48 | 4 | Memory ID or list cursor |
+| 52 | 2 | Fact byte length |
+| 54 | Length | Fact bytes |
+
+Operations are `1` list page, `2` add, `3` delete, and `4` clear. An initial
+list command has revision zero, a zero fingerprint, cursor zero, and no fact.
+Each later page uses the revision and fingerprint from the first response. Its
+cursor is the prior fact ID. The watch returns the first fact with a larger ID.
+Add has a zero memory ID and one fact. Delete has one nonzero ID and no fact.
+Clear has a zero ID and no fact.
+
+The memory response has a 56-byte header and can have one fact:
+
+| Offset | Size | Value |
+| --- | ---: | --- |
+| 0 | 4 | ASCII `CEMR` |
+| 4 | 1 | Memory protocol version, `1` |
+| 5 | 1 | Status |
+| 6 | 1 | Operation |
+| 7 | 1 | Bit 0 has fact, bit 1 has more, bit 2 is change event |
+| 8 | 4 | Request ID |
+| 12 | 4 | Current revision |
+| 16 | 32 | Current content fingerprint |
+| 48 | 4 | Returned or affected memory ID |
+| 52 | 2 | Fact byte length |
+| 54 | 1 | Total fact count |
+| 55 | 1 | Reserved, zero |
+| 56 | Length | Optional fact bytes |
+
+Status values are `0x00` `applied`, `0x01` `unchanged`, `0x02` `full`, `0x03`
+`not_found`, `0x04` `revision_conflict`, `0x10` `invalid_field`, `0x11`
+`storage_failure`, `0x12` `authentication_required`, `0x13` `busy`, and `0x14`
+`unsupported_version`. A GATT write response is not success. iOS waits up to
+10 seconds and makes at most two attempts. A retry uses the exact same request
+ID and bytes. The watch returns its cached response without another write.
+
+The content fingerprint is:
+
+```text
+SHA-256("CHATESP-MEMORY-V1" || version || count || ordered entries)
+entry = memory_id || fact_length || fact
+```
+
+All integers in the fingerprint use network byte order. A mutation requires an
+exact current revision and fingerprint. iOS reloads the full list after a
+conflict and after a successful mutation. A list conflict restarts at the first
+page.
+
+A voice tool change sends one coalesced change indication. It uses operation
+zero, request ID zero, the change-event flag, and no fact. iOS then reloads the
+complete list. Memory BLE work does not reset the idle timer and does not block
+sleep.
+
+Memory facts persist as one version-1 record with revision, next ID, ordered
+entries, content fingerprint, and a full-record SHA-256 integrity value. The
+firmware writes an inactive NVS slot, commits it, reads and validates the full
+record, and then changes the active slot. A failed write keeps the old active
+record. Development and production use separate plaintext NVS namespaces.
+Facts and memory frames must not enter logs.
+
 ## Application acknowledgement
 
 The device sends one 44-byte indication after it processes a complete packet.
@@ -240,6 +320,10 @@ does not have an approximate-location field. The iOS app sends version 2.
 Both versions reject unknown frame versions, operations, flags, packet types,
 fields, and acknowledgement sizes.
 
+The memory characteristics are optional for compatibility. An old app can use
+the first five characteristics with new firmware. A new app can provision old
+firmware and shows that a firmware update is required for memory management.
+
 ## Golden vector
 
 Firmware and Swift tests use this non-secret vector:
@@ -269,3 +353,8 @@ The live-context cross-language vector is:
 - approximate location: `latitude 25.2, longitude 55.3`
 - complete packet length: `78`
 - fingerprint: `d3a73c211aa2d932725513317cabdccd55494cd56614c9232c175acce58ccdb8`
+
+The memory fingerprint cross-language vector is:
+
+- entries: ID `2`, `User likes tea.`; ID `7`, `Use short answers.`
+- fingerprint: `9b9a7dc2d6f8b263694fd1b4b02d675daa47cb56bb9d84b7219ee93309440d1d`

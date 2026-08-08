@@ -77,6 +77,12 @@ separate fixed-size NVS record in development and production. Their defaults
 are 65 and 70 percent. If the record cannot be stored, the new value applies
 only to the current session and the tool result reports this state.
 
+User-requested memories are different from provisioned development settings.
+They persist in plaintext NVS in the `chesp_mem_dev` namespace. Production uses
+`chesp_mem_prod`, so a development image cannot read the production memory
+list. NVS erase removes both lists. A normal firmware update and settings
+provisioning do not remove them.
+
 ## Production mode
 
 The `watch_prod` profile defines `CHATESP_DEVELOPMENT_MODE=0`. It is the release
