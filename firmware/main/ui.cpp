@@ -28,13 +28,26 @@ constexpr std::int32_t kControlsPanelShownY = -12;
 constexpr std::int32_t kControlsPanelHiddenY = -288;
 constexpr std::uint32_t kControlsOpenAnimationMs = 180;
 constexpr std::uint32_t kControlsCloseAnimationMs = 140;
-constexpr std::int32_t kControlSliderWidth = 320;
-constexpr std::int32_t kControlSliderHeight = 44;
+constexpr std::int32_t kControlSliderLayoutWidth = 320;
+constexpr std::int32_t kControlSliderLayoutHeight = 44;
+constexpr std::int32_t kControlSliderTouchWidth = 352;
+constexpr std::int32_t kControlSliderTouchHeight = 64;
 constexpr std::int32_t kControlSliderTrackInset = 16;
 constexpr std::int32_t kControlSliderTrackWidth =
-    kControlSliderWidth - 2 * kControlSliderTrackInset;
+    kControlSliderLayoutWidth - 2 * kControlSliderTrackInset;
+constexpr std::int32_t kControlSliderTrackTouchInset =
+    (kControlSliderTouchWidth - kControlSliderTrackWidth) / 2;
+constexpr std::int32_t kControlSliderTouchOffsetY =
+    (kControlSliderLayoutHeight - kControlSliderTouchHeight) / 2;
 constexpr std::int32_t kControlSliderTrackHeight = 12;
 constexpr std::int32_t kControlSliderKnobSize = 32;
+static_assert(
+    kControlSliderTrackTouchInset ==
+    (kControlSliderTouchWidth - kControlSliderLayoutWidth) / 2 +
+        kControlSliderTrackInset);
+static_assert(
+    kControlSliderTouchOffsetY + kControlSliderTouchHeight / 2 ==
+    kControlSliderLayoutHeight / 2);
 
 enum class ControlKind : std::uint8_t {
     brightness,
@@ -572,7 +585,7 @@ void set_control_value(ControlSlider &control, std::uint8_t percent) {
     if (control.knob != nullptr) {
         lv_obj_set_x(
             control.knob,
-            kControlSliderTrackInset + relative -
+            kControlSliderTrackTouchInset + relative -
                 kControlSliderKnobSize / 2);
     }
     format_percent(control);
@@ -809,7 +822,7 @@ void update_control_from_touch(ControlSlider &control, lv_event_t *event) {
     const std::uint8_t value =
         QuickControlsGesture::percent_for_track_position(
             static_cast<std::int32_t>(point.x) - area.x1 -
-                kControlSliderTrackInset,
+                kControlSliderTrackTouchInset,
             kControlSliderTrackWidth,
             control.minimum_percent);
     if (control.value_percent == value) {
@@ -933,8 +946,16 @@ void create_control_slider(
     control.touch_target = lv_obj_create(parent);
     lv_obj_remove_style_all(control.touch_target);
     lv_obj_set_size(
-        control.touch_target, kControlSliderWidth, kControlSliderHeight);
-    lv_obj_align(control.touch_target, LV_ALIGN_TOP_MID, 0, slider_y);
+        control.touch_target,
+        kControlSliderTouchWidth,
+        kControlSliderTouchHeight);
+    // Keep the visible track and knob at their original coordinates. Only the
+    // transparent input surface grows around them.
+    lv_obj_align(
+        control.touch_target,
+        LV_ALIGN_TOP_MID,
+        0,
+        slider_y + kControlSliderTouchOffsetY);
     lv_obj_set_style_bg_opa(
         control.touch_target, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_add_flag(control.touch_target, LV_OBJ_FLAG_CLICKABLE);
@@ -972,7 +993,7 @@ void create_control_slider(
         control.knob, kControlSliderKnobSize, kControlSliderKnobSize);
     lv_obj_set_y(
         control.knob,
-        (kControlSliderHeight - kControlSliderKnobSize) / 2);
+        (kControlSliderTouchHeight - kControlSliderKnobSize) / 2);
     lv_obj_set_style_bg_color(
         control.knob, lv_color_hex(0xffffff), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(control.knob, LV_OPA_COVER, LV_PART_MAIN);

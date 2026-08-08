@@ -368,17 +368,25 @@ void test_quick_controls_snap_to_valid_five_percent_steps() {
         chatesp::QuickControlsGesture::percent_for_track_position(
             0, 288, 0));
     TEST_ASSERT_EQUAL_UINT8(
+        0,
+        chatesp::QuickControlsGesture::percent_for_track_position(
+            -32, 288, 0));
+    TEST_ASSERT_EQUAL_UINT8(
         50,
         chatesp::QuickControlsGesture::percent_for_track_position(
             144, 288, 0));
     TEST_ASSERT_EQUAL_UINT8(
         100,
         chatesp::QuickControlsGesture::percent_for_track_position(
-            400, 288, 0));
+            319, 288, 0));
     TEST_ASSERT_EQUAL_UINT8(
         55,
         chatesp::QuickControlsGesture::percent_for_track_position(
             144, 288, 5));
+    TEST_ASSERT_EQUAL_UINT8(
+        5,
+        chatesp::QuickControlsGesture::percent_for_track_position(
+            -32, 288, 5));
 }
 
 void test_quick_controls_defer_flash_work_until_input_is_idle() {

@@ -76,11 +76,13 @@ The model can request device status, set display brightness from 5 through 100
 percent, set playback volume from 0 through 100 percent, and request power-off.
 The user can also open a top touch panel and change brightness or volume in
 five-percent steps. The panel follows a downward finger movement. A press or a
-drag on either track sets its value. Brightness changes during a drag. Volume
-changes during active playback. Firmware saves the final pair after release
-and does not write NVS for each input position. The LVGL refresh period is 16
-ms. Its internal draw buffer is 368 by 48 pixels to reduce transfers during
-panel motion.
+drag in the 352-by-64-pixel invisible row around either track sets its value.
+The visible rail, fill, dot, labels, and spacing do not change. The dot shows
+the current value, but it is not the required touch target. Brightness changes
+during a drag. Volume changes during active playback. Firmware saves the final
+pair after release and does not write NVS for each input position. The LVGL
+refresh period is 16 ms. Its internal draw buffer is 368 by 48 pixels to reduce
+transfers during panel motion.
 Brightness and volume persist across a restart when NVS is available. A model
 power-off first completes a short spoken confirmation. Production then uses the
 same system-off cleanup as the PWR button and inactivity timer. One bottom PWR
@@ -155,6 +157,8 @@ The connected V2 board must pass these checks for this control change:
 - the panel opens above a full-screen image and does not cover a BLE passkey;
 - a press at any position on either track sets the related value, and each
   knob stays fully visible during a drag;
+- a press in the invisible margin around either track starts its drag without
+  a change to the visible control layout;
 - brightness changes during a drag and does not return to the old value after
   a temporary display-lock conflict;
 - active speech volume changes without a restart, and one release causes at

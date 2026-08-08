@@ -62,7 +62,10 @@ The panel position follows the finger during a pull. A short settle animation
 completes the movement after release. The display and touch refresh period is
 16 ms, and the internal draw buffer holds more than one tenth of the screen.
 The panel has one shared five-percent control component for brightness and
-volume. A press or a drag at any track position sets the value. An upward
+volume. Each existing 320-by-44-pixel layout box has a centered transparent
+352-by-64-pixel touch target. Thus, the rail, fill, dot, labels, and spacing do
+not move. The dot shows the current value; the user does not have to touch it.
+A press or a drag at any position in the larger row sets the value. An upward
 swipe, a tap outside the panel, or five seconds without touch closes it. The
 panel is not available during start, recording, sleep, or BLE passkey display.
 A PWR-button action keeps priority. Opening the panel or changing a control

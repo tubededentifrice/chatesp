@@ -21,8 +21,10 @@ companion for secure BLE configuration.
    The app refreshes this context when the watch connects and at most once per
    hour while connected.
 4. Pull down the small top handle to change brightness or volume on the
-   device. The panel follows the finger. Tap or drag either control track to
-   set its value. The same controls are also available by voice.
+   device. The panel follows the finger. Tap or drag the large invisible touch
+   row around either control track to set its value. The visible dot shows the
+   value, but it is not the required touch target. The same controls are also
+   available by voice.
 5. Continue within 30 seconds to use the same thread. After 30 seconds without
    another interaction, the device clears the thread, stops Wi-Fi, and returns
    to Clock.
