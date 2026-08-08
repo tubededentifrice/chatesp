@@ -556,6 +556,10 @@ public:
             return ESP_ERR_NO_MEM;
         }
 
+        pending_brightness_percent_.store(
+            device_control_.brightness_percent(), std::memory_order_release);
+        pending_volume_percent_.store(
+            device_control_.volume_percent(), std::memory_order_release);
         if (bsp_display_lock(100)) {
             quick_controls_enabled_ = ui::enable_quick_controls(
                 device_control_.brightness_percent(),
@@ -910,8 +914,8 @@ private:
                 true, std::memory_order_release);
         }
         if (update.volume_changed) {
-            // Volume preview is atomic, so active speech can change without
-            // delay. Panel I/O does not run in the LVGL callback.
+            // Volume updates use atomic state only. Keep them immediate while
+            // a model or speech operation owns the main runtime task.
             if (self->device_control_.preview_volume(update.volume_percent) ==
                 agent::Error::none) {
                 (void)self->playback_.set_volume(update.volume_percent);
@@ -1116,17 +1120,25 @@ private:
         const std::uint8_t volume =
             pending_volume_percent_.load(std::memory_order_acquire);
         bool values_match = true;
+        bool brightness_deferred = false;
         const runtime::DevicePreferences requested{brightness, volume};
         values_match = requested.valid();
         if (values_match && brightness_update) {
             bool brightness_applied = false;
-            if (bsp_display_lock(25)) {
+            if (bsp_display_lock(100)) {
                 brightness_applied =
                     device_control_.preview_brightness(brightness) ==
                     agent::Error::none;
                 bsp_display_unlock();
+            } else {
+                // A display refresh can own the lock during a drag. Keep the
+                // latest request and try it again. Do not move the control
+                // back to its old value for this temporary condition.
+                quick_controls_brightness_pending_.store(
+                    true, std::memory_order_release);
+                brightness_deferred = true;
             }
-            if (!brightness_applied) {
+            if (!brightness_applied && !brightness_deferred) {
                 values_match = false;
             }
         }
@@ -1147,7 +1159,8 @@ private:
                     device_control_.volume_percent());
             });
         }
-        if (commit_requested && values_match && can_commit &&
+        if (commit_requested && values_match && !brightness_deferred &&
+            can_commit &&
             quick_controls_commit_pending_.exchange(
                 false, std::memory_order_acq_rel)) {
             (void)device_control_.persist_preferences();

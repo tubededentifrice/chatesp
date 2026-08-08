@@ -318,6 +318,18 @@ void test_quick_controls_reject_a_sideways_drag() {
         static_cast<int>(controls.release(140, 100, 200)));
 }
 
+void test_quick_controls_reports_live_finger_distance() {
+    chatesp::QuickControlsGesture controls;
+    controls.set_allowed(true);
+    controls.press(180, 20, 100);
+    TEST_ASSERT_TRUE(controls.pressed());
+    TEST_ASSERT_EQUAL_INT32(0, controls.drag_distance_y(20));
+    TEST_ASSERT_EQUAL_INT32(73, controls.drag_distance_y(93));
+    controls.release(180, 93, 200);
+    TEST_ASSERT_FALSE(controls.pressed());
+    TEST_ASSERT_EQUAL_INT32(0, controls.drag_distance_y(120));
+}
+
 void test_quick_controls_close_with_an_upward_swipe() {
     chatesp::QuickControlsGesture controls;
     controls.set_allowed(true);
@@ -350,6 +362,22 @@ void test_quick_controls_snap_to_valid_five_percent_steps() {
         0, chatesp::QuickControlsGesture::snap_percent(1, 0));
     TEST_ASSERT_EQUAL_UINT8(
         100, chatesp::QuickControlsGesture::snap_percent(104, 0));
+    TEST_ASSERT_EQUAL_UINT8(
+        0,
+        chatesp::QuickControlsGesture::percent_for_track_position(
+            0, 288, 0));
+    TEST_ASSERT_EQUAL_UINT8(
+        50,
+        chatesp::QuickControlsGesture::percent_for_track_position(
+            144, 288, 0));
+    TEST_ASSERT_EQUAL_UINT8(
+        100,
+        chatesp::QuickControlsGesture::percent_for_track_position(
+            400, 288, 0));
+    TEST_ASSERT_EQUAL_UINT8(
+        55,
+        chatesp::QuickControlsGesture::percent_for_track_position(
+            144, 288, 5));
 }
 
 void test_quick_controls_defer_flash_work_until_input_is_idle() {
@@ -389,6 +417,7 @@ int main(int, char **) {
     RUN_TEST(test_held_wake_press_records_until_release);
     RUN_TEST(test_quick_controls_open_only_from_top_and_continues_below_target);
     RUN_TEST(test_quick_controls_reject_a_sideways_drag);
+    RUN_TEST(test_quick_controls_reports_live_finger_distance);
     RUN_TEST(test_quick_controls_close_with_an_upward_swipe);
     RUN_TEST(test_quick_controls_auto_close_handles_wrap_and_active_touch);
     RUN_TEST(test_quick_controls_snap_to_valid_five_percent_steps);

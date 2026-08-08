@@ -17,8 +17,9 @@ companion for secure BLE configuration.
    companion.
    The app refreshes this context when the watch connects and at most once per
    hour while connected.
-4. Swipe down from the small top handle to change brightness or volume on the
-   device. The same controls are also available by voice.
+4. Pull down the small top handle to change brightness or volume on the
+   device. The panel follows the finger. Tap or drag either control track to
+   set its value. The same controls are also available by voice.
 5. Continue within 30 seconds to use the same thread.
 6. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
    starts a new thread.

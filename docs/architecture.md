@@ -41,18 +41,24 @@ The top edge of the touch display has a small control handle. A tap or a
 48-pixel downward swipe from the top 32 pixels opens a black control panel.
 The top touch target keeps control until release, so the swipe can continue
 beyond the small handle without losing the gesture.
-The panel has large five-percent brightness and volume controls. An upward
+The panel position follows the finger during a pull. A short settle animation
+completes the movement after release. The display and touch refresh period is
+16 ms, and the internal draw buffer holds more than one tenth of the screen.
+The panel has one shared five-percent control component for brightness and
+volume. A press or a drag at any track position sets the value. An upward
 swipe, a tap outside the panel, or five seconds without touch closes it. The
 panel is not available during start, recording, sleep, or BLE passkey display.
 A PWR-button action keeps priority. Opening the panel or changing a control
 resets the idle timer only when the runtime is idle.
 
-Slider movement applies brightness at once and sends live volume changes to
-the playback task through bounded atomic state. The LVGL callback only queues
-brightness work; it does not send panel commands, write flash, or wait for
-audio. The runtime saves the final preference pair
-after release. It defers that write while voice work or a PWR-button action has
-priority. It does not write NVS for each slider position.
+Control movement sends the latest brightness and volume values through the
+same bounded callback. Volume uses safe atomic state at once, including during
+speech. The runtime sends the latest brightness command. It retries the command
+if a display refresh owns the display lock, and it does not move the visible
+control back for this temporary condition. The LVGL callback does not write
+flash, send a panel command, or wait for audio. The runtime saves the final
+preference pair after release. It defers that write while voice work or a
+PWR-button action has priority. It does not write NVS for each track position.
 
 When settings are available, the Wi-Fi station starts an asynchronous
 connection as soon as the runtime starts. This does not block the button or

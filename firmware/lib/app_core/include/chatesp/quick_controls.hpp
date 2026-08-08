@@ -90,6 +90,13 @@ public:
 
     [[nodiscard]] bool open() const { return open_; }
     [[nodiscard]] bool allowed() const { return allowed_; }
+    [[nodiscard]] bool pressed() const { return pressed_; }
+
+    [[nodiscard]] std::int32_t drag_distance_y(std::int16_t y) const {
+        return pressed_
+            ? static_cast<std::int32_t>(y) - start_y_
+            : 0;
+    }
 
     [[nodiscard]] static std::uint8_t snap_percent(
         std::int32_t value, std::uint8_t minimum) {
@@ -101,6 +108,22 @@ public:
             ? minimum
             : (snapped > 100 ? 100 : snapped);
         return static_cast<std::uint8_t>(result);
+    }
+
+    [[nodiscard]] static std::uint8_t percent_for_track_position(
+        std::int32_t position_px,
+        std::int32_t span_px,
+        std::uint8_t minimum) {
+        if (span_px <= 0) {
+            return minimum;
+        }
+        const std::int32_t bounded = position_px < 0
+            ? 0
+            : (position_px > span_px ? span_px : position_px);
+        const std::int32_t range = 100 - minimum;
+        const std::int32_t percent = minimum +
+            (bounded * range + span_px / 2) / span_px;
+        return snap_percent(percent, minimum);
     }
 
 private:
