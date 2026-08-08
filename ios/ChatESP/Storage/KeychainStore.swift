@@ -1,7 +1,12 @@
 import Foundation
 import Security
 
-struct KeychainStore {
+protocol SecretsStore {
+    func load() throws -> ProvisioningSecrets
+    func save(_ secrets: ProvisioningSecrets) throws
+}
+
+struct KeychainStore: SecretsStore {
     private let service = "org.chatesp.companion.provisioning"
     private let account = "settings-secrets-v1"
 

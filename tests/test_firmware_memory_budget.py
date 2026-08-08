@@ -40,7 +40,7 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
         )
 
         self.assertLess(
-            runtime.index("stop_ble_for_request();"),
+            runtime.index("stop_ble_for_request()"),
             runtime.index("transcription_provider_.transcribe("),
         )
 

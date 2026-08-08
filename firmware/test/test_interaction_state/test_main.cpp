@@ -6,6 +6,7 @@
 
 #include "chatesp/app_mode.hpp"
 #include "chatesp/button_debouncer.hpp"
+#include "chatesp/ble_shutdown.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/power_button_filter.hpp"
 #include "chatesp/quick_controls.hpp"
@@ -26,6 +27,27 @@ void test_short_press_requests_sleep() {
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(InteractionState::sleep_pending),
         static_cast<int>(machine.state()));
+}
+
+void test_ble_shutdown_retries_each_incomplete_step() {
+    chatesp::runtime::BleShutdown shutdown;
+    using Step = chatesp::runtime::BleShutdown::Step;
+
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(Step::stop_host),
+        static_cast<int>(shutdown.step()));
+    shutdown.host_stopped();
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(Step::deinitialize_host),
+        static_cast<int>(shutdown.step()));
+    shutdown.host_deinitialized();
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(Step::complete),
+        static_cast<int>(shutdown.step()));
+    shutdown.reset();
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(Step::stop_host),
+        static_cast<int>(shutdown.step()));
 }
 
 void test_hold_records_until_release() {
@@ -553,6 +575,7 @@ void test_clock_return_needs_a_finished_idle_chat_session() {
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_short_press_requests_sleep);
+    RUN_TEST(test_ble_shutdown_retries_each_incomplete_step);
     RUN_TEST(test_hold_records_until_release);
     RUN_TEST(test_release_at_hold_threshold_without_tick_requests_sleep);
     RUN_TEST(test_inactivity_sleeps_only_from_idle);

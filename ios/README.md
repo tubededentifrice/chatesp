@@ -12,6 +12,8 @@ app can migrate the prior single-device record. It restores the active
 ChatESP device after iOS restarts it for Bluetooth work. Scan, connect,
 reconnect, frame, and confirmation operations have fixed time limits. Remove a
 device from its settings page to stop its BLE work and delete its overrides.
+The app does not send settings after a Keychain read error. It retries the read
+when the app becomes active.
 
 The Models section explains each model role. Its searchable OpenRouter browser
 shows only compatible models. Chat and tool models require text input, text
@@ -32,6 +34,8 @@ error if a feature needs missing Wi-Fi or OpenRouter credentials. An empty
 Brave key turns search off. Empty endpoint or model edits use the built-in
 defaults when the app sends settings. Invalid nonempty values remain local and
 the status section identifies the field that needs attention.
+Selecting another device cancels an active settings transfer before the app
+changes the Bluetooth peripheral.
 
 If the app lost its local revision record, current firmware can return the
 active revision and fingerprint in a flagged error.
@@ -124,7 +128,8 @@ and integrated device firmware must pass these gates:
 - Disconnect clears the memory view. Old firmware still accepts settings and
   shows the memory firmware-update message.
 - Memory BLE work does not reset the idle timer or prevent normal sleep.
-- The app restores secrets from Keychain after restart.
+- The app restores secrets from Keychain after restart. A temporary Keychain
+  read error cannot send an empty credential update.
 - The app restores global values, device overrides, the active device, and
   per-device revisions from one preferences record.
 - Each field edit is saved at once. Empty credentials can sync. Empty endpoint

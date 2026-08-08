@@ -41,10 +41,11 @@ enum AutomaticSettingsSyncPolicy {
 final class ConfigurationStore: ObservableObject {
     @Published private(set) var preferences: AppPreferences
     @Published private(set) var secrets: ProvisioningSecrets
+    @Published private(set) var secretsAvailable: Bool
     @Published private(set) var errorText: String?
 
     private let preferencesStore: PreferencesStore
-    private let keychainStore: KeychainStore
+    private let keychainStore: any SecretsStore
 
     var devices: [ChatESPDeviceRecord] {
         preferences.devices
@@ -56,15 +57,17 @@ final class ConfigurationStore: ObservableObject {
 
     init(
         preferencesStore: PreferencesStore = PreferencesStore(),
-        keychainStore: KeychainStore = KeychainStore()
+        keychainStore: any SecretsStore = KeychainStore()
     ) {
         self.preferencesStore = preferencesStore
         self.keychainStore = keychainStore
         preferences = preferencesStore.load()
         do {
             secrets = try keychainStore.load()
+            secretsAvailable = true
         } catch {
             secrets = ProvisioningSecrets()
+            secretsAvailable = false
             errorText = "The app could not read the saved secrets."
         }
     }
@@ -78,7 +81,8 @@ final class ConfigurationStore: ObservableObject {
     }
 
     func settings(for deviceID: UUID) -> ProvisioningSettings? {
-        guard let configuration = configuration(for: deviceID) else {
+        guard secretsAvailable,
+              let configuration = configuration(for: deviceID) else {
             return nil
         }
         return ProvisioningSettings(
@@ -108,6 +112,10 @@ final class ConfigurationStore: ObservableObject {
     }
 
     func removeDevice(id: UUID) {
+        guard secretsAvailable else {
+            errorText = "The app could not read the saved secrets."
+            return
+        }
         var nextPreferences = preferences
         nextPreferences.devices.removeAll { $0.id == id }
         if nextPreferences.activeDeviceIdentifier == id {
@@ -157,6 +165,10 @@ final class ConfigurationStore: ObservableObject {
     func updateGlobalSecrets(
         _ change: (inout ProvisioningSecretValues) -> Void
     ) {
+        guard secretsAvailable else {
+            errorText = "The app could not read the saved secrets."
+            return
+        }
         var next = secrets
         change(&next.global)
         saveSecrets(next)
@@ -178,6 +190,10 @@ final class ConfigurationStore: ObservableObject {
         id: UUID,
         _ change: (inout ProvisioningSecretOverrides) -> Void
     ) {
+        guard secretsAvailable else {
+            errorText = "The app could not read the saved secrets."
+            return
+        }
         var next = secrets
         var overrides = next.deviceOverrides[id] ?? ProvisioningSecretOverrides()
         change(&overrides)
@@ -186,6 +202,9 @@ final class ConfigurationStore: ObservableObject {
     }
 
     func makePacket(for deviceID: UUID) throws -> ProvisioningPacket {
+        guard secretsAvailable else {
+            throw ProvisioningError.secretsUnavailable
+        }
         guard let settings = settings(for: deviceID),
               settings.validationIssues.isEmpty else {
             throw settings(for: deviceID)?.validationIssues.first.map {
@@ -199,9 +218,10 @@ final class ConfigurationStore: ObservableObject {
         }
         let revision = try next.devices[index].provisioning.revision(
             for: fingerprint)
+        let packet = try settings.packet(revision: revision)
         try preferencesStore.save(next)
         preferences = next
-        return try settings.packet(revision: revision)
+        return packet
     }
 
     func accept(
@@ -251,6 +271,17 @@ final class ConfigurationStore: ObservableObject {
         }
     }
 
+    func reloadSecretsIfNeeded() {
+        guard !secretsAvailable else { return }
+        do {
+            secrets = try keychainStore.load()
+            secretsAvailable = true
+            errorText = nil
+        } catch {
+            errorText = "The app could not read the saved secrets."
+        }
+    }
+
     private func savePreferences(_ next: AppPreferences) {
         guard next != preferences else { return }
         do {
@@ -267,6 +298,7 @@ final class ConfigurationStore: ObservableObject {
         do {
             try keychainStore.save(next)
             secrets = next
+            secretsAvailable = true
             errorText = nil
         } catch {
             showSaveError()

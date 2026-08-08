@@ -640,6 +640,7 @@ enum ProvisioningError: Error, Equatable {
     case malformedAcknowledgement
     case unsupportedPreferences
     case keychain(OSStatus)
+    case secretsUnavailable
     case randomFailure
     case bluetoothUnavailable
     case noDevice
@@ -668,6 +669,8 @@ extension ProvisioningError: LocalizedError {
             return "The saved settings use an unsupported version."
         case .keychain:
             return "The app could not use Keychain."
+        case .secretsUnavailable:
+            return "Unlock the iPhone before settings sync."
         case .randomFailure:
             return "The app could not start a secure transfer."
         case .bluetoothUnavailable:

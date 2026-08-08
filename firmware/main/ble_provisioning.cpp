@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "chatesp/ble_shutdown.hpp"
 #include "chatesp/provisioning_session.hpp"
 #include "device_memory_store.hpp"
 #include "esp_random.h"
@@ -85,6 +86,7 @@ std::size_t s_cached_memory_response_size = 0;
 std::uint16_t s_cached_memory_connection = kNoConnection;
 std::uint8_t s_address_type = 0;
 bool s_running = false;
+runtime::BleShutdown s_shutdown;
 
 int gap_event(ble_gap_event *event, void *argument);
 int gatt_access(
@@ -912,6 +914,7 @@ esp_err_t start(
     }
 
     ble_store_config_init();
+    s_shutdown.reset();
     s_running = true;
     nimble_port_freertos_init(host_task);
     return ESP_OK;
@@ -921,12 +924,27 @@ esp_err_t stop() {
     if (!s_running) {
         return ESP_OK;
     }
+    if (s_shutdown.step() == runtime::BleShutdown::Step::stop_host) {
+        const int advertisement_stop_result = ble_gap_adv_stop();
+        if (nimble_port_stop() != 0) {
+            if (advertisement_stop_result == 0) {
+                advertise();
+            }
+            return ESP_FAIL;
+        }
+        s_shutdown.host_stopped();
+    }
+    if (s_shutdown.step() ==
+        runtime::BleShutdown::Step::deinitialize_host) {
+        const esp_err_t deinit_result = nimble_port_deinit();
+        if (deinit_result != ESP_OK) {
+            return deinit_result;
+        }
+        s_shutdown.host_deinitialized();
+    }
     if (s_memory_store != nullptr) {
         s_memory_store->set_change_callback(nullptr, nullptr);
     }
-    ble_gap_adv_stop();
-    const int stop_result = nimble_port_stop();
-    const esp_err_t deinit_result = nimble_port_deinit();
     s_session.disconnect();
     s_owner_connection = kNoConnection;
     hide_all_passkeys();
@@ -947,7 +965,7 @@ esp_err_t stop() {
     s_device_context_callback = nullptr;
     s_callback_context = nullptr;
     s_running = false;
-    return stop_result == 0 ? deinit_result : ESP_FAIL;
+    return ESP_OK;
 }
 
 bool running() { return s_running; }

@@ -89,6 +89,8 @@ request. This releases the Bluetooth controller memory for TLS. Provisioning
 starts again when the interaction ends and the runtime returns to idle. A phone
 connection can close at the end of a recording. The app must treat this as a
 normal disconnect and reconnect when the ChatESP device advertises again.
+If the Bluetooth host does not stop, the runtime keeps its state intact and
+does not start TLS work. A later stop can retry the incomplete shutdown.
 
 When no live app location is available, the runtime also stops BLE for one
 short IP-context HTTPS lookup. This gives TLS the same controller-memory
@@ -245,6 +247,9 @@ records. A device record contains a display name, optional non-secret
 overrides, and independent provisioning revision state. Keychain contains the
 global credentials and optional credential overrides for each device. The app
 combines these two inheritance layers only when it builds a settings packet.
+It does not build or send a packet after a Keychain read error. It retries the
+read when the app becomes active. Thus, temporary Keychain unavailability
+cannot become an empty credential update.
 
 Each UI edit writes only its local non-secret or Keychain store at once. An
 empty credential does not block another edit or an automatic BLE transfer.
@@ -254,6 +259,8 @@ the field. The app sends each valid effective configuration automatically after
 connection or a settings change. The firmware receives one validated, atomic
 settings packet. It reports a runtime error when a cloud action needs missing
 Wi-Fi or OpenRouter credentials. An empty Brave key disables search.
+An explicit device change cancels an active settings transfer before the app
+changes the selected peripheral.
 
 The model browser gets a bounded OpenRouter catalog response. It filters chat
 models for text input, text output, and tool calling. It filters transcription

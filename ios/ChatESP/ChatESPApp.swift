@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct ChatESPApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store: ConfigurationStore
     @StateObject private var provisioner: BLEProvisioner
 
@@ -18,6 +19,11 @@ struct ChatESPApp: App {
             ConfigurationView()
                 .environmentObject(store)
                 .environmentObject(provisioner)
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        store.reloadSecretsIfNeeded()
+                    }
+                }
         }
     }
 }

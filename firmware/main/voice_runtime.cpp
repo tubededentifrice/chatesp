@@ -955,8 +955,7 @@ private:
 
         // TLS needs the controller memory. A phone can reconnect after this
         // one short, optional lookup.
-        stop_ble();
-        if (ble_started_) {
+        if (!stop_ble()) {
             ESP_LOGW(
                 kTag,
                 "Optional IP context skipped because Bluetooth stayed active");
@@ -1827,7 +1826,11 @@ private:
 
         join_network_warm_worker();
         finish_network_context_worker(true);
-        stop_ble_for_request();
+        if (!stop_ble_for_request()) {
+            capture_.discard();
+            fail("BLUETOOTH COULD NOT STOP");
+            return;
+        }
 
         if (!network_initialized_) {
             const esp_err_t network_result = network_.initialize();
@@ -2233,13 +2236,13 @@ private:
         }
     }
 
-    void stop_ble_for_request() {
-        stop_ble();
+    bool stop_ble_for_request() {
+        return stop_ble();
     }
 
-    void stop_ble() {
+    bool stop_ble() {
         if (!ble_started_) {
-            return;
+            return true;
         }
         const esp_err_t result = ble_provisioning::stop();
         if (result != ESP_OK) {
@@ -2247,6 +2250,7 @@ private:
         }
         ble_started_ = ble_provisioning::running();
         ble_start_attempted_ = ble_started_;
+        return result == ESP_OK && !ble_started_;
     }
 
     bool ensure_ble_started() {

@@ -7,6 +7,31 @@ final class BLEProvisionerPolicyTests: XCTestCase {
         XCTAssertFalse(BLEProvisionerPolicy.canStartProvisioning(hasPendingRequest: true))
     }
 
+    func testSelectionChangeCancelsOnlyAnActiveTransferForAnotherDevice() {
+        let selected = UUID()
+
+        XCTAssertFalse(
+            BLEProvisionerPolicy.mustCancelProvisioningForSelectionChange(
+                isProvisioning: false,
+                selectedID: selected,
+                requestedID: UUID()))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.mustCancelProvisioningForSelectionChange(
+                isProvisioning: true,
+                selectedID: selected,
+                requestedID: selected))
+        XCTAssertTrue(
+            BLEProvisionerPolicy.mustCancelProvisioningForSelectionChange(
+                isProvisioning: true,
+                selectedID: selected,
+                requestedID: UUID()))
+        XCTAssertTrue(
+            BLEProvisionerPolicy.mustCancelProvisioningForSelectionChange(
+                isProvisioning: true,
+                selectedID: selected,
+                requestedID: nil))
+    }
+
     func testCallbacksOnlyMatchTheSelectedPeripheral() {
         let selected = UUID()
 
@@ -63,5 +88,25 @@ final class BLEProvisionerPolicyTests: XCTestCase {
                 authorizationAllowed: true,
                 updatedAt: 99,
                 now: 1_000))
+    }
+
+    func testDeviceContextIntervalUsesMonotonicElapsedTime() {
+        XCTAssertEqual(BLEProvisionerPolicy.deviceContextInterval, 3_600)
+        XCTAssertTrue(
+            BLEProvisionerPolicy.deviceContextSyncIsDue(
+                lastSentAt: nil,
+                now: 100))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.deviceContextSyncIsDue(
+                lastSentAt: 100,
+                now: 3_699))
+        XCTAssertTrue(
+            BLEProvisionerPolicy.deviceContextSyncIsDue(
+                lastSentAt: 100,
+                now: 3_700))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.deviceContextSyncIsDue(
+                lastSentAt: 100,
+                now: 99))
     }
 }

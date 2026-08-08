@@ -56,10 +56,19 @@ struct BLEProvisionerPolicy {
     static let scanTimeout: TimeInterval = 10
     static let connectionTimeout: TimeInterval = 10
     static let frameTimeout: TimeInterval = 10
+    static let deviceContextInterval: TimeInterval = 3_600
     static let reconnectDelays: [TimeInterval] = [2, 4, 8, 16]
 
     static func canStartProvisioning(hasPendingRequest: Bool) -> Bool {
         !hasPendingRequest
+    }
+
+    static func mustCancelProvisioningForSelectionChange(
+        isProvisioning: Bool,
+        selectedID: UUID?,
+        requestedID: UUID?
+    ) -> Bool {
+        isProvisioning && selectedID != requestedID
     }
 
     static func acceptsCallback(selectedID: UUID?, callbackID: UUID) -> Bool {
@@ -86,6 +95,14 @@ struct BLEProvisionerPolicy {
         guard authorizationAllowed, let updatedAt else { return false }
         let elapsed = now - updatedAt
         return elapsed >= 0 && elapsed <= 900
+    }
+
+    static func deviceContextSyncIsDue(
+        lastSentAt: TimeInterval?,
+        now: TimeInterval
+    ) -> Bool {
+        guard let lastSentAt else { return true }
+        return now - lastSentAt >= deviceContextInterval
     }
 }
 
@@ -143,7 +160,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var approximateLocationUpdatedAt: TimeInterval?
     private var contextTimer: Timer?
     private var pendingDeviceContext: DeviceContextPacket?
-    private var lastDeviceContextSentAt: Date?
+    private var lastDeviceContextSentAtUptime: TimeInterval?
     private var deviceContextAttempt = 0
     private var deviceContextTimeoutWork: DispatchWorkItem?
     private var freshLocationWaitWork: DispatchWorkItem?
@@ -230,6 +247,13 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     func restoreSelectedDevice(identifier: UUID?) {
+        if BLEProvisionerPolicy.mustCancelProvisioningForSelectionChange(
+            isProvisioning: isProvisioning,
+            selectedID: selectedID,
+            requestedID: identifier
+        ) {
+            finish(.failure(BLEProvisionerError.stopped), sendContext: false)
+        }
         desiredSelectedID = identifier
         guard let identifier else {
             for peripheral in restoredPeripherals.values where
@@ -287,7 +311,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         approximateLocationUpdatedAt = nil
         pendingDeviceContext = nil
         deviceContextAttempt = 0
-        lastDeviceContextSentAt = nil
+        lastDeviceContextSentAtUptime = nil
         let oldSelection = selected
         selected = nil
         selectedID = nil
@@ -340,7 +364,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
             onSelectedDeviceChanged?(peripheral.identifier)
         }
         if peripheral.state == .connected {
-            lastDeviceContextSentAt = nil
+            lastDeviceContextSentAtUptime = nil
             prepareCharacteristics(on: peripheral)
         } else {
             connectSelected()
@@ -725,7 +749,10 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
         requestFreshLocation()
         if contextTimer == nil {
-            contextTimer = Timer.scheduledTimer(withTimeInterval: 3_600, repeats: true) {
+            contextTimer = Timer.scheduledTimer(
+                withTimeInterval: BLEProvisionerPolicy.deviceContextInterval,
+                repeats: true
+            ) {
                 [weak self] _ in
                 Task { @MainActor in
                     self?.sendDeviceContextAfterFreshLocation()
@@ -787,8 +814,11 @@ final class BLEProvisioner: NSObject, ObservableObject {
               acknowledgementCharacteristic?.isNotifying == true else {
             return
         }
-        if !force, let lastDeviceContextSentAt,
-           Date().timeIntervalSince(lastDeviceContextSentAt) < 3_600 {
+        let now = ProcessInfo.processInfo.systemUptime
+        if !force, !BLEProvisionerPolicy.deviceContextSyncIsDue(
+            lastSentAt: lastDeviceContextSentAtUptime,
+            now: now
+        ) {
             return
         }
         do {
@@ -799,13 +829,13 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 deviceContextAttempt = 0
             }
             deviceContextAttempt += 1
-            lastDeviceContextSentAt = Date()
+            lastDeviceContextSentAtUptime = now
             startDeviceContextTimeout()
             selected.writeValue(
                 packet.data, for: deviceContextCharacteristic, type: .withResponse)
         } catch {
             pendingDeviceContext = nil
-            lastDeviceContextSentAt = nil
+            lastDeviceContextSentAtUptime = nil
             deviceContextAttempt = 0
         }
     }
@@ -828,7 +858,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingDeviceContext = nil
-            self.lastDeviceContextSentAt = nil
+            self.lastDeviceContextSentAtUptime = nil
             if self.deviceContextAttempt < 2 {
                 self.sendDeviceContext(force: true, retry: true)
             } else {
@@ -874,7 +904,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         selected.delegate = self
         switch selected.state {
         case .connected:
-            lastDeviceContextSentAt = nil
+            lastDeviceContextSentAtUptime = nil
             isDeviceConnected = true
             prepareCharacteristics(on: selected)
         case .connecting:
@@ -1112,7 +1142,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
             self.connectionTimeoutWork?.cancel()
             self.connectionTimeoutWork = nil
             self.reconnectAttempt = 0
-            self.lastDeviceContextSentAt = nil
+            self.lastDeviceContextSentAtUptime = nil
             self.isDeviceConnected = true
             self.prepareCharacteristics(on: peripheral)
         }
@@ -1255,7 +1285,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 } else {
                     self.deviceContextTimeoutWork?.cancel()
                     self.pendingDeviceContext = nil
-                    self.lastDeviceContextSentAt = nil
+                    self.lastDeviceContextSentAtUptime = nil
                     self.deviceContextAttempt = 0
                     self.phase = .idle
                 }
@@ -1270,7 +1300,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 } else {
                     self.deviceContextTimeoutWork?.cancel()
                     self.pendingDeviceContext = nil
-                    self.lastDeviceContextSentAt = nil
+                    self.lastDeviceContextSentAtUptime = nil
                     self.deviceContextAttempt = 0
                     self.phase = .idle
                 }
@@ -1313,7 +1343,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 if characteristic.uuid == Self.deviceContext {
                     self.deviceContextTimeoutWork?.cancel()
                     self.pendingDeviceContext = nil
-                    self.lastDeviceContextSentAt = nil
+                    self.lastDeviceContextSentAtUptime = nil
                     if self.deviceContextAttempt < 2 {
                         self.sendDeviceContext(force: true, retry: true)
                     } else {
@@ -1381,7 +1411,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 if self.pendingDeviceContext != nil {
                     self.deviceContextTimeoutWork?.cancel()
                     self.pendingDeviceContext = nil
-                    self.lastDeviceContextSentAt = nil
+                    self.lastDeviceContextSentAtUptime = nil
                     self.deviceContextAttempt = 0
                 } else if self.pendingPacket != nil {
                     self.retryOrFinish(error)
@@ -1404,11 +1434,11 @@ extension BLEProvisioner: CBPeripheralDelegate {
                     guard acknowledgement.status == .applied,
                           acknowledgement.epochSeconds == packet.epochSeconds,
                           acknowledgement.fingerprint == packet.fingerprint else {
-                        self.lastDeviceContextSentAt = nil
+                        self.lastDeviceContextSentAtUptime = nil
                         return
                     }
                 } catch {
-                    self.lastDeviceContextSentAt = nil
+                    self.lastDeviceContextSentAtUptime = nil
                     return
                 }
                 return

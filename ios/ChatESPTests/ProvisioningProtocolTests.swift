@@ -1,6 +1,27 @@
 import XCTest
 @testable import ChatESP
 
+private enum TestSecretsError: Error {
+    case unavailable
+}
+
+private final class TestSecretsStore: SecretsStore {
+    var loadResult: Result<ProvisioningSecrets, Error>
+    private(set) var saved: [ProvisioningSecrets] = []
+
+    init(loadResult: Result<ProvisioningSecrets, Error>) {
+        self.loadResult = loadResult
+    }
+
+    func load() throws -> ProvisioningSecrets {
+        try loadResult.get()
+    }
+
+    func save(_ secrets: ProvisioningSecrets) throws {
+        saved.append(secrets)
+    }
+}
+
 final class ProvisioningProtocolTests: XCTestCase {
     private let fixturePassword = ["PASS", "WORD", "_PLACEHOLDER"].joined()
 
@@ -34,6 +55,83 @@ final class ProvisioningProtocolTests: XCTestCase {
         bytes.appendBigEndian(revision)
         bytes.append(fingerprint)
         return try ProvisioningAcknowledgement(data: bytes)
+    }
+
+    @MainActor
+    func testUnavailableKeychainCannotCreateAnEmptySettingsPacket() throws {
+        let suite = "org.chatesp.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferencesStore = PreferencesStore(defaults: defaults)
+        let deviceID = UUID()
+        var preferences = AppPreferences()
+        preferences.devices = [
+            ChatESPDeviceRecord(id: deviceID, name: "Desk")
+        ]
+        preferences.activeDeviceIdentifier = deviceID
+        try preferencesStore.save(preferences)
+        let secretsStore = TestSecretsStore(
+            loadResult: .failure(TestSecretsError.unavailable))
+        let store = ConfigurationStore(
+            preferencesStore: preferencesStore,
+            keychainStore: secretsStore)
+
+        XCTAssertFalse(store.secretsAvailable)
+        XCTAssertNil(store.settings(for: deviceID))
+        XCTAssertThrowsError(try store.makePacket(for: deviceID)) { error in
+            XCTAssertEqual(error as? ProvisioningError, .secretsUnavailable)
+        }
+        XCTAssertNil(
+            store.preferences.device(id: deviceID)?.provisioning.pendingRevision)
+        XCTAssertTrue(secretsStore.saved.isEmpty)
+
+        secretsStore.loadResult = .success(ProvisioningSecrets())
+        store.reloadSecretsIfNeeded()
+
+        XCTAssertTrue(store.secretsAvailable)
+        XCTAssertNotNil(store.settings(for: deviceID))
+        XCTAssertNoThrow(try store.makePacket(for: deviceID))
+    }
+
+    @MainActor
+    func testOversizedPacketDoesNotSaveAPendingRevision() throws {
+        let suite = "org.chatesp.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferencesStore = PreferencesStore(defaults: defaults)
+        let deviceID = UUID()
+        var preferences = AppPreferences()
+        preferences.global = ChatESPConfiguration(
+            chatEndpoint: "https://a." + String(repeating: "b", count: 182),
+            chatModel: String(repeating: "a", count: 96),
+            transcriptionModel: String(repeating: "b", count: 96),
+            speechModel: String(repeating: "c", count: 96),
+            approximateLocation: String(repeating: "d", count: 96))
+        preferences.devices = [
+            ChatESPDeviceRecord(id: deviceID, name: "Desk")
+        ]
+        preferences.activeDeviceIdentifier = deviceID
+        try preferencesStore.save(preferences)
+        let secretsStore = TestSecretsStore(
+            loadResult: .success(
+                ProvisioningSecrets(
+                    global: ProvisioningSecretValues(
+                        openRouterKey: String(repeating: "e", count: 256),
+                        braveKey: String(repeating: "f", count: 128),
+                        wifiSSID: String(repeating: "g", count: 32),
+                        wifiPassword: String(repeating: "h", count: 63)))))
+        let store = ConfigurationStore(
+            preferencesStore: preferencesStore,
+            keychainStore: secretsStore)
+
+        XCTAssertThrowsError(try store.makePacket(for: deviceID)) { error in
+            XCTAssertEqual(error as? ProvisioningError, .packetTooLarge)
+        }
+        XCTAssertNil(
+            store.preferences.device(id: deviceID)?.provisioning.pendingRevision)
+        XCTAssertNil(
+            preferencesStore.load().device(id: deviceID)?
+                .provisioning.pendingRevision)
     }
 
     func testGoldenPacketMatchesFirmwareVector() throws {

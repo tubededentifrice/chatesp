@@ -147,7 +147,8 @@ plus one. Revision zero is stale.
 
 The iOS app saves a pending revision and fingerprint before transfer. It keeps
 them for a retry. It marks them as acknowledged only after a successful
-application acknowledgement.
+application acknowledgement. It saves the pending state only after it builds a
+complete packet within the 1,024-byte limit.
 
 If the iOS preferences record is lost, the first new packet can have an old or
 conflicting revision. After the firmware fully validates that packet on an
