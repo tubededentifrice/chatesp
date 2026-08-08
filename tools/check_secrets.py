@@ -69,9 +69,28 @@ def git_names(root: Path, arguments: list[str]) -> list[Path]:
     return [Path(os.fsdecode(item)) for item in result.stdout.split(b"\0") if item]
 
 
+def git_index_entries(root: Path) -> list[tuple[Path, bytes]]:
+    result = subprocess.run(
+        ["git", "ls-files", "--stage", "-z"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    entries: list[tuple[Path, bytes]] = []
+    for item in result.stdout.split(b"\0"):
+        if not item or b"\t" not in item:
+            continue
+        metadata, raw_path = item.split(b"\t", 1)
+        mode = metadata.split(b" ", 1)[0]
+        entries.append((Path(os.fsdecode(raw_path)), mode))
+    return entries
+
+
 def candidate_blobs(root: Path) -> list[Candidate]:
     candidates: list[Candidate] = []
-    for relative in git_names(root, ["ls-files", "--cached"]):
+    for relative, mode in git_index_entries(root):
+        if mode == b"160000":
+            continue
         result = subprocess.run(
             ["git", "show", "--no-textconv", f":./{relative.as_posix()}"],
             cwd=root,
@@ -85,7 +104,7 @@ def candidate_blobs(root: Path) -> list[Candidate]:
         # this check normally runs before staging and must not miss a secret
         # in a modified tracked file.
         path = root / relative
-        if os.path.lexists(path):
+        if os.path.lexists(path) and not path.is_dir():
             worktree_data = (
                 os.fsencode(os.readlink(path))
                 if path.is_symlink()
@@ -98,6 +117,10 @@ def candidate_blobs(root: Path) -> list[Candidate]:
         root, ["ls-files", "--others", "--exclude-standard"]
     ):
         path = root / relative
+        # Git reports an untracked nested repository as one directory. Its
+        # pinned Git link and .gitmodules entry are the commit candidates.
+        if path.is_dir():
+            continue
         if path.is_symlink():
             data = os.fsencode(os.readlink(path))
         else:

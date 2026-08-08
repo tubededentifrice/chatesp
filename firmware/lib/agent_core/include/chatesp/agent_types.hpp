@@ -65,6 +65,44 @@ struct DeviceStatus {
     PowerOffMode power_off_mode = PowerOffMode::system_off;
 };
 
+struct PlotData {
+    std::array<double, Limits::max_plot_points> x{};
+    std::array<double, Limits::max_plot_points> y{};
+    FixedText<Limits::max_plot_title_bytes> title;
+    std::size_t count = 0;
+
+    [[nodiscard]] bool ready() const {
+        return count >= 2 && count <= Limits::max_plot_points;
+    }
+
+    void clear() {
+        x.fill(0.0);
+        y.fill(0.0);
+        title.clear();
+        count = 0;
+    }
+};
+
+enum class PythonExecutionStatus : std::uint8_t {
+    ok,
+    script_error,
+    memory_limit,
+    output_limit,
+    time_limit,
+};
+
+struct PythonExecution {
+    PythonExecutionStatus status = PythonExecutionStatus::ok;
+    FixedText<Limits::max_python_output_bytes> output;
+    PlotData plot;
+
+    void clear() {
+        status = PythonExecutionStatus::ok;
+        output.clear();
+        plot.clear();
+    }
+};
+
 struct Message {
     MessageRole role = MessageRole::user;
     FixedText<Limits::max_message_bytes> content;

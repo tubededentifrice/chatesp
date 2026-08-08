@@ -21,6 +21,11 @@ constexpr char image_action_schema[] =
     "\"oneOf\":[{\"required\":[\"query\"]},{\"required\":[\"select\"]}],"
     "\"additionalProperties\":false}";
 
+constexpr char python_schema[] =
+    "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\","
+    "\"maxLength\":1024}},\"required\":[\"code\"],"
+    "\"additionalProperties\":false}";
+
 constexpr char empty_object_schema[] =
     "{\"type\":\"object\",\"properties\":{},"
     "\"additionalProperties\":false}";
@@ -90,6 +95,32 @@ Error parse_query(
     }
     if (!found || query.empty() || !reader.finish()) {
         return Error::invalid_argument;
+    }
+    return Error::none;
+}
+
+Error parse_python_source(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_python_source_bytes> &source) {
+    if (arguments == nullptr || size == 0 ||
+        size > Limits::max_tool_arguments_bytes) {
+        return Error::invalid_argument;
+    }
+    detail::JsonReader reader(arguments, size);
+    if (!reader.consume('{')) {
+        return Error::malformed_response;
+    }
+    FixedText<16> key;
+    if (!reader.read_string(key) || !key.equals("code") ||
+        !reader.consume(':') || !reader.read_string(source) ||
+        !reader.consume('}') || !reader.finish() || source.empty()) {
+        return Error::invalid_argument;
+    }
+    for (std::size_t index = 0; index < source.size(); ++index) {
+        if (source.data()[index] == '\0') {
+            source.clear();
+            return Error::invalid_argument;
+        }
     }
     return Error::none;
 }
@@ -340,6 +371,170 @@ const char *SearchImagesTool::description() const {
 const char *SearchImagesTool::parameters_schema() const {
     return image_action_schema;
 }
+
+const char *RunPythonTool::name() const { return "run_python"; }
+
+const char *RunPythonTool::description() const {
+    return "Run bounded MicroPython math. Print needed values. For a line "
+           "plot, call plot.line(x_list, y_list, optional_title).";
+}
+
+const char *RunPythonTool::parameters_schema() const { return python_schema; }
+
+namespace {
+
+const char *python_status_name(PythonExecutionStatus status) {
+    switch (status) {
+        case PythonExecutionStatus::ok:
+            return "ok";
+        case PythonExecutionStatus::script_error:
+            return "script_error";
+        case PythonExecutionStatus::memory_limit:
+            return "memory_limit";
+        case PythonExecutionStatus::output_limit:
+            return "output_limit";
+        case PythonExecutionStatus::time_limit:
+            return "time_limit";
+    }
+    return "script_error";
+}
+
+bool append_bounded_python_output(
+    FixedText<Limits::max_tool_result_bytes> &result, const char *text,
+    std::size_t size, bool &truncated) {
+    constexpr char suffix[] =
+        ",\"output_truncated\":false,\"plot_ready\":false}";
+    constexpr char hex[] = "0123456789abcdef";
+    truncated = false;
+    if (text == nullptr || !result.push_back('"')) {
+        return false;
+    }
+    for (std::size_t index = 0; index < size;) {
+        const unsigned char value = static_cast<unsigned char>(text[index]);
+        char escaped[6]{};
+        const char *token = text + index;
+        std::size_t token_size = 1;
+        std::size_t consumed = 1;
+        if (value == '"' || value == '\\') {
+            escaped[0] = '\\';
+            escaped[1] = static_cast<char>(value);
+            token = escaped;
+            token_size = 2;
+        } else if (value == '\b' || value == '\f' || value == '\n' ||
+                   value == '\r' || value == '\t') {
+            escaped[0] = '\\';
+            escaped[1] = value == '\b' ? 'b' : value == '\f' ? 'f' :
+                value == '\n' ? 'n' : value == '\r' ? 'r' : 't';
+            token = escaped;
+            token_size = 2;
+        } else if (value < 0x20) {
+            escaped[0] = '\\';
+            escaped[1] = 'u';
+            escaped[2] = '0';
+            escaped[3] = '0';
+            escaped[4] = hex[value >> 4];
+            escaped[5] = hex[value & 0x0f];
+            token = escaped;
+            token_size = sizeof(escaped);
+        } else if (value >= 0x80) {
+            if (value >= 0xc2 && value <= 0xdf) {
+                consumed = 2;
+            } else if (value >= 0xe0 && value <= 0xef) {
+                consumed = 3;
+            } else if (value >= 0xf0 && value <= 0xf4) {
+                consumed = 4;
+            }
+            bool valid = consumed != 1 && consumed <= size - index;
+            for (std::size_t offset = 1; valid && offset < consumed; ++offset) {
+                const unsigned char continuation =
+                    static_cast<unsigned char>(text[index + offset]);
+                valid = continuation >= 0x80 && continuation <= 0xbf;
+            }
+            if (valid && consumed == 3) {
+                const unsigned char second =
+                    static_cast<unsigned char>(text[index + 1]);
+                valid = (value != 0xe0 || second >= 0xa0) &&
+                    (value != 0xed || second <= 0x9f);
+            } else if (valid && consumed == 4) {
+                const unsigned char second =
+                    static_cast<unsigned char>(text[index + 1]);
+                valid = (value != 0xf0 || second >= 0x90) &&
+                    (value != 0xf4 || second <= 0x8f);
+            }
+            if (valid) {
+                token_size = consumed;
+            } else {
+                token = "?";
+                token_size = 1;
+                consumed = 1;
+                truncated = true;
+            }
+        }
+        if (token_size + 1 + sizeof(suffix) - 1 > result.remaining()) {
+            truncated = true;
+            break;
+        }
+        if (!result.append(token, token_size)) {
+            return false;
+        }
+        index += consumed;
+    }
+    return result.push_back('"');
+}
+
+}  // namespace
+
+Error RunPythonTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    pending_plot_.clear();
+    FixedText<Limits::max_python_source_bytes> source;
+    Error error = parse_python_source(arguments, size, source);
+    if (error != Error::none) {
+        return error;
+    }
+    if (cancellation.cancelled()) {
+        return Error::cancelled;
+    }
+    PythonExecution execution;
+    error = provider_.execute(
+        source.data(), source.size(), execution, cancellation);
+    source.clear();
+    if (error != Error::none || cancellation.cancelled()) {
+        execution.clear();
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    if (execution.status == PythonExecutionStatus::ok &&
+        execution.plot.ready()) {
+        pending_plot_ = execution.plot;
+    }
+    bool output_truncated = false;
+    const bool built = result.append("{\"status\":") &&
+        detail::append_json_string(result, python_status_name(execution.status)) &&
+        result.append(",\"output\":") &&
+        append_bounded_python_output(
+            result, execution.output.data(), execution.output.size(),
+            output_truncated) &&
+        result.append(",\"output_truncated\":") &&
+        append_boolean(result, output_truncated) &&
+        result.append(",\"plot_ready\":") &&
+        append_boolean(result, pending_plot_.ready()) && result.push_back('}');
+    execution.clear();
+    return built ? Error::none : Error::limit_exceeded;
+}
+
+bool RunPythonTool::take_plot(PlotData &plot) {
+    if (!pending_plot_.ready()) {
+        plot.clear();
+        return false;
+    }
+    plot = pending_plot_;
+    pending_plot_.clear();
+    return true;
+}
+
+void RunPythonTool::clear_plot() { pending_plot_.clear(); }
 
 Error SearchImagesTool::execute(
     const char *arguments, std::size_t size,

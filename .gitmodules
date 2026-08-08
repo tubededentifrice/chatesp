@@ -1,0 +1,5 @@
+[submodule "firmware/third_party/micropython"]
+	path = firmware/third_party/micropython
+	url = https://github.com/micropython/micropython.git
+	commit = e0e9fbb17ed6fd06bb76e266ae554784c9c80804
+	shallow = true

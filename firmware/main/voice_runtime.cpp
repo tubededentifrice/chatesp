@@ -35,6 +35,7 @@
 #include "http_transport.hpp"
 #include "image_fetch_provider.hpp"
 #include "jpeg_image_sink.hpp"
+#include "micropython_executor.hpp"
 #include "network_manager.hpp"
 #include "pcm_playback_sink.hpp"
 #include "power_control.hpp"
@@ -391,6 +392,7 @@ public:
           image_provider_(search_transport_, network_, brave_key_),
           web_tool_(web_provider_),
           image_tool_(image_provider_),
+          python_tool_(python_executor_),
           device_status_tool_(device_control_),
           brightness_tool_(device_control_),
           volume_tool_(device_control_),
@@ -407,6 +409,8 @@ public:
           interaction_(interaction_config_for_mode(kDevelopmentMode)) {
         tools_ready_ = tools_.add(web_tool_) == agent::Error::none &&
             tools_.add(image_tool_) == agent::Error::none &&
+            (!python_executor_.available() ||
+             tools_.add(python_tool_) == agent::Error::none) &&
             tools_.add(device_status_tool_) == agent::Error::none &&
             tools_.add(brightness_tool_) == agent::Error::none &&
             tools_.add(volume_tool_) == agent::Error::none &&
@@ -462,6 +466,9 @@ public:
     esp_err_t start(bool startup_button_down, std::uint32_t startup_at_ms) {
         if (!tools_ready_) {
             return ESP_FAIL;
+        }
+        if (!python_executor_.available()) {
+            ESP_LOGW(kTag, "The optional Python tool is not available");
         }
         // Confirm NVS through the settings layer before Wi-Fi or NimBLE can
         // use it. The device-preference start in app_main can start NVS first
@@ -602,7 +609,7 @@ public:
                 show_state(interaction_.state());
                 break;
             case agent::AgentProgressEvent::answer_start:
-                start_image_worker();
+                prepare_visual();
                 show_model_progress("GENERATING THE ANSWER");
                 break;
             case agent::AgentProgressEvent::answer_ready:
@@ -710,6 +717,16 @@ private:
             image_cancellation_ = nullptr;
             selected_image_result_.clear();
         }
+    }
+
+    void prepare_visual() {
+        pending_plot_.clear();
+        if (python_tool_.take_plot(pending_plot_)) {
+            selected_image_result_.clear();
+            image_frame_.reset();
+            return;
+        }
+        start_image_worker();
     }
 
     void run_image_worker() {
@@ -925,8 +942,8 @@ private:
             [message]() { ui::show_model_progress(message); });
     }
 
-    void hide_image() {
-        with_display([]() { ui::hide_fullscreen_image(); });
+    void hide_visual() {
+        with_display([]() { ui::hide_fullscreen_visual(); });
     }
 
     static ui::WifiIndicator wifi_indicator(
@@ -1264,6 +1281,8 @@ private:
     void begin_recording(std::uint32_t now_ms) {
         pcm_sink_.cancel_and_stop();
         capture_.discard();
+        python_tool_.clear_plot();
+        pending_plot_.clear();
         cancellation_.reset();
         if (capture_.start() != ESP_OK) {
             fail("MICROPHONE COULD NOT START");
@@ -1402,6 +1421,7 @@ private:
             transcript.data(), transcript.size(), answer,
             request_cancellation);
         image_tool_.clear_results();
+        python_tool_.clear_plot();
         error = request_cancellation.normalize(error);
         if (error != agent::Error::none) {
             image_transport_.cancel_active();
@@ -1411,6 +1431,7 @@ private:
             (void)speech_error;
             join_image_worker();
             image_frame_.reset();
+            pending_plot_.clear();
             if (device_control_.power_off_pending() &&
                 !cancellation_.cancelled()) {
                 finish_model_power_off();
@@ -1499,7 +1520,7 @@ private:
         if (!speech_failed) {
             show_state(previous_state_);
         }
-        publish_selected_image(image_frame_);
+        publish_selected_visual(image_frame_, pending_plot_);
         timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
         log_turn_timing();
         voice_priority_.store(false, std::memory_order_release);
@@ -1517,7 +1538,22 @@ private:
         }
     }
 
-    void publish_selected_image(image::Rgb565Frame &frame) {
+    void publish_selected_visual(
+        image::Rgb565Frame &frame, agent::PlotData &plot) {
+        if (plot.ready()) {
+            bool shown = false;
+            with_display([&plot, &shown]() {
+                shown = ui::show_fullscreen_plot(plot);
+            });
+            plot.clear();
+            frame.reset();
+            if (!shown) {
+                ESP_LOGW(kTag, "The bounded plot could not be shown");
+            } else {
+                ESP_LOGI(kTag, "The bounded plot is on the display");
+            }
+            return;
+        }
         if (!frame.available()) {
             return;
         }
@@ -1537,6 +1573,8 @@ private:
         join_image_worker();
         selected_image_result_.clear();
         image_frame_.reset();
+        python_tool_.clear_plot();
+        pending_plot_.clear();
         with_display([]() {
             ui::show_answer_notice("TURNING OFF", "POWER OFF");
         });
@@ -1566,9 +1604,11 @@ private:
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
         image_tool_.clear_results();
+        python_tool_.clear_plot();
         selected_image_result_.clear();
         image_frame_.reset();
-        hide_image();
+        pending_plot_.clear();
+        hide_visual();
         interaction_.ready(monotonic_ms());
         previous_state_ = interaction_.state();
         show_state(previous_state_);
@@ -1581,8 +1621,10 @@ private:
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
         image_tool_.clear_results();
+        python_tool_.clear_plot();
         selected_image_result_.clear();
         image_frame_.reset();
+        pending_plot_.clear();
         interaction_.fail(monotonic_ms());
         previous_state_ = interaction_.state();
         show_error(message);
@@ -1616,9 +1658,11 @@ private:
         reset_transports();
         agent_loop_->clear_thread();
         image_tool_.clear_results();
+        python_tool_.clear_plot();
         selected_image_result_.clear();
         image_frame_.reset();
-        hide_image();
+        pending_plot_.clear();
+        hide_visual();
         show_state(interaction_.state());
         if (!interaction_.button_is_down()) {
             start_network_early(true);
@@ -1655,7 +1699,9 @@ private:
         pcm_sink_.cancel_and_stop();
         agent_loop_->clear_thread();
         image_tool_.clear_results();
-        hide_image();
+        python_tool_.clear_plot();
+        pending_plot_.clear();
+        hide_visual();
         if (network_initialized_) {
             network_.shutdown();
             network_initialized_ = false;
@@ -1731,6 +1777,7 @@ private:
     image::HttpImageFetchProvider image_fetch_provider_;
     AudioCapture capture_;
     AudioPlayback playback_;
+    MicroPythonExecutor python_executor_;
     AtomicCancellation cancellation_;
     agent::ToolRegistry tools_;
     agent::UtcClock utc_clock_;
@@ -1742,6 +1789,7 @@ private:
     cloud::BraveImageSearchProvider image_provider_;
     agent::SearchWebTool web_tool_;
     agent::SearchImagesTool image_tool_;
+    agent::RunPythonTool python_tool_;
     agent::GetDeviceStatusTool device_status_tool_;
     agent::SetBrightnessTool brightness_tool_;
     agent::SetVolumeTool volume_tool_;
@@ -1757,6 +1805,7 @@ private:
     SpeechSegmentChannel speech_channel_;
     agent::ImageResult selected_image_result_;
     image::Rgb565Frame image_frame_;
+    agent::PlotData pending_plot_;
     InteractionStateMachine interaction_;
     InteractionState previous_state_ = InteractionState::booting;
     network::NetworkState last_network_state_ =

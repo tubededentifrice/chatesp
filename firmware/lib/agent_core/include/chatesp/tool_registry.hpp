@@ -85,6 +85,26 @@ private:
     bool fallback_ready_ = false;
 };
 
+class RunPythonTool final : public Tool {
+public:
+    explicit RunPythonTool(PythonExecutionProvider &provider)
+        : provider_(provider) {}
+
+    [[nodiscard]] const char *name() const override;
+    [[nodiscard]] const char *description() const override;
+    [[nodiscard]] const char *parameters_schema() const override;
+    Error execute(
+        const char *arguments, std::size_t size,
+        FixedText<Limits::max_tool_result_bytes> &result,
+        CancellationToken &cancellation) override;
+    [[nodiscard]] bool take_plot(PlotData &plot);
+    void clear_plot();
+
+private:
+    PythonExecutionProvider &provider_;
+    PlotData pending_plot_;
+};
+
 class GetDeviceStatusTool final : public Tool {
 public:
     explicit GetDeviceStatusTool(DeviceControlProvider &provider)

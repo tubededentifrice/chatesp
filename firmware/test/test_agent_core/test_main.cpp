@@ -200,6 +200,23 @@ public:
     bool persist_changes = true;
 };
 
+class TestPythonExecution final : public PythonExecutionProvider {
+public:
+    Error execute(
+        const char *source, std::size_t size, PythonExecution &execution,
+        CancellationToken &) override {
+        ++calls;
+        last_source.assign(source, size);
+        execution = next_execution;
+        return failure;
+    }
+
+    PythonExecution next_execution{};
+    FixedText<Limits::max_python_source_bytes> last_source;
+    Error failure = Error::none;
+    int calls = 0;
+};
+
 class ImageSelectionChat final : public ChatProvider {
 public:
     int calls = 0;
@@ -257,6 +274,8 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(
         std::strstr(system_prompt, "Never claim that search is unsupported"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "get_device_status"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "run_python"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "plot.line"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "explicitly asks"));
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "power-off is scheduled"));
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "bottom PWR-button"));
@@ -692,16 +711,135 @@ void test_power_off_tool_is_strict_and_cancellable() {
     TEST_ASSERT_EQUAL_INT(1, provider.power_off_calls);
 }
 
+void test_python_tool_returns_output_and_one_plot() {
+    TestPythonExecution provider;
+    provider.next_execution.output.assign("42\n");
+    provider.next_execution.plot.count = 3;
+    provider.next_execution.plot.x[0] = 0.0;
+    provider.next_execution.plot.x[1] = 1.0;
+    provider.next_execution.plot.x[2] = 2.0;
+    provider.next_execution.plot.y[0] = 1.0;
+    provider.next_execution.plot.y[1] = 4.0;
+    provider.next_execution.plot.y[2] = 9.0;
+    provider.next_execution.plot.title.assign("Squares");
+    RunPythonTool tool(provider);
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+    constexpr char arguments[] =
+        "{\"code\":\"print(6 * 7)\\nplot.line([0,1,2],[1,4,9],'Squares')\"}";
+
+    assert_error(
+        Error::none,
+        tool.execute(
+            arguments, sizeof(arguments) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.calls);
+    TEST_ASSERT_EQUAL_STRING(
+        "print(6 * 7)\nplot.line([0,1,2],[1,4,9],'Squares')",
+        provider.last_source.c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"status\":\"ok\",\"output\":\"42\\n\","
+        "\"output_truncated\":false,"
+        "\"plot_ready\":true}",
+        result.c_str());
+
+    PlotData plot;
+    TEST_ASSERT_TRUE(tool.take_plot(plot));
+    TEST_ASSERT_EQUAL_UINT32(3, plot.count);
+    TEST_ASSERT_TRUE(plot.y[1] == 4.0);
+    TEST_ASSERT_EQUAL_STRING("Squares", plot.title.c_str());
+    TEST_ASSERT_FALSE(tool.take_plot(plot));
+    TEST_ASSERT_EQUAL_UINT32(0, plot.count);
+}
+
+void test_python_tool_reports_limits_and_validates_exact_input() {
+    TestPythonExecution provider;
+    provider.next_execution.status = PythonExecutionStatus::memory_limit;
+    provider.next_execution.output.assign("MemoryError");
+    provider.next_execution.plot.count = 2;
+    RunPythonTool tool(provider);
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+    constexpr char valid[] = "{\"code\":\"a = [0] * 999999\"}";
+
+    assert_error(
+        Error::none,
+        tool.execute(valid, sizeof(valid) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"status\":\"memory_limit\",\"output\":\"MemoryError\","
+        "\"output_truncated\":false,"
+        "\"plot_ready\":false}",
+        result.c_str());
+    PlotData plot;
+    TEST_ASSERT_FALSE(tool.take_plot(plot));
+
+    assert_error(
+        Error::invalid_argument,
+        tool.execute("{\"code\":\"\"}", 11, result, cancellation));
+    constexpr char extra[] = "{\"code\":\"print(1)\",\"extra\":true}";
+    assert_error(
+        Error::invalid_argument,
+        tool.execute(extra, sizeof(extra) - 1, result, cancellation));
+    cancellation.value = true;
+    constexpr char simple[] = "{\"code\":\"print(1)\"}";
+    assert_error(
+        Error::cancelled,
+        tool.execute(simple, sizeof(simple) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.calls);
+}
+
+void test_python_tool_bounds_escaped_output_and_arguments() {
+    TestPythonExecution provider;
+    for (std::size_t index = 0;
+         index < Limits::max_python_output_bytes; ++index) {
+        TEST_ASSERT_TRUE(provider.next_execution.output.push_back('\x01'));
+    }
+    provider.next_execution.plot.count = 2;
+    RunPythonTool tool(provider);
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+    constexpr char simple[] = "{\"code\":\"print(1)\"}";
+
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(Error::none),
+        static_cast<int>(
+            tool.execute(simple, sizeof(simple) - 1, result, cancellation)));
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(
+        Limits::max_tool_result_bytes, result.size());
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(result.c_str(), "\"output_truncated\":true"));
+    PlotData plot;
+    TEST_ASSERT_TRUE(tool.take_plot(plot));
+
+    provider.next_execution.clear();
+    result.clear();
+    FixedText<Limits::max_tool_arguments_bytes> escaped_arguments;
+    TEST_ASSERT_TRUE(escaped_arguments.append("{\"code\":\""));
+    for (std::size_t index = 0;
+         index < Limits::max_python_source_bytes; ++index) {
+        TEST_ASSERT_TRUE(escaped_arguments.append("\\u0061"));
+    }
+    TEST_ASSERT_TRUE(escaped_arguments.append("\"}"));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(Error::none),
+        static_cast<int>(tool.execute(
+            escaped_arguments.data(), escaped_arguments.size(), result,
+            cancellation)));
+    TEST_ASSERT_EQUAL_UINT32(
+        Limits::max_python_source_bytes, provider.last_source.size());
+}
+
 void test_registry_holds_search_and_device_tools() {
     TestWebSearch web_provider;
     TestImageSearch image_provider;
     TestDeviceControl device_provider;
+    TestPythonExecution python_provider;
     SearchWebTool web(web_provider);
     SearchImagesTool images(image_provider);
     GetDeviceStatusTool status(device_provider);
     SetBrightnessTool brightness(device_provider);
     SetVolumeTool volume(device_provider);
     PowerOffTool power_off(device_provider);
+    RunPythonTool python(python_provider);
     ToolRegistry registry;
 
     assert_error(Error::none, registry.add(web));
@@ -710,8 +848,9 @@ void test_registry_holds_search_and_device_tools() {
     assert_error(Error::none, registry.add(brightness));
     assert_error(Error::none, registry.add(volume));
     assert_error(Error::none, registry.add(power_off));
-    TEST_ASSERT_EQUAL_UINT32(6, registry.size());
-    TEST_ASSERT_EQUAL_UINT32(6, Limits::max_tool_count);
+    assert_error(Error::none, registry.add(python));
+    TEST_ASSERT_EQUAL_UINT32(7, registry.size());
+    TEST_ASSERT_EQUAL_UINT32(7, Limits::max_tool_count);
 }
 
 void test_image_tool_selects_only_a_current_result_id_once() {
@@ -1238,6 +1377,9 @@ int main(int, char **) {
     RUN_TEST(test_device_status_tool_returns_bounded_status);
     RUN_TEST(test_device_setting_tools_validate_and_report_persistence);
     RUN_TEST(test_power_off_tool_is_strict_and_cancellable);
+    RUN_TEST(test_python_tool_returns_output_and_one_plot);
+    RUN_TEST(test_python_tool_reports_limits_and_validates_exact_input);
+    RUN_TEST(test_python_tool_bounds_escaped_output_and_arguments);
     RUN_TEST(test_registry_holds_search_and_device_tools);
     RUN_TEST(test_image_tool_selects_only_a_current_result_id_once);
     RUN_TEST(test_image_tool_clears_selection_on_search_and_clear);

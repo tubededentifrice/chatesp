@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "chatesp/agent_types.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "esp_err.h"
 #include "image_frame.hpp"
@@ -36,7 +37,9 @@ void show_footer(
     WifiIndicator wifi, bool battery_available,
     std::uint8_t battery_percent);
 [[nodiscard]] bool show_fullscreen_image(image::Rgb565Frame &&frame);
+[[nodiscard]] bool show_fullscreen_plot(const agent::PlotData &plot);
 void hide_fullscreen_image();
+void hide_fullscreen_visual();
 
 esp_err_t sleep();
 esp_err_t wake(

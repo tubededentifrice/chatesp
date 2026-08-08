@@ -185,6 +185,14 @@ public:
         CancellationToken &cancellation) = 0;
 };
 
+class PythonExecutionProvider {
+public:
+    virtual ~PythonExecutionProvider() = default;
+    virtual Error execute(
+        const char *source, std::size_t size, PythonExecution &execution,
+        CancellationToken &cancellation) = 0;
+};
+
 class ImageFetchProvider {
 public:
     virtual ~ImageFetchProvider() = default;

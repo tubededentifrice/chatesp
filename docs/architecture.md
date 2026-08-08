@@ -56,10 +56,10 @@ later requests in the same session a fast path without keeping the radio active
 after the display turns off.
 
 Each turn first uses a short required-tool route. The route is direct answer,
-web search, image search, or one registered device tool. Image search still
-needs a separate model-selected result ID. A relative brightness or volume
-request gets device status before it changes the value. After routing and tool
-work, the final model request has no tools.
+web search, image search, restricted Python, or one registered device tool.
+Image search still needs a separate model-selected result ID. A relative
+brightness or volume request gets device status before it changes the value.
+After routing and tool work, the final model request has no tools.
 The iOS companion sends its clock and current UTC offset when the watch connects
 and at most once per hour while the connection stays active. The firmware
 advances the accepted value with monotonic time. The successful transcription
@@ -105,6 +105,17 @@ request, and no authorization header can move to another origin.
 The optional image worker starts after the model selects a current image ID.
 It downloads and decodes on a lower-priority task while final model text and
 speech continue. The device publishes the image only after speech ends.
+
+Restricted Python runs in the voice worker before the final answer. It uses one
+fixed 256 KiB PSRAM heap, a 12 KiB stack limit, a 2,048-byte output limit, a
+1,024-byte source limit, a one-second wall-clock limit, and a 250,000-hook
+operation limit. Bytecode jumps, returns, garbage collection, and iterator
+steps check the limits and button cancellation. The interpreter has no file,
+network, hardware, persistence, native-code, `eval`, or `exec` access. It wipes
+the source, output, plot data, and heap after use. The tool keeps its JSON result
+within 4,096 bytes. It marks printed text as truncated if JSON escaping cannot
+fit the complete bounded output. A failed optional Python heap allocation
+removes this tool but does not disable the other voice tools.
 
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
@@ -162,7 +173,7 @@ normal answer must fit a spoken interaction.
 
 ## Tools
 
-Version 1 has six tools:
+Version 1 has seven tools:
 
 - `search_web(query)`: returns a small list of titles, URLs, and snippets.
 - `search_images(query)`: returns a small list with short result IDs.
@@ -171,6 +182,9 @@ Version 1 has six tools:
 - `set_brightness(percent)`: applies and stores a value from 5 through 100.
 - `set_volume(percent)`: applies and stores a value from 0 through 100.
 - `power_off()`: schedules power-off only after an explicit current request.
+- `run_python(code)`: runs bounded MicroPython for short calculations. Printed
+  text enters the tool result. `plot.line(x, y, title)` can select one line
+  plot with 2 through 128 finite points and a title of at most 48 bytes.
 
 The device-control prompt does not infer power-off from a greeting, a farewell,
 a hypothetical request, or an uncertain transcript. The final answer gives one
@@ -201,6 +215,12 @@ data. The ROM decoder scales and center-crops the image into one fixed 368 by
 448 RGB565 PSRAM frame. It scales up a small image to cover the display. The
 image stays on the full screen until the next button action or sleep. An image
 error does not change a successful text or spoken answer.
+
+A successful Python plot appears after the spoken answer. It uses a black
+full-screen chart with a white line and bounded axis ranges. The plot stays
+until the next button action or sleep. A plot has priority if one turn also
+selects an image. A Python error or limit keeps the text answer available and
+does not show partial plot data.
 
 Tools do not get credentials directly. Providers own credentials and HTTP
 details.

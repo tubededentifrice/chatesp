@@ -13,6 +13,7 @@ idf_component_register(
         "image_fetch_provider.cpp"
         "image_frame.cpp"
         "jpeg_image_sink.cpp"
+        "micropython_executor.cpp"
         "network_manager.cpp"
         "power_control.cpp"
         "pcm_playback_sink.cpp"
@@ -24,6 +25,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         chatesp_board
+        chatesp_micropython
         bt
         esp_codec_dev
         esp_event

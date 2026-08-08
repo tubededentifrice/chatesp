@@ -133,10 +133,10 @@ class PlatformioWrapperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "tools").mkdir()
-            policy = root / "pyproject.toml"
-            policy.write_text("first", encoding="utf-8")
+            policy = root / ".gitmodules"
+            policy.write_text("first pin", encoding="utf-8")
             first = dependency_policy_digest(root)
-            policy.write_text("second", encoding="utf-8")
+            policy.write_text("second pin", encoding="utf-8")
             self.assertNotEqual(first, dependency_policy_digest(root))
 
 

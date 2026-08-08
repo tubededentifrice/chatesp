@@ -90,6 +90,36 @@ class SecretScanTests(unittest.TestCase):
             findings = scan_candidates(candidate_blobs(root))
             self.assertEqual("OpenRouter API key", findings[0].reason)
 
+    def test_skips_an_untracked_nested_repository_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            nested = root / "third_party" / "runtime"
+            nested.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=nested, check=True)
+            (nested / "source.c").write_text("safe source", encoding="utf-8")
+            self.assertEqual([], candidate_blobs(root))
+            object_id = subprocess.run(
+                ["git", "hash-object", "-w", "source.c"],
+                cwd=nested,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            subprocess.run(
+                [
+                    "git",
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    f"160000,{object_id},third_party/runtime",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            self.assertEqual([], candidate_blobs(root))
+
 
 if __name__ == "__main__":
     unittest.main()
