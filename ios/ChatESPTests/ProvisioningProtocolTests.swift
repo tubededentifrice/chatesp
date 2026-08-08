@@ -346,6 +346,23 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(store.load().global.chatEndpoint, "h")
     }
 
+    @MainActor
+    func testNewDeviceUsesTheChatESPDefaultName() throws {
+        let suite = "org.chatesp.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ConfigurationStore(
+            preferencesStore: PreferencesStore(defaults: defaults),
+            keychainStore: TestSecretsStore(
+                loadResult: .success(ProvisioningSecrets())))
+        let deviceID = UUID()
+
+        store.addDevice(id: deviceID)
+
+        XCTAssertEqual(store.preferences.device(id: deviceID)?.name, "ChatESP")
+        XCTAssertEqual(store.activeDeviceIdentifier, deviceID)
+    }
+
     func testPreferencesMigrateTheLegacySelectedDevice() throws {
         let suite = "org.chatesp.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
