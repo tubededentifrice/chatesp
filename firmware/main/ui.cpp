@@ -51,6 +51,16 @@ struct ControlSlider {
     std::uint8_t minimum_percent = 0;
     std::uint8_t value_percent = 0;
 };
+constexpr std::size_t kClockDigitCount = 4;
+constexpr std::size_t kClockSegmentCount = 7;
+constexpr std::size_t kClockSnakePointsPerSecond = 2;
+constexpr std::size_t kClockSnakePointCount =
+    60 * kClockSnakePointsPerSecond;
+constexpr std::int32_t kClockWidth = image::kDisplayHeight;
+constexpr std::int32_t kClockHeight = image::kDisplayWidth;
+constexpr std::int32_t kClockDigitHeight = 220;
+constexpr std::int32_t kClockDigitStroke = 18;
+constexpr double kPi = 3.14159265358979323846;
 
 lv_obj_t *status_label = nullptr;
 lv_obj_t *hint_label = nullptr;
@@ -76,6 +86,17 @@ lv_timer_t *controls_timer = nullptr;
 ControlSlider brightness_control;
 ControlSlider volume_control;
 ControlSlider *active_control = nullptr;
+lv_display_t *display_handle = nullptr;
+lv_obj_t *clock_root = nullptr;
+
+struct ClockPoint {
+    std::int16_t x = 0;
+    std::int16_t y = 0;
+};
+
+std::array<std::uint8_t, kClockDigitCount> clock_digit_masks{};
+std::array<ClockPoint, kClockSnakePointCount> clock_snake_points{};
+ClockSnakeSpan shown_clock_snake{};
 
 image::Rgb565Frame image_frame;
 lv_image_dsc_t image_descriptor{};
@@ -97,6 +118,13 @@ bool controls_close_animation_active = false;
 bool controls_drag_visible = false;
 std::int32_t controls_drag_panel_start_y = kControlsPanelHiddenY;
 bool passkey_visible = false;
+bool clock_mode = false;
+ClockStyle clock_style{};
+std::uint8_t shown_clock_hour = 0xff;
+std::uint8_t shown_clock_minute = 0xff;
+std::uint8_t shown_clock_second = 0xff;
+bool shown_clock_available = false;
+bool clock_face_initialized = false;
 std::array<char, agent::Limits::max_plot_title_bytes + 1> plot_title_buffer{};
 std::array<char, 48> plot_x_range_buffer{};
 std::array<char, 48> plot_y_range_buffer{};
@@ -104,6 +132,7 @@ std::array<std::int32_t, agent::Limits::max_plot_points> plot_x_values{};
 std::array<std::int32_t, agent::Limits::max_plot_points> plot_y_values{};
 
 void set_static_text(lv_obj_t *label, const char *text);
+void update_controls_handle();
 
 void hide_fullscreen_plot() {
     if (plot_overlay == nullptr) {
@@ -268,6 +297,228 @@ void set_hidden(lv_obj_t *object, bool hidden) {
         lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_clear_flag(object, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void layout_overlays(std::int32_t width, std::int32_t height) {
+    if (controls_backdrop != nullptr) {
+        lv_obj_set_size(controls_backdrop, width, height);
+    }
+    if (controls_panel != nullptr) {
+        lv_obj_set_width(controls_panel, width);
+    }
+    if (controls_edge_target != nullptr) {
+        lv_obj_set_width(controls_edge_target, width);
+        lv_obj_align(controls_edge_target, LV_ALIGN_TOP_MID, 0, 0);
+    }
+    if (passkey_overlay != nullptr) {
+        lv_obj_set_size(passkey_overlay, width, height);
+        lv_obj_center(passkey_overlay);
+    }
+}
+
+void rounded_clock_point(double distance, double &x, double &y) {
+    const double inset = clock_style.edge_inset_px;
+    const double left = inset;
+    const double top = inset;
+    const double right = static_cast<double>(kClockWidth) - inset;
+    const double bottom = static_cast<double>(kClockHeight) - inset;
+    const double radius = clock_style.corner_radius_px;
+    const double half_top = (right - left - 2.0 * radius) / 2.0;
+    const double vertical = bottom - top - 2.0 * radius;
+    const double horizontal = right - left - 2.0 * radius;
+    const double quarter_arc = kPi * radius / 2.0;
+
+    if (distance < half_top) {
+        x = (left + right) / 2.0 + distance;
+        y = top;
+        return;
+    }
+    distance -= half_top;
+    if (distance < quarter_arc) {
+        const double angle = -kPi / 2.0 + distance / radius;
+        x = right - radius + radius * std::cos(angle);
+        y = top + radius + radius * std::sin(angle);
+        return;
+    }
+    distance -= quarter_arc;
+    if (distance < vertical) {
+        x = right;
+        y = top + radius + distance;
+        return;
+    }
+    distance -= vertical;
+    if (distance < quarter_arc) {
+        const double angle = distance / radius;
+        x = right - radius + radius * std::cos(angle);
+        y = bottom - radius + radius * std::sin(angle);
+        return;
+    }
+    distance -= quarter_arc;
+    if (distance < horizontal) {
+        x = right - radius - distance;
+        y = bottom;
+        return;
+    }
+    distance -= horizontal;
+    if (distance < quarter_arc) {
+        const double angle = kPi / 2.0 + distance / radius;
+        x = left + radius + radius * std::cos(angle);
+        y = bottom - radius + radius * std::sin(angle);
+        return;
+    }
+    distance -= quarter_arc;
+    if (distance < vertical) {
+        x = left;
+        y = bottom - radius - distance;
+        return;
+    }
+    distance -= vertical;
+    if (distance < quarter_arc) {
+        const double angle = kPi + distance / radius;
+        x = left + radius + radius * std::cos(angle);
+        y = top + radius + radius * std::sin(angle);
+        return;
+    }
+    distance -= quarter_arc;
+    x = left + radius + std::min(distance, half_top);
+    y = top;
+}
+
+void layout_clock_snake() {
+    const double inset = clock_style.edge_inset_px;
+    const double radius = clock_style.corner_radius_px;
+    const double horizontal =
+        static_cast<double>(kClockWidth) - 2.0 * inset - 2.0 * radius;
+    const double vertical =
+        static_cast<double>(kClockHeight) - 2.0 * inset - 2.0 * radius;
+    const double perimeter =
+        2.0 * horizontal + 2.0 * vertical + 2.0 * kPi * radius;
+    for (std::size_t index = 0; index < clock_snake_points.size(); ++index) {
+        double x = 0.0;
+        double y = 0.0;
+        rounded_clock_point(
+            (static_cast<double>(index) + 0.5) * perimeter /
+                static_cast<double>(clock_snake_points.size()),
+            x, y);
+        clock_snake_points[index] = ClockPoint{
+            static_cast<std::int16_t>(std::lround(x)),
+            static_cast<std::int16_t>(std::lround(y)),
+        };
+    }
+}
+
+void draw_clock_block(
+    lv_layer_t *layer, const lv_area_t &root,
+    lv_draw_rect_dsc_t &descriptor, std::int32_t x, std::int32_t y,
+    std::int32_t width, std::int32_t height) {
+    const lv_area_t area{
+        root.x1 + x,
+        root.y1 + y,
+        root.x1 + x + width - 1,
+        root.y1 + y + height - 1,
+    };
+    lv_draw_rect(layer, &descriptor, &area);
+}
+
+void draw_clock(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_DRAW_MAIN) {
+        return;
+    }
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_obj_t *object = lv_event_get_current_target_obj(event);
+    if (layer == nullptr || object == nullptr) {
+        return;
+    }
+    lv_area_t root;
+    lv_obj_get_coords(object, &root);
+
+    lv_draw_rect_dsc_t descriptor;
+    lv_draw_rect_dsc_init(&descriptor);
+    descriptor.base.layer = layer;
+    descriptor.bg_opa = LV_OPA_COVER;
+    descriptor.radius = LV_RADIUS_CIRCLE;
+    descriptor.bg_color = lv_color_hex(clock_style.time_rgb);
+
+    constexpr std::array<std::array<std::int32_t, 4>, kClockSegmentCount>
+        geometry{{
+            {{9, 0, 58, kClockDigitStroke}},
+            {{58, 9, kClockDigitStroke, 96}},
+            {{58, 115, kClockDigitStroke, 96}},
+            {{9, 202, 58, kClockDigitStroke}},
+            {{0, 115, kClockDigitStroke, 96}},
+            {{0, 9, kClockDigitStroke, 96}},
+            {{9, 101, 58, kClockDigitStroke}},
+        }};
+    constexpr std::array<std::int32_t, kClockDigitCount> digit_x{
+        36, 122, 250, 336};
+    constexpr std::int32_t digit_y =
+        (kClockHeight - kClockDigitHeight) / 2;
+    for (std::size_t digit = 0; digit < clock_digit_masks.size(); ++digit) {
+        for (std::size_t segment = 0; segment < geometry.size(); ++segment) {
+            if ((clock_digit_masks[digit] & (1U << segment)) == 0U) {
+                continue;
+            }
+            draw_clock_block(
+                layer, root, descriptor,
+                digit_x[digit] + geometry[segment][0],
+                digit_y + geometry[segment][1], geometry[segment][2],
+                geometry[segment][3]);
+        }
+    }
+    draw_clock_block(layer, root, descriptor, 215, 122, 18, 18);
+    draw_clock_block(layer, root, descriptor, 215, 228, 18, 18);
+
+    descriptor.bg_color = lv_color_hex(clock_style.seconds_rgb);
+    const std::int32_t point_size = clock_style.seconds_width_px;
+    for (std::size_t index = 0; index < clock_snake_points.size(); ++index) {
+        const std::uint8_t section = static_cast<std::uint8_t>(
+            index / kClockSnakePointsPerSecond);
+        if (!clock_snake_section_visible(section, shown_clock_snake)) {
+            continue;
+        }
+        const ClockPoint point = clock_snake_points[index];
+        draw_clock_block(
+            layer, root, descriptor, point.x - point_size / 2,
+            point.y - point_size / 2, point_size, point_size);
+    }
+}
+
+void apply_clock_style() {
+    if (clock_root == nullptr) {
+        return;
+    }
+    lv_obj_set_style_bg_color(
+        clock_root, lv_color_hex(clock_style.background_rgb), LV_PART_MAIN);
+    layout_clock_snake();
+    lv_obj_invalidate(clock_root);
+}
+
+void create_clock_face(lv_obj_t *screen) {
+    clock_root = lv_obj_create(screen);
+    lv_obj_remove_style_all(clock_root);
+    lv_obj_set_size(clock_root, kClockWidth, kClockHeight);
+    lv_obj_set_pos(clock_root, 0, 0);
+    lv_obj_set_style_bg_opa(clock_root, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(clock_root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(clock_root, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(clock_root, draw_clock, LV_EVENT_DRAW_MAIN, nullptr);
+    apply_clock_style();
+    set_hidden(clock_root, true);
+}
+
+void bring_clock_overlays_forward() {
+    if (passkey_visible && passkey_overlay != nullptr) {
+        lv_obj_move_foreground(passkey_overlay);
+        return;
+    }
+    update_controls_handle();
+    if (controls_gesture.open()) {
+        lv_obj_move_foreground(controls_backdrop);
+        lv_obj_move_foreground(controls_panel);
+    } else if (controls_edge_target != nullptr &&
+               !lv_obj_has_flag(controls_edge_target, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(controls_edge_target);
     }
 }
 
@@ -591,7 +842,7 @@ void controls_timer_callback(lv_timer_t *) {
 void set_controls_state_allowed(bool allowed) {
     controls_state_allowed = allowed;
     const bool effective = controls_callback != nullptr &&
-        controls_state_allowed && !passkey_visible;
+        (clock_mode || controls_state_allowed) && !passkey_visible;
     if (!effective && (controls_gesture.open() || controls_drag_visible)) {
         close_controls(false);
     }
@@ -1001,6 +1252,7 @@ void create_screen() {
         passkey_hint, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_align(passkey_hint, LV_ALIGN_CENTER, 0, 44);
     hide_passkey();
+    create_clock_face(screen);
 }
 
 }  // namespace
@@ -1015,6 +1267,7 @@ bool start(std::uint8_t brightness_percent) {
     if (display == nullptr || bsp_display_backlight_off() != ESP_OK) {
         return false;
     }
+    display_handle = display;
     if (!bsp_display_lock(1000)) {
         return false;
     }
@@ -1036,6 +1289,94 @@ bool start(std::uint8_t brightness_percent) {
     lv_refr_now(display);
     bsp_display_unlock();
     return bsp_display_brightness_set(brightness_percent) == ESP_OK;
+}
+
+bool set_clock_style(const ClockStyle &style) {
+    if (!style.valid()) {
+        return false;
+    }
+    clock_style = style;
+    apply_clock_style();
+    if (clock_root != nullptr) {
+        lv_obj_invalidate(clock_root);
+    }
+    return true;
+}
+
+void show_app_mode(AppMode mode, InteractionState chat_state) {
+    if (display_handle == nullptr || clock_root == nullptr) {
+        return;
+    }
+    close_controls(false);
+    if (mode == AppMode::clock) {
+        hide_fullscreen_visual();
+        clock_mode = true;
+#if LVGL_VERSION_MAJOR >= 9
+        bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_90);
+#else
+        bsp_display_rotate(display_handle, LV_DISP_ROT_90);
+#endif
+        layout_overlays(kClockWidth, kClockHeight);
+        lv_obj_set_size(clock_root, kClockWidth, kClockHeight);
+        if (!clock_face_initialized) {
+            show_clock_time(false);
+        }
+        set_hidden(clock_root, false);
+        lv_obj_move_foreground(clock_root);
+        set_controls_state_allowed(controls_state_allowed);
+        bring_clock_overlays_forward();
+        lv_obj_invalidate(clock_root);
+        return;
+    }
+
+    clock_mode = false;
+    set_hidden(clock_root, true);
+#if LVGL_VERSION_MAJOR >= 9
+    bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_0);
+#else
+    bsp_display_rotate(display_handle, LV_DISP_ROT_NONE);
+#endif
+    layout_overlays(image::kDisplayWidth, image::kDisplayHeight);
+    shown_clock_minute = 0xff;
+    shown_clock_hour = 0xff;
+    shown_clock_second = 0xff;
+    shown_clock_available = false;
+    clock_face_initialized = false;
+    show_state(chat_state);
+}
+
+void show_clock_time(bool available, ClockTime time) {
+    if (clock_root == nullptr || (available && !time.valid())) {
+        return;
+    }
+    if (clock_face_initialized && available == shown_clock_available &&
+        (!available || (time.minute == shown_clock_minute &&
+                        time.second == shown_clock_second &&
+                        time.hour == shown_clock_hour))) {
+        return;
+    }
+    shown_clock_available = available;
+    clock_face_initialized = true;
+    shown_clock_minute = available ? time.minute : 0xff;
+    shown_clock_second = available ? time.second : 0xff;
+    shown_clock_hour = available ? time.hour : 0xff;
+
+    const std::array<std::uint8_t, kClockDigitCount> values{
+        static_cast<std::uint8_t>(time.hour / 10U),
+        static_cast<std::uint8_t>(time.hour % 10U),
+        static_cast<std::uint8_t>(time.minute / 10U),
+        static_cast<std::uint8_t>(time.minute % 10U),
+    };
+    for (std::size_t digit = 0; digit < clock_digit_masks.size(); ++digit) {
+        clock_digit_masks[digit] = available
+            ? clock_digit_segments(values[digit])
+            : clock_digit_segments(10) | 0x40U;
+    }
+
+    shown_clock_snake = available
+        ? clock_snake_span(time.minute, time.second)
+        : ClockSnakeSpan{};
+    lv_obj_invalidate(clock_root);
 }
 
 bool enable_quick_controls(
@@ -1384,7 +1725,7 @@ esp_err_t sleep() {
 }
 
 esp_err_t wake(
-    InteractionState state, std::uint8_t brightness_percent) {
+    InteractionState state, std::uint8_t brightness_percent, AppMode mode) {
     if (brightness_percent <
             runtime::DevicePreferences::minimum_brightness_percent ||
         brightness_percent > runtime::DevicePreferences::maximum_percent) {
@@ -1396,7 +1737,7 @@ esp_err_t wake(
     }
     hide_fullscreen_visual();
     set_content({}, kMaximumAnswerBytes);
-    show_state(state);
+    show_app_mode(mode, state);
     lv_refr_now(nullptr);
     bsp_display_unlock();
     const esp_err_t wake_error =

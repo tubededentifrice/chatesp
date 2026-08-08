@@ -37,6 +37,21 @@ The button poll runs separately from cloud work. A button press cancels active
 audio and HTTPS work. A separate bounded task shows BLE passkeys, but a voice
 button press always hides the passkey view.
 
+A debounced short press on the top GPIO0 button changes between ChatESP and
+Clock. A press longer than 700 ms has no app action. A top-button press has no
+effect during soft sleep, and GPIO0 is not a production wake source. A switch
+to Clock cancels active voice work, clears the in-memory thread, and stops
+Wi-Fi. The board adapter owns the GPIO0 pin value.
+
+Clock uses LVGL software rotation to turn the UI 90 degrees clockwise. The
+448-by-368 layout puts the USB port at the top. Four large seven-segment digits
+show 24-hour local time. A rounded white path follows an inset rounded
+rectangle. Its 60 bounded sections fill clockwise on even minutes and drain
+clockwise on odd minutes. The path starts at 12 o'clock. The clock style is one
+validated value with background, time, seconds, radius, inset, and path-width
+fields. This keeps later phone customization separate from the drawing code.
+The same quick-control panel stays available in the rotated layout.
+
 The top edge of the touch display has a small control handle. A tap or a
 48-pixel downward swipe from the top 32 pixels opens a black control panel.
 The top touch target keeps control until release, so the swipe can continue
@@ -78,10 +93,10 @@ access point. It rejects access points below -75 dBm and retries the strongest
 candidate before it starts the existing 10-second background retry. It then
 uses modem power saving. Voice work uses the active Wi-Fi power mode. It stays
 connected only during the active session.
-Production uses a 30-second idle timer. Development uses a five-minute idle
-timer so that a test result stays visible. Sleep stops the station. This gives
-later requests in the same session a fast path without keeping the radio active
-after the display turns off.
+Production ChatESP mode uses a 30-second idle timer. Development ChatESP mode
+uses a five-minute idle timer so that a test result stays visible. Clock mode
+resets that idle gate and stays on. A short PWR-button press can still request
+sleep in either mode. Sleep stops the station.
 
 Each turn first uses a short required-tool route. The route is direct answer,
 web search, image search, restricted Python, or one registered device tool.
@@ -96,6 +111,11 @@ Each route and final-answer prompt gets the user's local minute, such as
 `YYYY-MM-DD HH:MM UTC+04:00`. The prompt does not contain seconds, so requests
 in the same minute use the same time value. A missing or invalid time stops the
 turn instead of giving the model a false time.
+Clock uses seconds from this same accepted phone context. It does not use an
+HTTP `Date` value for the clock face because that value does not identify the
+user's timezone. Before the phone supplies a valid offset, the face shows a
+time-unavailable pattern. The accepted value advances with subtraction-based
+monotonic elapsed time and handles millisecond wrap.
 OpenRouter sends that answer as an event stream. The UI receives bounded copies
 of the complete answer so far. It limits display updates to keep the button and
 network paths responsive. Tool-call data cannot enter the answer or speech
@@ -148,10 +168,13 @@ removes this tool but does not disable the other voice tools.
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
 
-Each accepted interaction resets the monotonic inactivity timer. Production
-uses 30 seconds. Development uses five minutes. Chat messages stay in PSRAM
-only. AXP2101 system-off clears them. A PWR-button wake causes a cold boot and
-creates a new thread.
+Each accepted interaction resets the monotonic inactivity timer. A voice
+interaction sets a Clock-return gate. After 30 seconds of idle follow-up time,
+the runtime enters Clock, clears the PSRAM thread, and stops Wi-Fi. Clock keeps
+BLE available for time context and does not enter automatic sleep. A manual
+ChatESP session with no voice interaction uses the normal production or
+development sleep timer. AXP2101 system-off clears all volatile state. A
+PWR-button wake causes a cold boot and creates a new thread.
 
 ## Modules
 
@@ -165,9 +188,9 @@ creates a new thread.
   maximum tool-round count.
 - `conversation`: system prompt, short in-memory history, tool loop, and thread
   lifetime.
-- `ui`: terminal layout, streamed text, Wi-Fi and battery footer, and
-  state-specific motion. It also owns the bounded top control panel and touch
-  gesture presentation.
+- `ui`: terminal layout, rotated Clock face, streamed text, Wi-Fi and battery
+  footer, and state-specific motion. It also owns the bounded top control panel
+  and touch gesture presentation.
 - `provisioning`: versioned BLE packets, authenticated encrypted transfer,
   acknowledgement, and NVS persistence.
 - `device preferences`: a small versioned brightness and volume record. It is

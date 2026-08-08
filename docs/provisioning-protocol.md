@@ -174,9 +174,11 @@ SHA-256("CESP-CONTEXT-V1" || version || epoch_seconds || utc_offset_minutes || l
 
 All numeric fingerprint inputs use network byte order. The firmware accepts
 epoch values from 2020-01-01 through 9999-12-31. The UTC offset and rounded
-location let it format the user's local date and time without seconds. A valid
-HTTP `Date` response can refresh the UTC clock, but it does not remove the last
-accepted app offset.
+location let it format the user's local date and time for model requests. The
+Clock face also uses the epoch, seconds, and accepted app offset. A valid HTTP
+`Date` response can refresh UTC for model requests, but it cannot make the
+Clock face valid because it does not identify the user's timezone. It does not
+remove the last accepted app offset.
 
 The device sends a 48-byte context indication on the acknowledgement
 characteristic. A GATT write response is not context-sync success.

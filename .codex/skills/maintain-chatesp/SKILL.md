@@ -34,13 +34,15 @@ documentation contracts consistent.
 
 - Hold and release the bottom PWR button for talk. Use a short idle press for
   sleep.
-- Keep a thread only during the 30-second awake session. Clear it on sleep.
+- Keep a thread only during the 30-second voice follow-up window. Clear it on
+  Clock entry or sleep.
 - Keep the screen black and terminal-like. Use motion only for state feedback.
 - Keep answers concise and natural for speech.
 - Keep raw audio transient. Do not log or persist private content or secrets.
 - Keep optional network, search, image, touch, IMU, RTC, and iOS failures from
   blocking sleep or a later voice interaction.
-- Keep the top BOOT button unassigned outside clearly labeled diagnostics.
+- Use only a short top BOOT-button press to change ChatESP and Clock modes.
+  Keep long presses and sleeping-state presses unassigned.
 - Use authenticated encrypted BLE and Keychain for secrets. Production uses
   plaintext NVS because the project forbids the eFuse write that encrypted NVS
   can need. Do not describe device storage as encrypted.

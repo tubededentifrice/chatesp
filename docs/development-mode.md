@@ -8,7 +8,8 @@ normal firmware development.
 The `watch_dev` profile defines `CHATESP_DEVELOPMENT_MODE=1`. A sleep request
 turns off the display and radio work, but it does not request AXP2101
 system-off. USB stays available, so the next upload can reset and flash the
-board without a manual button sequence. A PWR-button press wakes the app.
+board without a manual button sequence. A PWR-button press wakes the app. The
+top mode button does not wake it and has no effect while it sleeps.
 
 Build and upload development mode with one command:
 
@@ -51,9 +52,10 @@ not prove pixel output. Confirm that `CHAT ESP` or `READY` is visible before a
 physical display gate passes. Use `--no-upload` only to check an image that is
 already installed.
 
-Development mode uses a five-minute automatic idle timer. This keeps the ready
-screen visible during a test. A short PWR-button press still requests sleep at
-once. Production mode keeps the 30-second automatic idle timer. Audio
+Development ChatESP mode uses a five-minute automatic idle timer. This keeps
+the ready screen visible during a test. Clock mode has no automatic sleep
+timer. A short PWR-button press still requests sleep at once. Production
+ChatESP mode keeps the 30-second automatic idle timer. Audio
 cancellation, network cancellation, and thread reset stay equal in both modes.
 Logs must show the selected mode but must not show credentials, chat text,
 audio, or a stable device identifier.

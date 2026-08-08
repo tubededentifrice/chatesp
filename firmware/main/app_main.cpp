@@ -1,6 +1,7 @@
 #include <cstdint>
 
 #include "bsp/esp-bsp.h"
+#include "chatesp/app_mode.hpp"
 #include "device_write_policy.hpp"
 #include "device_preferences_store.hpp"
 #include "esp_log.h"
@@ -104,6 +105,8 @@ extern "C" void app_main() {
     }
     ESP_LOGI(kTag, "Voice runtime ready");
 
+    chatesp::ShortPressGesture mode_button;
+    bool mode_button_error_reported = false;
     while (true) {
         chatesp::ButtonEdges edges;
         const std::uint32_t now_ms = monotonic_ms();
@@ -117,6 +120,26 @@ extern "C" void app_main() {
         }
         if (edges.released) {
             runtime.action_button_edge(false, now_ms);
+        }
+        chatesp::ButtonEdges mode_edges;
+        const esp_err_t mode_result =
+            chatesp::power::poll_mode_button(now_ms, &mode_edges);
+        if (mode_result == ESP_OK) {
+            mode_button_error_reported = false;
+            if (mode_edges.pressed) {
+                if (runtime.mode_button_available()) {
+                    mode_button.press(now_ms);
+                } else {
+                    mode_button.cancel();
+                }
+            }
+            if (mode_edges.released && mode_button.release(now_ms)) {
+                runtime.mode_button_short_press(now_ms);
+            }
+        } else if (!mode_button_error_reported) {
+            ESP_LOGW(kTag, "Top mode button read is not available");
+            mode_button_error_reported = true;
+            mode_button.cancel();
         }
         if (runtime.poweroff_ready()) {
             if (chatesp::power::action_button_is_pressed()) {

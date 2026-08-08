@@ -156,26 +156,36 @@ bool UtcClock::update_from_epoch_seconds(
     return true;
 }
 
+bool UtcClock::current_seconds(
+    std::uint32_t now_ms, bool require_utc_offset,
+    std::uint64_t &output) const {
+    if (!valid_ || (require_utc_offset && !has_utc_offset_)) {
+        return false;
+    }
+    output = observed_epoch_seconds_ +
+        static_cast<std::uint32_t>(now_ms - observed_at_ms_) / 1'000U;
+    if (!has_utc_offset_) {
+        return true;
+    }
+    const std::int64_t local_seconds = static_cast<std::int64_t>(output) +
+        static_cast<std::int64_t>(utc_offset_minutes_) * 60;
+    if (local_seconds < 0) {
+        return false;
+    }
+    output = static_cast<std::uint64_t>(local_seconds);
+    return true;
+}
+
 bool UtcClock::current_minute(
     std::uint32_t now_ms, UtcMinuteText &output) const {
     output.clear();
-    if (!valid_) {
+    std::uint64_t current_seconds_value = 0;
+    if (!current_seconds(now_ms, false, current_seconds_value)) {
         return false;
     }
-    std::uint64_t current_seconds = observed_epoch_seconds_ +
-        static_cast<std::uint32_t>(now_ms - observed_at_ms_) / 1'000U;
-    if (has_utc_offset_) {
-        const std::int64_t local_seconds =
-            static_cast<std::int64_t>(current_seconds) +
-            static_cast<std::int64_t>(utc_offset_minutes_) * 60;
-        if (local_seconds < 0) {
-            return false;
-        }
-        current_seconds = static_cast<std::uint64_t>(local_seconds);
-    }
-    const std::uint64_t days = current_seconds / kSecondsPerDay;
+    const std::uint64_t days = current_seconds_value / kSecondsPerDay;
     const unsigned seconds_in_day =
-        static_cast<unsigned>(current_seconds % kSecondsPerDay);
+        static_cast<unsigned>(current_seconds_value % kSecondsPerDay);
     const unsigned hour = seconds_in_day / 3'600U;
     const unsigned minute = (seconds_in_day % 3'600U) / 60U;
     unsigned year = 0;
@@ -201,6 +211,22 @@ bool UtcClock::current_minute(
     }
     return size > 0 && static_cast<std::size_t>(size) <= output.capacity() &&
         output.assign(formatted, static_cast<std::size_t>(size));
+}
+
+bool UtcClock::current_local_time(
+    std::uint32_t now_ms, LocalTimeOfDay &output) const {
+    output = {};
+    std::uint64_t current_seconds_value = 0;
+    if (!current_seconds(now_ms, true, current_seconds_value)) {
+        return false;
+    }
+    const unsigned seconds_in_day = static_cast<unsigned>(
+        current_seconds_value % kSecondsPerDay);
+    output.hour = static_cast<std::uint8_t>(seconds_in_day / 3'600U);
+    output.minute = static_cast<std::uint8_t>(
+        (seconds_in_day % 3'600U) / 60U);
+    output.second = static_cast<std::uint8_t>(seconds_in_day % 60U);
+    return true;
 }
 
 bool UtcClock::valid_minute_text(const char *value) {
