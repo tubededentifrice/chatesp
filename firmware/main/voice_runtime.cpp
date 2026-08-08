@@ -70,6 +70,7 @@ constexpr std::uint32_t kAnswerStreamRefreshMs = 60;
 constexpr std::uint32_t kPoweroffGraceMs = 250;
 constexpr std::uint32_t kInteractionTimeoutMs = 180'000;
 constexpr std::uint32_t kClockReturnDelayMs = 30'000;
+constexpr std::uint32_t kClockTimeSyncLimitMs = 15'000;
 constexpr std::uint32_t kModeDisplayRetryMs = 100;
 constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
 constexpr std::uint32_t kBleStopTimeoutMs = 1'000;
@@ -965,10 +966,14 @@ private:
                 "Optional IP context skipped because Bluetooth stayed active");
             return;
         }
-        const BaseType_t created = xTaskCreatePinnedToCore(
+        // This optional HTTPS worker does not use DMA from its stack. Keep its
+        // fixed stack in PSRAM so Wi-Fi, I2S, and task control data keep enough
+        // internal RAM for the worker to start after Bluetooth stops.
+        const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
             network_context_task_entry, "network_context",
             kNetworkContextStackBytes, this, kNetworkContextPriority,
-            &network_context_task_, 0);
+            &network_context_task_, 0,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (created != pdPASS) {
             network_context_task_ = nullptr;
             network_context_finished_at_ms_ = monotonic_ms();
@@ -986,7 +991,9 @@ private:
             network_context_, network_context_date_, context_cancellation_);
         network_context_result_.store(result, std::memory_order_release);
         xEventGroupSetBits(speech_events_, kNetworkContextDoneBit);
-        vTaskDelete(nullptr);
+        // The runtime task owns this WithCaps task and reclaims its PSRAM
+        // stack after it observes the completion bit.
+        vTaskSuspend(nullptr);
     }
 
     void finish_network_context_worker(bool wait) {
@@ -999,7 +1006,9 @@ private:
         if ((bits & kNetworkContextDoneBit) == 0) {
             return;
         }
+        TaskHandle_t completed_task = network_context_task_;
         network_context_task_ = nullptr;
+        vTaskDeleteWithCaps(completed_task);
         network_context_finished_at_ms_ = monotonic_ms();
         network_context_transport_.reset_session();
         const agent::Error result = network_context_result_.load(
@@ -1014,6 +1023,7 @@ private:
             }
             (void)utc_clock_.set_utc_offset_minutes(
                 network_context_.utc_offset_minutes);
+            ESP_LOGI(kTag, "Optional network time context accepted");
             if (live_approximate_location_.assign(
                     std::string_view{
                         network_context_.approximate_location.data(),
@@ -1251,14 +1261,18 @@ private:
         selected_image_result_.clear();
         image_frame_.reset();
         pending_plot_.clear();
-        cancel_network_context_worker();
-        stop_network_time_sync();
-        if (network_initialized_) {
-            network_.shutdown();
-            network_initialized_ = false;
+        clock_network_stop_pending_ =
+            !utc_clock_.has_local_time() &&
+            settings_.has_wifi_credentials();
+        clock_network_stop_started_at_ms_ = now_ms;
+        if (clock_network_stop_pending_) {
+            // Clock can become active before the asynchronous startup
+            // connection has supplied UTC and a timezone. Keep that bounded
+            // acquisition alive, then stop Wi-Fi from the runtime loop.
+            start_network_early(true);
+        } else {
+            stop_clock_network();
         }
-        reset_transports();
-        early_connect_attempted_at_ms_ = 0;
         footer_shown_ = false;
         clock_refreshed_second_ = 0xff;
         clock_time_available_ = false;
@@ -1273,6 +1287,7 @@ private:
             return;
         }
         app_mode_.store(AppMode::chat, std::memory_order_release);
+        clock_network_stop_pending_ = false;
         clock_return_pending_ = return_to_clock;
         interaction_.ready(now_ms);
         previous_state_ = interaction_.state();
@@ -1522,6 +1537,13 @@ private:
                 // normal ChatESP idle sleep timer.
                 interaction_.note_idle_activity(now_ms);
                 refresh_clock(now_ms);
+                if (clock_network_shutdown_due(
+                        clock_network_stop_pending_,
+                        utc_clock_.has_local_time(),
+                        now_ms - clock_network_stop_started_at_ms_,
+                        kClockTimeSyncLimitMs)) {
+                    stop_clock_network();
+                }
             } else if (clock_return_due(
                            app_mode, clock_return_pending_,
                            interaction_.state() == InteractionState::idle,
@@ -2182,6 +2204,7 @@ private:
         memory_store_.clear_turn_state();
         display_available_.store(false, std::memory_order_release);
         app_mode_.store(AppMode::chat, std::memory_order_release);
+        clock_network_stop_pending_ = false;
         clock_return_pending_ = false;
         mode_display_pending_ = false;
         display_wake_pending_ = false;
@@ -2250,6 +2273,18 @@ private:
 
     bool stop_ble_for_request() {
         return stop_ble();
+    }
+
+    void stop_clock_network() {
+        clock_network_stop_pending_ = false;
+        cancel_network_context_worker();
+        stop_network_time_sync();
+        if (network_initialized_) {
+            network_.shutdown();
+            network_initialized_ = false;
+        }
+        reset_transports();
+        early_connect_attempted_at_ms_ = 0;
     }
 
     bool stop_ble() {
@@ -2410,6 +2445,8 @@ private:
     bool quick_controls_enabled_ = false;
     bool clock_return_pending_ = false;
     bool clock_time_available_ = false;
+    bool clock_network_stop_pending_ = false;
+    std::uint32_t clock_network_stop_started_at_ms_ = 0;
     bool mode_display_pending_ = false;
     ui::WifiIndicator shown_wifi_ = ui::WifiIndicator::off;
     std::optional<std::uint8_t> battery_percent_;

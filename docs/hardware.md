@@ -33,7 +33,9 @@ for each flush. Use the reviewed 32-row buffer. A larger buffer leaves too
 little internal memory for audio DMA and the Bluetooth controller. A PSRAM DMA
 buffer makes this panel driver allocate a private internal transfer buffer and
 can stop display refresh. Initialize I2S before Wi-Fi and BLE. An audio
-allocation error must return to the app without a fatal check.
+allocation error must return to the app without a fatal check. The optional
+timezone HTTPS worker uses its fixed 20 KiB stack in PSRAM. It does not take the
+internal RAM that the active Wi-Fi and I2S paths need.
 
 Probe the touch controller after reset release. Address `0x15` identifies V2.
 Address `0x38` identifies the original board. Do not infer the display revision
@@ -52,11 +54,11 @@ action button:
 The app disables the AXP2101 automatic long-hold shutdown while the PWR button
 is pressed. This lets a recording continue for more than six seconds. It
 restores hardware long-hold shutdown when the button is released. The top BOOT
-button is active-low GPIO0. After boot, a debounced press of 700 ms or less
-changes between ChatESP and Clock. A longer press has no app action. The button
-is not a sleep wake source. Its boot-strapping function stays available for
-firmware recovery. Firmware uses the EXIO4 level only to detect a held key at
-start.
+button is active-low GPIO0. After boot, a debounced press from 80 through 700
+ms changes between ChatESP and Clock. A shorter electrical pulse or a longer
+press has no app action. The button is not a sleep wake source. Its
+boot-strapping function stays available for firmware recovery. Firmware uses
+the EXIO4 level only to detect a held key at start.
 During operation, it uses AXP2101 PWRON edge events. On the connected V2 board,
 EXIO4 stayed active after key release during battery operation. Firmware rejects
 an edge sample that also contains a USB power-source event.
@@ -72,12 +74,13 @@ The NimBLE shutdown completion wait has a one-second limit. A stalled shutdown
 must not block a development PWR-button wake or a production system-off
 request.
 
-Clock keeps the AMOLED and BLE on and stops Wi-Fi when it becomes active. It
-does not request automatic sleep. The bottom PWR button keeps its short-press
-sleep action. A bottom-button press first restores the portrait ChatESP layout,
-and a held press then starts recording at the normal threshold. After 30
-seconds without a follow-up interaction, the runtime returns to Clock and
-clears the thread.
+Clock keeps the AMOLED and BLE on. If local time is not ready, it keeps the
+startup Wi-Fi connection for at most 15 seconds. It stops Wi-Fi when local time
+becomes available or the limit expires. Clock does not request automatic
+sleep. The bottom PWR button keeps its short-press sleep action. A bottom-button
+press first restores the portrait ChatESP layout, and a held press then starts
+recording at the normal threshold. After 30 seconds without a follow-up
+interaction, the runtime returns to Clock and clears the thread.
 
 The model can request device status, set display brightness from 5 through 100
 percent, set playback volume from 0 through 100 percent, and request power-off.
@@ -123,6 +126,7 @@ The connected V2 board must pass these checks for this control change:
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
   normal hold threshold;
 - a short top-button press changes between portrait ChatESP and Clock;
+- an electrical top-button pulse shorter than 80 ms does not change mode;
 - a long top-button press and a top-button press during development soft sleep
   do not change application state;
 - Clock rotates 90 degrees counterclockwise, has the USB port at the bottom,
@@ -135,6 +139,8 @@ The connected V2 board must pass these checks for this control change:
 - Clock gets time from authenticated phone context or NTP, gets the UTC offset
   from the phone or the bounded IP fallback, and continues from monotonic time
   while the ChatESP device stays powered;
+- Clock keeps Wi-Fi on for no more than 15 seconds when local time is not ready,
+  and stops it as soon as local time becomes available;
 - Clock stays on for more than each ChatESP idle timeout, while a short bottom
   PWR press still requests sleep;
 - a bottom PWR press in Clock shows ChatESP without visible delay, and a held

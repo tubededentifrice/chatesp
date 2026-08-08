@@ -87,8 +87,11 @@ struct ClockSnakeSpan {
 
 class ShortPressGesture {
 public:
-    explicit constexpr ShortPressGesture(std::uint32_t maximum_press_ms = 700)
-        : maximum_press_ms_(maximum_press_ms) {}
+    explicit constexpr ShortPressGesture(
+        std::uint32_t maximum_press_ms = 700,
+        std::uint32_t minimum_press_ms = 80)
+        : maximum_press_ms_(maximum_press_ms),
+          minimum_press_ms_(minimum_press_ms) {}
 
     void press(std::uint32_t now_ms) {
         pressed_ = true;
@@ -100,13 +103,16 @@ public:
             return false;
         }
         pressed_ = false;
-        return now_ms - pressed_at_ms_ <= maximum_press_ms_;
+        const std::uint32_t duration_ms = now_ms - pressed_at_ms_;
+        return duration_ms >= minimum_press_ms_ &&
+            duration_ms <= maximum_press_ms_;
     }
 
     void cancel() { pressed_ = false; }
 
 private:
     std::uint32_t maximum_press_ms_ = 700;
+    std::uint32_t minimum_press_ms_ = 80;
     std::uint32_t pressed_at_ms_ = 0;
     bool pressed_ = false;
 };
@@ -116,6 +122,12 @@ private:
     std::uint32_t inactivity_ms, std::uint32_t delay_ms = 30'000) {
     return mode == AppMode::chat && return_pending && interaction_idle &&
         inactivity_ms >= delay_ms;
+}
+
+[[nodiscard]] constexpr bool clock_network_shutdown_due(
+    bool pending, bool local_time_available,
+    std::uint32_t elapsed_ms, std::uint32_t limit_ms) {
+    return pending && (local_time_available || elapsed_ms >= limit_ms);
 }
 
 }  // namespace chatesp

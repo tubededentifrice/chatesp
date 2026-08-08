@@ -144,6 +144,7 @@ extern "C" void app_main() {
                 }
             }
             if (mode_edges.released && mode_button.release(now_ms)) {
+                ESP_LOGI(kTag, "Top mode button short press accepted");
                 runtime.mode_button_short_press(now_ms);
             }
         } else if (!mode_button_error_reported) {
