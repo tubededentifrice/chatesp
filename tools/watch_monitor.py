@@ -7,6 +7,7 @@ import argparse
 import math
 import re
 import sys
+import termios
 import time
 from collections.abc import Callable
 
@@ -14,6 +15,8 @@ import serial
 
 
 _MAXIMUM_SERIAL_LINE_CHARS = 4_096
+_USB_RESET_ASSERT_SECONDS = 0.15
+_USB_RESET_RECOVERY_SECONDS = 0.50
 _MAC_ADDRESS = re.compile(
     r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])"
 )
@@ -108,6 +111,7 @@ class SerialRedactor:
 def open_safe_serial(
     port: str,
     factory: Callable[[], serial.Serial] = serial.Serial,
+    configure_close: Callable[[serial.Serial], None] | None = None,
 ) -> serial.Serial:
     """Set inactive control lines before the serial port opens."""
     connection = factory()
@@ -117,7 +121,46 @@ def open_safe_serial(
     connection.dtr = False
     connection.rts = False
     connection.open()
+    try:
+        (configure_close or disable_hangup_reset)(connection)
+    except Exception:
+        connection.close()
+        raise
     return connection
+
+
+def disable_hangup_reset(
+    connection: serial.Serial,
+    terminal: object = termios,
+) -> None:
+    """Keep POSIX close from changing native USB control lines."""
+    attributes = terminal.tcgetattr(connection.fileno())
+    attributes[2] &= ~terminal.HUPCL
+    terminal.tcsetattr(connection.fileno(), terminal.TCSANOW, attributes)
+
+
+def close_safe_serial(
+    connection: serial.Serial,
+    wait: Callable[[float], None] = time.sleep,
+) -> None:
+    """Reset the native USB target into the application before close."""
+    reset_error: Exception | None = None
+    try:
+        # Keep GPIO0 high while RTS resets the ESP32-S3. A plain close can
+        # leave the USB-Serial/JTAG peripheral in ROM download mode on macOS.
+        connection.setDTR(False)
+        connection.setRTS(True)
+        wait(_USB_RESET_ASSERT_SECONDS)
+        connection.setRTS(False)
+        wait(_USB_RESET_RECOVERY_SECONDS)
+        connection.setDTR(False)
+        connection.setRTS(False)
+    except (OSError, serial.SerialException) as error:
+        reset_error = error
+    finally:
+        connection.close()
+    if reset_error is not None:
+        raise reset_error
 
 
 def monitor(
@@ -143,7 +186,7 @@ def monitor(
             latency.add_line(output)
             sys.stdout.write(output)
             sys.stdout.flush()
-        connection.close()
+        close_safe_serial(connection)
     if latency_report:
         print(latency.report())
     return 0

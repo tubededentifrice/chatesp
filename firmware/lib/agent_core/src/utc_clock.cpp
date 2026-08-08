@@ -143,16 +143,32 @@ bool UtcClock::update_from_epoch_seconds(
     std::uint64_t epoch_seconds,
     std::int16_t utc_offset_minutes,
     std::uint32_t observed_at_ms) {
+    if (utc_offset_minutes < -840 || utc_offset_minutes > 840) {
+        return false;
+    }
+    return update_from_epoch_seconds_utc(epoch_seconds, observed_at_ms) &&
+        set_utc_offset_minutes(utc_offset_minutes);
+}
+
+bool UtcClock::update_from_epoch_seconds_utc(
+    std::uint64_t epoch_seconds, std::uint32_t observed_at_ms) {
     if (epoch_seconds < 1'577'836'800ULL ||
-        epoch_seconds > 253'402'300'799ULL ||
-        utc_offset_minutes < -840 || utc_offset_minutes > 840) {
+        epoch_seconds > 253'402'300'799ULL) {
         return false;
     }
     observed_epoch_seconds_ = epoch_seconds;
     observed_at_ms_ = observed_at_ms;
+    valid_ = true;
+    return true;
+}
+
+bool UtcClock::set_utc_offset_minutes(
+    std::int16_t utc_offset_minutes) {
+    if (utc_offset_minutes < -840 || utc_offset_minutes > 840) {
+        return false;
+    }
     utc_offset_minutes_ = utc_offset_minutes;
     has_utc_offset_ = true;
-    valid_ = true;
     return true;
 }
 

@@ -200,15 +200,22 @@ esp_err_t bsp_sdcard_unmount(void)
 
 esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
 {
-    if (i2s_tx_chan && i2s_rx_chan) {
+    if (i2s_data_if != NULL) {
         /* Audio was initialized before */
         return ESP_OK;
     }
 
+    esp_err_t result = ESP_OK;
+    bool tx_enabled = false;
+    bool rx_enabled = false;
+
     /* Setup I2S peripheral */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(CONFIG_BSP_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true; // Auto clear the legacy data in the DMA buffer
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
+    result = i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan);
+    if (result != ESP_OK) {
+        goto fail;
+    }
 
     /* Setup I2S channels */
     const i2s_std_config_t std_cfg_default = BSP_I2S_DUPLEX_MONO_CFG(22050);
@@ -218,13 +225,27 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     }
 
     if (i2s_tx_chan != NULL) {
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg));
-        ESP_ERROR_CHECK(i2s_channel_enable(i2s_tx_chan));
+        result = i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg);
+        if (result != ESP_OK) {
+            goto fail;
+        }
+        result = i2s_channel_enable(i2s_tx_chan);
+        if (result != ESP_OK) {
+            goto fail;
+        }
+        tx_enabled = true;
     }
 
     if (i2s_rx_chan != NULL) {
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg));
-        ESP_ERROR_CHECK(i2s_channel_enable(i2s_rx_chan));
+        result = i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg);
+        if (result != ESP_OK) {
+            goto fail;
+        }
+        result = i2s_channel_enable(i2s_rx_chan);
+        if (result != ESP_OK) {
+            goto fail;
+        }
+        rx_enabled = true;
     }
 
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -233,19 +254,44 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
         .rx_handle = i2s_rx_chan,
     };
     i2s_data_if = audio_codec_new_i2s_data(&i2s_cfg);
+    if (i2s_data_if == NULL) {
+        result = ESP_ERR_NO_MEM;
+        goto fail;
+    }
 
     return ESP_OK;
+
+fail:
+    if (i2s_rx_chan != NULL) {
+        if (rx_enabled) {
+            i2s_channel_disable(i2s_rx_chan);
+        }
+        i2s_del_channel(i2s_rx_chan);
+        i2s_rx_chan = NULL;
+    }
+    if (i2s_tx_chan != NULL) {
+        if (tx_enabled) {
+            i2s_channel_disable(i2s_tx_chan);
+        }
+        i2s_del_channel(i2s_tx_chan);
+        i2s_tx_chan = NULL;
+    }
+    ESP_LOGE(TAG, "Audio interface initialization failed: %s", esp_err_to_name(result));
+    return result;
 }
 
 esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
 {
     if (i2s_data_if == NULL) {
         /* Initilize I2C */
-        ESP_ERROR_CHECK(bsp_i2c_init());
+        if (bsp_i2c_init() != ESP_OK) {
+            return NULL;
+        }
         /* Configure I2S peripheral and Power Amplifier */
-        ESP_ERROR_CHECK(bsp_audio_init(NULL));
+        if (bsp_audio_init(NULL) != ESP_OK) {
+            return NULL;
+        }
     }
-    assert(i2s_data_if);
 
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
 
@@ -255,7 +301,10 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
         .bus_handle = i2c_handle,
     };
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    assert(i2c_ctrl_if);
+    if (i2c_ctrl_if == NULL) {
+        audio_codec_delete_gpio_if(gpio_if);
+        return NULL;
+    }
 
     esp_codec_dev_hw_gain_t gain = {
         .pa_voltage = 5.0,
@@ -276,25 +325,38 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
         .hw_gain = gain,
     };
     const audio_codec_if_t *es8311_dev = es8311_codec_new(&es8311_cfg);
-    assert(es8311_dev);
+    if (es8311_dev == NULL) {
+        audio_codec_delete_ctrl_if(i2c_ctrl_if);
+        audio_codec_delete_gpio_if(gpio_if);
+        return NULL;
+    }
 
     esp_codec_dev_cfg_t codec_dev_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
         .codec_if = es8311_dev,
         .data_if = i2s_data_if,
     };
-    return esp_codec_dev_new(&codec_dev_cfg);
+    esp_codec_dev_handle_t codec_dev = esp_codec_dev_new(&codec_dev_cfg);
+    if (codec_dev == NULL) {
+        audio_codec_delete_codec_if(es8311_dev);
+        audio_codec_delete_ctrl_if(i2c_ctrl_if);
+        audio_codec_delete_gpio_if(gpio_if);
+    }
+    return codec_dev;
 }
 
 esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
 {
     if (i2s_data_if == NULL) {
         /* Initilize I2C */
-        ESP_ERROR_CHECK(bsp_i2c_init());
+        if (bsp_i2c_init() != ESP_OK) {
+            return NULL;
+        }
         /* Configure I2S peripheral and Power Amplifier */
-        ESP_ERROR_CHECK(bsp_audio_init(NULL));
+        if (bsp_audio_init(NULL) != ESP_OK) {
+            return NULL;
+        }
     }
-    assert(i2s_data_if);
 
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
 
@@ -304,7 +366,10 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
         .bus_handle = i2c_handle,
     };
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    assert(i2c_ctrl_if);
+    if (i2c_ctrl_if == NULL) {
+        audio_codec_delete_gpio_if(gpio_if);
+        return NULL;
+    }
 
     esp_codec_dev_hw_gain_t gain = {
         .pa_voltage = 5.0,
@@ -326,14 +391,24 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
     };
 
     const audio_codec_if_t *es8311_dev = es8311_codec_new(&es8311_cfg);
-    assert(es8311_dev);
+    if (es8311_dev == NULL) {
+        audio_codec_delete_ctrl_if(i2c_ctrl_if);
+        audio_codec_delete_gpio_if(gpio_if);
+        return NULL;
+    }
 
     esp_codec_dev_cfg_t codec_es8311_dev_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
         .codec_if = es8311_dev,
         .data_if = i2s_data_if,
     };
-    return esp_codec_dev_new(&codec_es8311_dev_cfg);
+    esp_codec_dev_handle_t codec_dev = esp_codec_dev_new(&codec_es8311_dev_cfg);
+    if (codec_dev == NULL) {
+        audio_codec_delete_codec_if(es8311_dev);
+        audio_codec_delete_ctrl_if(i2c_ctrl_if);
+        audio_codec_delete_gpio_if(gpio_if);
+    }
+    return codec_dev;
 }
 
 #define LCD_CMD_BITS (8)
@@ -677,9 +752,8 @@ lv_display_t *bsp_display_start(void)
         .double_buffer = false,
         .flags = {
             // The QSPI panel driver otherwise allocates a temporary DMA
-            // buffer for each flush. A 48-row frame can exceed the largest
-            // free DMA block after Wi-Fi and BLE start, which leaves LVGL
-            // waiting for a completion callback that cannot arrive.
+            // buffer for each flush. Keep a smaller persistent internal
+            // buffer so audio, Wi-Fi, and BLE have enough internal memory.
             .buff_dma = true,
             .buff_spiram = false,
         }};

@@ -16,6 +16,7 @@ idf_component_register(
         "jpeg_image_sink.cpp"
         "micropython_executor.cpp"
         "network_manager.cpp"
+        "network_context_provider.cpp"
         "power_control.cpp"
         "pcm_playback_sink.cpp"
         "settings_store.cpp"

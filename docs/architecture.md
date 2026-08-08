@@ -61,7 +61,7 @@ The top touch target keeps control until release, so the swipe can continue
 beyond the small handle without losing the gesture.
 The panel position follows the finger during a pull. A short settle animation
 completes the movement after release. The display and touch refresh period is
-16 ms, and the internal draw buffer holds more than one tenth of the screen.
+16 ms. The internal draw buffer holds 32 rows.
 The panel has one shared five-percent control component for brightness and
 volume. Each existing 320-by-44-pixel layout box has a centered transparent
 352-by-64-pixel touch target. Thus, the rail, fill, dot, labels, and spacing do
@@ -72,10 +72,29 @@ panel is not available during start, recording, sleep, or BLE passkey display.
 A PWR-button action keeps priority. Opening the panel or changing a control
 resets the idle timer only when the runtime is idle.
 
-The 48-row LVGL draw and rotation buffers use DMA-capable internal memory.
+The 32-row LVGL draw and rotation buffers use DMA-capable internal memory.
 They are allocated once during display start. The QSPI driver does not allocate
 a large temporary DMA buffer while Wi-Fi and BLE are active. This keeps a
 failed late allocation from leaving LVGL in a permanent flush wait.
+
+The runtime initializes the ES8311 and reserves both I2S DMA channels before it
+starts Wi-Fi or BLE. The smaller display buffer leaves enough internal memory
+for the audio DMA channels and the Bluetooth controller at the same time. An
+I2S or codec allocation failure returns an error. It does not stop or restart
+the firmware.
+
+After a recording ends, the runtime stops BLE before it starts the cloud
+request. This releases the Bluetooth controller memory for TLS. Provisioning
+starts again when the interaction ends and the runtime returns to idle. A phone
+connection can close at the end of a recording. The app must treat this as a
+normal disconnect and reconnect when the watch advertises again.
+
+When no live app location is available, the runtime also stops BLE for one
+short IP-context HTTPS lookup. This gives TLS the same controller-memory
+headroom. The provider necessarily observes the public source IP, but the
+request does not ask the provider to return it. The firmware does not log or
+store the IP or the returned coarse location. BLE starts again after the worker
+stack is reclaimed.
 
 Control movement sends the latest brightness and volume values through the
 same bounded callback. Volume uses safe atomic state at once, including during
@@ -86,7 +105,9 @@ flash, send a panel command, or wait for audio. The runtime saves the final
 preference pair after release. It defers that write while voice work or a
 PWR-button action has priority. It does not write NVS for each track position.
 
-When settings are available, the Wi-Fi station starts an asynchronous
+The iOS app is optional at runtime. When Wi-Fi credentials are available from
+an ignored development configuration or a stored production record, the
+station starts an asynchronous
 connection as soon as the runtime starts. This does not block the button or
 microphone path. A request waits for that connection or starts a bounded retry
 if the early attempt did not finish. If the device starts with the PWR button
@@ -110,19 +131,21 @@ registered device tool.
 Image search still needs a separate model-selected result ID. A relative
 brightness or volume request gets device status before it changes the value.
 After routing and tool work, the final model request has no tools.
-The iOS companion sends its clock and current UTC offset when the watch connects
-and at most once per hour while the connection stays active. The firmware
-advances the accepted value with monotonic time. The successful transcription
-response also supplies a standard HTTP `Date` header as a UTC network fallback.
+The iOS companion can send its clock and current UTC offset when the watch
+connects and at most once per hour while the connection stays active. The
+firmware also starts a non-blocking SNTP sync with `time.cloudflare.com` after
+Wi-Fi connects. It advances an accepted value with monotonic time while the
+watch stays powered. The successful transcription response and the IP-context
+response can also supply a standard HTTP `Date` header as a UTC fallback.
 Each route and final-answer prompt gets the user's local minute, such as
 `YYYY-MM-DD HH:MM UTC+04:00`. The prompt does not contain seconds, so requests
 in the same minute use the same time value. A missing or invalid time stops the
 turn instead of giving the model a false time.
-Clock uses seconds from this same accepted phone context. It does not use an
-HTTP `Date` value for the clock face because that value does not identify the
-user's timezone. Before the phone supplies a valid offset, the face shows a
-time-unavailable pattern. The accepted value advances with subtraction-based
-monotonic elapsed time and handles millisecond wrap.
+Clock uses seconds from this same accepted time. An HTTP `Date` or NTP value
+does not identify the user's timezone by itself. The app offset or the bounded
+IP-location fallback supplies that offset. Before one source supplies both
+parts, the face shows a time-unavailable pattern. The accepted value advances
+with subtraction-based monotonic elapsed time and handles millisecond wrap.
 Each model request also gets a fresh snapshot of all saved memory IDs and
 facts. The prompt marks these facts as untrusted user-provided context. The
 model must not follow instructions inside a fact. A successful memory tool
@@ -231,10 +254,12 @@ The system prompt tells the model to:
 The route and answer system messages also contain the approximate user location
 and the current user-local date and time at minute precision. After a watch is
 selected, the companion sends a location rounded to 0.1 degree when the watch
-connects and at most once per hour while connected. A saved city and country is
-the fallback. The live value stays in RAM and is not written to flash. It must
-not contain a precise position or a street address. The changing time suffix
-follows the stable instruction text.
+connects and at most once per hour while connected. Without live app context,
+the firmware makes one HTTPS request to `ipwho.is`. It requests only city,
+region, country code, and UTC offset, and has a three-second total limit. A
+saved city and country is the last fallback. Each live or IP value stays in RAM
+and is not written to flash. It must not contain a precise position or a street
+address. The changing time suffix follows the stable instruction text.
 
 The firmware also sets a short output limit. The display can scroll, but the
 normal answer must fit a spoken interaction.

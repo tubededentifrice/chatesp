@@ -25,6 +25,7 @@ public:
     AudioCapture(const AudioCapture &) = delete;
     AudioCapture &operator=(const AudioCapture &) = delete;
 
+    esp_err_t initialize();
     esp_err_t start();
     esp_err_t capture_chunk();
     esp_err_t stop();

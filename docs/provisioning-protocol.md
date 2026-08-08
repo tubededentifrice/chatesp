@@ -2,6 +2,10 @@
 
 This document defines ChatESP BLE provisioning protocol version 2. All integer
 values use network byte order. All text uses UTF-8. A length is a byte count.
+The companion and this protocol are optional at runtime. The watch uses an
+ignored local configuration in development or the last valid stored record in
+production. Local Clock and controls do not require a provisioning record.
+Cloud voice needs Wi-Fi and service credentials from one of these sources.
 
 ## BLE service
 
@@ -30,6 +34,12 @@ The device GATT permissions and the firmware check are authoritative. An iOS
 write can cause the system pairing prompt.
 
 ## Transfer
+
+The watch can stop BLE after a voice recording to release internal memory for
+the cloud TLS request. This closes an active phone connection. The watch starts
+advertising again when it returns to idle. The iOS app must treat this as a
+normal, recoverable disconnect. It must not report a completed settings write
+unless it received the application acknowledgement before the disconnect.
 
 One transfer contains one complete settings packet. The maximum packet size is
 1,024 bytes. iOS sends one control frame and then ordered data frames. It waits
@@ -203,10 +213,11 @@ SHA-256("CESP-CONTEXT-V1" || version || epoch_seconds || utc_offset_minutes || l
 All numeric fingerprint inputs use network byte order. The firmware accepts
 epoch values from 2020-01-01 through 9999-12-31. The UTC offset and rounded
 location let it format the user's local date and time for model requests. The
-Clock face also uses the epoch, seconds, and accepted app offset. A valid HTTP
-`Date` response can refresh UTC for model requests, but it cannot make the
-Clock face valid because it does not identify the user's timezone. It does not
-remove the last accepted app offset.
+Clock face also uses the epoch, seconds, and accepted app offset. Without live
+app context, SNTP supplies UTC. One bounded IP-location request supplies a
+coarse city, region, country code, and current UTC offset. A valid HTTP `Date`
+response can also refresh UTC. A UTC-only source does not remove the last
+accepted offset.
 
 The device sends a 48-byte context indication on the acknowledgement
 characteristic. A GATT write response is not context-sync success.

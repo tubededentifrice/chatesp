@@ -28,9 +28,12 @@ path before original-board support is complete.
 
 The LVGL draw and software-rotation buffers are DMA-capable and use internal
 memory. The board allocates them during display start. Do not use a normal
-48-row buffer that makes the SPI driver allocate an equivalent temporary DMA
-buffer for each flush. After Wi-Fi and BLE start, that temporary allocation can
-fail and leave LVGL waiting for a transfer completion that cannot occur.
+buffer that makes the SPI driver allocate an equivalent temporary DMA buffer
+for each flush. Use the reviewed 32-row buffer. A larger buffer leaves too
+little internal memory for audio DMA and the Bluetooth controller. A PSRAM DMA
+buffer makes this panel driver allocate a private internal transfer buffer and
+can stop display refresh. Initialize I2S before Wi-Fi and BLE. An audio
+allocation error must return to the app without a fatal check.
 
 Probe the touch controller after reset release. Address `0x15` identifies V2.
 Address `0x38` identifies the original board. Do not infer the display revision
@@ -120,8 +123,9 @@ The connected V2 board must pass these checks for this control change:
 - Clock shows only large white 24-hour time and a white seconds path on black;
 - the seconds path follows the rounded screen shape, starts at 12 o'clock,
   fills on even minutes, and drains on odd minutes;
-- Clock shows an unavailable-time face until an authenticated phone context
-  supplies epoch time and the user's UTC offset;
+- Clock gets time from authenticated phone context or NTP, gets the UTC offset
+  from the phone or the bounded IP fallback, and continues from monotonic time
+  while the watch stays powered;
 - Clock stays on for more than each ChatESP idle timeout, while a short bottom
   PWR press still requests sleep;
 - a bottom PWR press in Clock shows ChatESP without visible delay, and a held

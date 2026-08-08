@@ -27,7 +27,9 @@ without a button action and does not leave the chip in the ROM loader.
 Use the repository monitor for device logs. It sets DTR and RTS to inactive
 values before it opens the port. On the ESP32-S3 native USB serial interface,
 the host open or reconnect can still cause a `USB_UART_CHIP_RESET`. Use it only
-when a reset is acceptable:
+when a reset is acceptable. The monitor disables the close-time terminal
+hangup action. It closes with a bounded reset while the boot line is inactive,
+so the app starts instead of the ROM loader:
 
 ```sh
 uv run --locked python tools/watch_monitor.py --port LOCAL_PORT --duration 10

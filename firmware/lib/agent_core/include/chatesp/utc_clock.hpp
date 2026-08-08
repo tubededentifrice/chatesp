@@ -27,10 +27,13 @@ public:
         std::uint64_t epoch_seconds,
         std::int16_t utc_offset_minutes,
         std::uint32_t observed_at_ms);
+    [[nodiscard]] bool update_from_epoch_seconds_utc(
+        std::uint64_t epoch_seconds, std::uint32_t observed_at_ms);
+    [[nodiscard]] bool set_utc_offset_minutes(
+        std::int16_t utc_offset_minutes);
     [[nodiscard]] bool current_minute(
         std::uint32_t now_ms, UtcMinuteText &output) const;
-    // A clock face must use only an app-provided UTC offset. An HTTP Date
-    // value is UTC and cannot identify the user's timezone.
+    // A clock face needs a UTC offset from the app or the IP fallback.
     [[nodiscard]] bool current_local_time(
         std::uint32_t now_ms, LocalTimeOfDay &output) const;
     [[nodiscard]] bool valid() const { return valid_; }

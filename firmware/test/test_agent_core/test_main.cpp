@@ -8,6 +8,7 @@
 
 #include "chatesp/agent_loop.hpp"
 #include "chatesp/brave_protocol.hpp"
+#include "chatesp/ip_location.hpp"
 #include "chatesp/memory.hpp"
 #include "chatesp/openrouter_protocol.hpp"
 #include "chatesp/system_prompt.hpp"
@@ -449,6 +450,20 @@ void test_utc_clock_exposes_phone_local_time_with_seconds() {
     TEST_ASSERT_EQUAL_UINT8(1, local.second);
 }
 
+void test_utc_clock_rejects_invalid_offset_without_changing_time() {
+    UtcClock clock;
+    TEST_ASSERT_TRUE(clock.update_from_epoch_seconds(
+        1'704'067'200ULL, 60, 100));
+    UtcMinuteText before;
+    TEST_ASSERT_TRUE(clock.current_minute(100, before));
+
+    TEST_ASSERT_FALSE(clock.update_from_epoch_seconds(
+        1'735'689'600ULL, 841, 200));
+    UtcMinuteText after;
+    TEST_ASSERT_TRUE(clock.current_minute(100, after));
+    TEST_ASSERT_EQUAL_STRING(before.c_str(), after.c_str());
+}
+
 void test_utc_clock_local_seconds_handle_millisecond_wrap() {
     UtcClock clock;
     LocalTimeOfDay local;
@@ -460,6 +475,44 @@ void test_utc_clock_local_seconds_handle_millisecond_wrap() {
     TEST_ASSERT_EQUAL_UINT8(23, local.hour);
     TEST_ASSERT_EQUAL_UINT8(59, local.minute);
     TEST_ASSERT_EQUAL_UINT8(59, local.second);
+}
+
+void test_ip_location_parser_keeps_only_coarse_context() {
+    constexpr char response[] =
+        "{\"success\":true,\"country_code\":\"AE\","
+        "\"region\":\"Dubai\",\"city\":\"Dubai\","
+        "\"timezone\":{\"offset\":14400}}";
+    IpLocationContext context;
+    assert_error(
+        Error::none,
+        parse_ip_location_response(response, sizeof(response) - 1, context));
+    TEST_ASSERT_EQUAL_STRING(
+        "Dubai, AE", context.approximate_location.c_str());
+    TEST_ASSERT_EQUAL_INT16(240, context.utc_offset_minutes);
+}
+
+void test_ip_location_parser_rejects_failed_or_invalid_offsets() {
+    constexpr char failed[] =
+        "{\"success\":false,\"country_code\":\"AE\","
+        "\"city\":\"Dubai\",\"timezone\":{\"offset\":14400}}";
+    constexpr char invalid_offset[] =
+        "{\"success\":true,\"country_code\":\"AE\","
+        "\"city\":\"Dubai\",\"timezone\":{\"offset\":14401}}";
+    constexpr char control_character[] =
+        "{\"success\":true,\"country_code\":\"AE\","
+        "\"city\":\"Du\\nbai\",\"timezone\":{\"offset\":14400}}";
+    IpLocationContext context;
+    assert_error(
+        Error::malformed_response,
+        parse_ip_location_response(failed, sizeof(failed) - 1, context));
+    assert_error(
+        Error::malformed_response,
+        parse_ip_location_response(
+            invalid_offset, sizeof(invalid_offset) - 1, context));
+    assert_error(
+        Error::malformed_response,
+        parse_ip_location_response(
+            control_character, sizeof(control_character) - 1, context));
 }
 
 void test_history_rejects_empty_and_overlong_text() {
@@ -1800,7 +1853,10 @@ int main(int, char **) {
     RUN_TEST(test_utc_clock_formats_minutes_and_handles_rollover);
     RUN_TEST(test_utc_clock_rejects_invalid_dates_and_minute_text);
     RUN_TEST(test_utc_clock_exposes_phone_local_time_with_seconds);
+    RUN_TEST(test_utc_clock_rejects_invalid_offset_without_changing_time);
     RUN_TEST(test_utc_clock_local_seconds_handle_millisecond_wrap);
+    RUN_TEST(test_ip_location_parser_keeps_only_coarse_context);
+    RUN_TEST(test_ip_location_parser_rejects_failed_or_invalid_offsets);
     RUN_TEST(test_history_rejects_empty_and_overlong_text);
     RUN_TEST(test_registry_rejects_duplicate_and_unknown_tool);
     RUN_TEST(test_agent_loop_executes_one_tool_and_keeps_history);

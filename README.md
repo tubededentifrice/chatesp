@@ -2,7 +2,7 @@
 
 ChatESP is an open-source, physical voice client for ChatGPT-compatible APIs.
 It targets the Waveshare ESP32-S3-Touch-AMOLED-1.8 board and has a small iOS
-companion for secure BLE configuration.
+companion for optional secure BLE configuration.
 
 ## Intended experience
 
@@ -17,10 +17,9 @@ companion for secure BLE configuration.
    the model sends it. Complete
    sentences go to speech at once. One playback session joins up to four
    speech segments in order. Each model request includes the user's current
-   local date and time at minute precision and an approximate location from the
-   companion.
-   The app refreshes this context when the watch connects and at most once per
-   hour while connected.
+   local date and time at minute precision and an approximate location. The
+   app can supply this context. Without the app, the watch uses NTP and one
+   fast, bounded IP-location lookup.
 4. Pull down the small top handle to change brightness or volume on the
    device. The panel follows the finger. Tap or drag the large invisible touch
    row around either control track to set its value. The visible dot shows the
@@ -61,7 +60,11 @@ terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
 Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
 parallel image download, search, BLE provisioning,
 device status and controls, touch quick controls, a travel-clock mode, and
-sleep paths. Brightness
+sleep paths. The iOS app is not a runtime requirement. A development image can
+use its ignored local credentials without pairing. A production image keeps
+the last provisioned credentials when the app is not connected. Without Wi-Fi
+or a service key, local Clock and device controls stay available, but cloud
+voice features report the missing capability. Brightness
 and volume changes use a small persistent device-preference record. Up to ten
 short user-requested memories persist in plaintext NVS and enter each model
 request as untrusted context. A full list causes the model to compact the old
@@ -147,7 +150,10 @@ recovery procedure.
 
 Read device logs with the repository monitor. Opening the ESP32-S3 native USB
 serial port can reset the chip. Use the monitor only when a reset is acceptable.
-The generic serial monitor can also request the ROM loader:
+The repository monitor clears the close-time hangup flag. Before it closes, it
+resets the chip with the boot line inactive. This prevents a normal monitor
+close from leaving the device in the ROM loader. The generic serial monitor can
+still request the ROM loader:
 
 ```sh
 uv run --locked python tools/watch_monitor.py --port LOCAL_PORT --duration 10

@@ -4,6 +4,8 @@ import unittest
 from tools.watch_monitor import (
     LatencySummary,
     SerialRedactor,
+    close_safe_serial,
+    disable_hangup_reset,
     open_safe_serial,
     redact_serial_text,
 )
@@ -20,10 +22,43 @@ class RecordingSerial:
     def open(self) -> None:
         self.events.append(("open", None))
 
+    def setDTR(self, value: bool) -> None:
+        self.events.append(("setDTR", value))
+
+    def setRTS(self, value: bool) -> None:
+        self.events.append(("setRTS", value))
+
+    def close(self) -> None:
+        self.events.append(("close", None))
+
+    def fileno(self) -> int:
+        return 7
+
+
+class RecordingTermios:
+    HUPCL = 0x4000
+    TCSANOW = 0
+
+    def __init__(self) -> None:
+        self.events: list[tuple[object, ...]] = []
+
+    def tcgetattr(self, file_descriptor: int) -> list[int]:
+        self.events.append(("get", file_descriptor))
+        return [0, 0, self.HUPCL | 0x20, 0, 0, 0, 0]
+
+    def tcsetattr(
+        self, file_descriptor: int, when: int, attributes: list[int]
+    ) -> None:
+        self.events.append(("set", file_descriptor, when, attributes[2]))
+
 
 class WatchMonitorTests(unittest.TestCase):
     def test_control_lines_are_inactive_before_open(self) -> None:
-        connection = open_safe_serial("LOCAL_PORT", RecordingSerial)
+        connection = open_safe_serial(
+            "LOCAL_PORT",
+            RecordingSerial,
+            lambda value: value.events.append(("disable_hupcl", None)),
+        )
 
         self.assertLess(
             connection.events.index(("dtr", False)),
@@ -32,6 +67,43 @@ class WatchMonitorTests(unittest.TestCase):
         self.assertLess(
             connection.events.index(("rts", False)),
             connection.events.index(("open", None)),
+        )
+        self.assertGreater(
+            connection.events.index(("disable_hupcl", None)),
+            connection.events.index(("open", None)),
+        )
+
+    def test_open_disables_close_time_hangup_reset(self) -> None:
+        connection = RecordingSerial()
+        terminal = RecordingTermios()
+
+        disable_hangup_reset(connection, terminal)
+
+        self.assertEqual(
+            terminal.events,
+            [("get", 7), ("set", 7, terminal.TCSANOW, 0x20)],
+        )
+
+    def test_close_resets_native_usb_into_application_mode(self) -> None:
+        connection = RecordingSerial()
+
+        close_safe_serial(
+            connection,
+            lambda duration: connection.events.append(("wait", duration)),
+        )
+
+        self.assertEqual(
+            connection.events,
+            [
+                ("setDTR", False),
+                ("setRTS", True),
+                ("wait", 0.15),
+                ("setRTS", False),
+                ("wait", 0.5),
+                ("setDTR", False),
+                ("setRTS", False),
+                ("close", None),
+            ],
         )
 
     def test_local_network_identifiers_are_redacted(self) -> None:

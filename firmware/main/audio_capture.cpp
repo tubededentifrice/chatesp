@@ -38,6 +38,14 @@ AudioCapture::~AudioCapture() {
     }
 }
 
+esp_err_t AudioCapture::initialize() {
+    if (codec_ != nullptr) {
+        return ESP_OK;
+    }
+    codec_ = bsp_audio_codec_microphone_init();
+    return codec_ != nullptr ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
 esp_err_t AudioCapture::start() {
     if (active_) {
         return ESP_ERR_INVALID_STATE;
@@ -60,13 +68,11 @@ esp_err_t AudioCapture::start() {
         return ESP_ERR_NO_MEM;
     }
 
-    if (codec_ == nullptr) {
-        codec_ = bsp_audio_codec_microphone_init();
-        if (codec_ == nullptr) {
-            release_buffer();
-            release_session();
-            return ESP_FAIL;
-        }
+    const esp_err_t initialize_result = initialize();
+    if (initialize_result != ESP_OK) {
+        release_buffer();
+        release_session();
+        return initialize_result;
     }
 
     const int gain_result =

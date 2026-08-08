@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <new>
 #include <optional>
 #include <string_view>
@@ -32,6 +33,7 @@
 #include "device_settings.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -41,6 +43,7 @@
 #include "jpeg_image_sink.hpp"
 #include "micropython_executor.hpp"
 #include "network_manager.hpp"
+#include "network_context_provider.hpp"
 #include "pcm_playback_sink.hpp"
 #include "power_control.hpp"
 #include "settings_store.hpp"
@@ -68,6 +71,7 @@ constexpr std::uint32_t kPoweroffGraceMs = 250;
 constexpr std::uint32_t kInteractionTimeoutMs = 180'000;
 constexpr std::uint32_t kClockReturnDelayMs = 30'000;
 constexpr std::uint32_t kModeDisplayRetryMs = 100;
+constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
 constexpr std::size_t kMinimumRecordingSamples =
     AudioCapture::kSampleRateHz / 10;
 constexpr UBaseType_t kRuntimePriority = 5;
@@ -79,10 +83,15 @@ constexpr std::uint32_t kSpeechStackBytes = 16 * 1024;
 constexpr EventBits_t kSpeechDoneBit = BIT0;
 constexpr EventBits_t kNetworkWarmDoneBit = BIT1;
 constexpr EventBits_t kImageDoneBit = BIT2;
+constexpr EventBits_t kNetworkContextDoneBit = BIT3;
 constexpr UBaseType_t kNetworkWarmPriority = 3;
 constexpr std::uint32_t kNetworkWarmStackBytes = 6 * 1024;
 constexpr UBaseType_t kImagePriority = 3;
 constexpr std::uint32_t kImageStackBytes = 20 * 1024;
+constexpr UBaseType_t kNetworkContextPriority = 3;
+constexpr std::uint32_t kNetworkContextStackBytes = 20 * 1024;
+constexpr std::uint64_t kMinimumValidEpochSeconds = 1'577'836'800ULL;
+constexpr char kNtpServer[] = "time.cloudflare.com";
 
 std::uint32_t monotonic_ms() {
     return static_cast<std::uint32_t>(esp_timer_get_time() / 1'000ULL);
@@ -314,6 +323,17 @@ struct RuntimeSettings {
         return approximate_location.view();
     }
 
+    [[nodiscard]] bool has_wifi_credentials() const {
+        return configured && !wifi_ssid.view().empty();
+    }
+
+    [[nodiscard]] bool has_service_credentials() const {
+        return configured && !endpoint.view().empty() &&
+            !openrouter_key.view().empty() && !chat_model.view().empty() &&
+            !transcription_model.view().empty() &&
+            !speech_model.view().empty();
+    }
+
     provisioning::BoundedSetting<192> endpoint;
     provisioning::BoundedSetting<256> openrouter_key;
     provisioning::BoundedSetting<128> brave_key;
@@ -367,6 +387,7 @@ public:
               device_preferences_store.preferences(),
               kDevelopmentMode),
           memory_store_(device_memory_store),
+          network_context_provider_(network_context_transport_),
           image_fetch_provider_(image_transport_),
           openrouter_connection_(settings_.openrouter()),
           brave_key_(settings_.brave()),
@@ -422,8 +443,10 @@ public:
 
     ~Impl() override {
         cancellation_.cancel();
+        context_cancellation_.cancel();
         speech_channel_.cancel();
         cancel_transports();
+        stop_network_time_sync();
         capture_.cancel();
         pcm_sink_.cancel();
         if (quick_controls_enabled_ && bsp_display_lock(100)) {
@@ -472,6 +495,14 @@ public:
         if (settings_result != ESP_OK) {
             return settings_result;
         }
+        // Reserve the internal I2S DMA path before Wi-Fi and Bluetooth use
+        // the remaining internal memory.
+        const esp_err_t audio_result = capture_.initialize();
+        if (audio_result != ESP_OK) {
+            ESP_LOGE(kTag, "Audio initialization failed: %s",
+                     esp_err_to_name(audio_result));
+            return audio_result;
+        }
         command_queue_ = xQueueCreate(16, sizeof(Command));
         passkey_queue_ = xQueueCreate(1, sizeof(PasskeyEvent));
         device_context_queue_ = xQueueCreate(1, sizeof(DeviceContextEvent));
@@ -519,6 +550,7 @@ public:
             button_pressed_.store(true, std::memory_order_release);
             voice_priority_.store(true, std::memory_order_release);
             cancellation_.cancel();
+            context_cancellation_.cancel();
             const Command command{
                 CommandKind::wake_button_down, startup_at_ms};
             queue_command(command);
@@ -574,6 +606,7 @@ public:
             device_control_.cancel_power_off();
             voice_priority_.store(true, std::memory_order_release);
             cancellation_.cancel();
+            context_cancellation_.cancel();
             speech_channel_.cancel();
             capture_.cancel();
             pcm_sink_.cancel();
@@ -600,6 +633,7 @@ public:
         }
         if (app_mode_.load(std::memory_order_acquire) == AppMode::chat) {
             cancellation_.cancel();
+            context_cancellation_.cancel();
             speech_channel_.cancel();
             capture_.cancel();
             pcm_sink_.cancel();
@@ -701,6 +735,7 @@ private:
         openrouter_audio_transport_.cancel_active();
         search_transport_.cancel_active();
         image_transport_.cancel_active();
+        network_context_transport_.cancel_active();
     }
 
     void reset_transports() {
@@ -708,6 +743,7 @@ private:
         openrouter_audio_transport_.reset_session();
         search_transport_.reset_session();
         image_transport_.reset_session();
+        network_context_transport_.reset_session();
     }
 
     static void task_entry(void *context) {
@@ -728,6 +764,10 @@ private:
 
     static void image_task_entry(void *context) {
         static_cast<Impl *>(context)->run_image_worker();
+    }
+
+    static void network_context_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_network_context_worker();
     }
 
     void start_image_worker() {
@@ -805,7 +845,7 @@ private:
     }
 
     void start_network_during_recording() {
-        if (!settings_.configured || network_initialized_ ||
+        if (!settings_.has_wifi_credentials() || network_initialized_ ||
             network_warm_task_ != nullptr || speech_events_ == nullptr) {
             return;
         }
@@ -851,6 +891,151 @@ private:
         if (network_warm_initialized_.load(std::memory_order_acquire)) {
             network_initialized_ = true;
         }
+    }
+
+    void start_network_time_sync() {
+        if (sntp_started_ || sntp_complete_ || sntp_start_attempted_ ||
+            !network_.connected()) {
+            return;
+        }
+        sntp_start_attempted_ = true;
+        esp_sntp_config_t config =
+            ESP_NETIF_SNTP_DEFAULT_CONFIG(kNtpServer);
+        const esp_err_t result = esp_netif_sntp_init(&config);
+        if (result == ESP_OK) {
+            sntp_started_ = true;
+        } else {
+            ESP_LOGW(
+                kTag, "NTP start failed (category %s)",
+                esp_err_to_name(result));
+        }
+    }
+
+    void poll_network_time_sync(std::uint32_t now_ms) {
+        if (!sntp_started_ ||
+            esp_netif_sntp_sync_wait(0) != ESP_OK) {
+            return;
+        }
+        const std::time_t current = std::time(nullptr);
+        if (current >= 0 &&
+            static_cast<std::uint64_t>(current) >=
+                kMinimumValidEpochSeconds &&
+            utc_clock_.update_from_epoch_seconds_utc(
+                static_cast<std::uint64_t>(current), now_ms)) {
+            sntp_complete_ = true;
+            ESP_LOGI(kTag, "NTP time accepted");
+            refresh_clock(now_ms, true);
+        }
+        esp_netif_sntp_deinit();
+        sntp_started_ = false;
+    }
+
+    void stop_network_time_sync() {
+        if (sntp_started_) {
+            esp_netif_sntp_deinit();
+            sntp_started_ = false;
+        }
+    }
+
+    void start_network_context_lookup() {
+        if (network_context_task_ != nullptr ||
+            context_lookup_attempted_ || !network_.connected() ||
+            !live_approximate_location_.view().empty() ||
+            voice_priority_.load(std::memory_order_acquire) ||
+            speech_events_ == nullptr) {
+            return;
+        }
+        context_lookup_attempted_ = true;
+        context_cancellation_.reset();
+        network_context_.clear();
+        network_context_date_.clear();
+        network_context_result_.store(
+            agent::Error::model_failed, std::memory_order_release);
+        xEventGroupClearBits(speech_events_, kNetworkContextDoneBit);
+
+        // TLS needs the controller memory. A phone can reconnect after this
+        // one short, optional lookup.
+        stop_ble();
+        if (ble_started_) {
+            ESP_LOGW(
+                kTag,
+                "Optional IP context skipped because Bluetooth stayed active");
+            return;
+        }
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            network_context_task_entry, "network_context",
+            kNetworkContextStackBytes, this, kNetworkContextPriority,
+            &network_context_task_, 0);
+        if (created != pdPASS) {
+            network_context_task_ = nullptr;
+            context_lookup_attempted_ = false;
+            ensure_ble_started();
+        }
+    }
+
+    void run_network_context_worker() {
+        NetworkRequestGuard request_guard(network_);
+        const agent::Error result = network_context_provider_.lookup(
+            network_context_, network_context_date_, context_cancellation_);
+        network_context_result_.store(result, std::memory_order_release);
+        xEventGroupSetBits(speech_events_, kNetworkContextDoneBit);
+        vTaskDelete(nullptr);
+    }
+
+    void finish_network_context_worker(bool wait) {
+        if (network_context_task_ == nullptr) {
+            return;
+        }
+        const EventBits_t bits = xEventGroupWaitBits(
+            speech_events_, kNetworkContextDoneBit, pdFALSE, pdTRUE,
+            wait ? portMAX_DELAY : 0);
+        if ((bits & kNetworkContextDoneBit) == 0) {
+            return;
+        }
+        network_context_task_ = nullptr;
+        network_context_finished_at_ms_ = monotonic_ms();
+        network_context_transport_.reset_session();
+        const agent::Error result = network_context_result_.load(
+            std::memory_order_acquire);
+        if (result == agent::Error::none &&
+            live_approximate_location_.view().empty()) {
+            if (!network_context_date_.value.empty()) {
+                (void)utc_clock_.update_from_http_date(
+                    network_context_date_.value.data(),
+                    network_context_date_.value.size(),
+                    network_context_date_.observed_at_ms);
+            }
+            (void)utc_clock_.set_utc_offset_minutes(
+                network_context_.utc_offset_minutes);
+            if (live_approximate_location_.assign(
+                    std::string_view{
+                        network_context_.approximate_location.data(),
+                        network_context_.approximate_location.size()})) {
+                chat_provider_.set_approximate_location(
+                    live_approximate_location_.view());
+            }
+            refresh_clock(monotonic_ms(), true);
+        } else if (result == agent::Error::cancelled) {
+            context_lookup_attempted_ = false;
+        } else if (result != agent::Error::none) {
+            ESP_LOGW(
+                kTag,
+                "Optional IP context was not available (category %u)",
+                static_cast<unsigned>(result));
+        }
+        network_context_.clear();
+        network_context_date_.clear();
+        // Let the idle task reclaim the worker stack before BLE starts again.
+        ble_start_attempted_ = false;
+    }
+
+    void cancel_network_context_worker() {
+        if (network_context_task_ == nullptr) {
+            return;
+        }
+        context_cancellation_.cancel();
+        network_context_transport_.cancel_active();
+        finish_network_context_worker(true);
     }
 
     bool start_speech_worker(DeadlineCancellation &cancellation) {
@@ -1059,6 +1244,8 @@ private:
         selected_image_result_.clear();
         image_frame_.reset();
         pending_plot_.clear();
+        cancel_network_context_worker();
+        stop_network_time_sync();
         if (network_initialized_) {
             network_.shutdown();
             network_initialized_ = false;
@@ -1151,7 +1338,7 @@ private:
             battery_checked_at_ms_ = now_ms;
         }
         const ui::WifiIndicator wifi = wifi_indicator(
-            network_.state(), settings_.configured);
+            network_.state(), settings_.has_wifi_credentials());
         if (force || !footer_shown_ || wifi != shown_wifi_ ||
             battery_percent_ != shown_battery_percent_) {
             draw_footer(wifi);
@@ -1309,10 +1496,18 @@ private:
                 if (last_network_state_ ==
                         network::NetworkState::connected &&
                     network_state != network::NetworkState::connected) {
+                    cancel_network_context_worker();
+                    stop_network_time_sync();
                     reset_transports();
                 }
                 last_network_state_ = network_state;
             }
+            if (network_state == network::NetworkState::connected) {
+                start_network_time_sync();
+                start_network_context_lookup();
+            }
+            poll_network_time_sync(now_ms);
+            finish_network_context_worker(false);
             const AppMode app_mode =
                 app_mode_.load(std::memory_order_acquire);
             if (app_mode == AppMode::clock) {
@@ -1350,7 +1545,10 @@ private:
                     kSettingsRefreshMs) {
                 settings_checked_at_ms_ = now_ms;
                 if (!interaction_.button_is_down() && !ble_started_ &&
-                    !ble_start_attempted_) {
+                    !ble_start_attempted_ &&
+                    network_context_task_ == nullptr &&
+                    now_ms - network_context_finished_at_ms_ >=
+                        kBleRestartAfterWorkerMs) {
                     ensure_ble_started();
                 }
                 refresh_settings();
@@ -1441,7 +1639,7 @@ private:
     }
 
     void start_network_early(bool force) {
-        if (!settings_.configured || network_.connected() ||
+        if (!settings_.has_wifi_credentials() || network_.connected() ||
             network_.connecting()) {
             return;
         }
@@ -1614,15 +1812,22 @@ private:
             fail("HOLD THE BUTTON A LITTLE LONGER");
             return;
         }
-        if (!settings_.configured) {
+        if (!settings_.has_wifi_credentials()) {
             capture_.discard();
-            fail("SET UP THE WATCH WITH THE IPHONE APP");
+            fail("WI-FI IS NOT CONFIGURED");
+            return;
+        }
+        if (!settings_.has_service_credentials()) {
+            capture_.discard();
+            fail("THE SERVICE KEY IS NOT CONFIGURED");
             return;
         }
         DeadlineCancellation request_cancellation(
             cancellation_, monotonic_ms(), kInteractionTimeoutMs);
 
         join_network_warm_worker();
+        finish_network_context_worker(true);
+        stop_ble_for_request();
 
         if (!network_initialized_) {
             const esp_err_t network_result = network_.initialize();
@@ -1933,6 +2138,12 @@ private:
         speech_provider_.set_connection(openrouter_connection_);
         web_provider_.set_api_key(brave_key_);
         image_provider_.set_api_key(brave_key_);
+        cancel_network_context_worker();
+        stop_network_time_sync();
+        context_lookup_attempted_ = false;
+        if (!sntp_complete_) {
+            sntp_start_attempted_ = false;
+        }
         if (network_initialized_) {
             network_.disconnect();
         }
@@ -1983,8 +2194,11 @@ private:
             (void)device_control_.persist_preferences();
         }
         cancellation_.cancel();
+        context_cancellation_.cancel();
         speech_channel_.cancel();
         cancel_transports();
+        cancel_network_context_worker();
+        stop_network_time_sync();
         capture_.discard();
         pcm_sink_.cancel_and_stop();
         agent_loop_->clear_thread();
@@ -2006,7 +2220,7 @@ private:
             vTaskDelay(pdMS_TO_TICKS(10));
         }
 
-        stop_ble_for_sleep();
+        stop_ble();
 
         if (kDevelopmentMode) {
             if (!poweroff_gate_.mark_soft_sleep()) {
@@ -2019,7 +2233,11 @@ private:
         }
     }
 
-    void stop_ble_for_sleep() {
+    void stop_ble_for_request() {
+        stop_ble();
+    }
+
+    void stop_ble() {
         if (!ble_started_) {
             return;
         }
@@ -2062,17 +2280,22 @@ private:
     DeviceControl device_control_;
     DeviceMemoryStore &memory_store_;
     network::NetworkManager network_;
+    transport::HttpTransport network_context_transport_;
     transport::HttpTransport openrouter_control_transport_;
     transport::HttpTransport openrouter_audio_transport_;
     transport::HttpTransport search_transport_;
     transport::HttpTransport image_transport_;
+    network::NetworkContextProvider network_context_provider_;
     image::HttpImageFetchProvider image_fetch_provider_;
     AudioCapture capture_;
     AudioPlayback playback_;
     MicroPythonExecutor python_executor_;
     AtomicCancellation cancellation_;
+    AtomicCancellation context_cancellation_;
     agent::ToolRegistry tools_;
     agent::UtcClock utc_clock_;
+    agent::IpLocationContext network_context_;
+    transport::HttpResponseDate network_context_date_;
     provisioning::BoundedSetting<provisioning::kMaximumApproximateLocationSize>
         live_approximate_location_;
     cloud::OpenRouterConnectionView openrouter_connection_;
@@ -2114,12 +2337,15 @@ private:
     TaskHandle_t speech_task_ = nullptr;
     TaskHandle_t network_warm_task_ = nullptr;
     TaskHandle_t image_task_ = nullptr;
+    TaskHandle_t network_context_task_ = nullptr;
     EventGroupHandle_t speech_events_ = nullptr;
     DeadlineCancellation *speech_cancellation_ = nullptr;
     DeadlineCancellation *image_cancellation_ = nullptr;
     std::atomic<agent::Error> speech_result_{agent::Error::model_failed};
     std::atomic<bool> network_warm_initialized_{false};
     std::atomic<agent::Error> image_error_{agent::Error::none};
+    std::atomic<agent::Error> network_context_result_{
+        agent::Error::model_failed};
     std::atomic<bool> queue_overflow_{false};
     std::atomic<bool> voice_priority_{false};
     std::atomic<bool> display_available_{true};
@@ -2145,11 +2371,16 @@ private:
     std::uint32_t stream_text_refreshed_at_ms_ = 0;
     std::uint32_t applied_revision_ = 0;
     std::uint32_t mode_display_attempted_at_ms_ = 0;
+    std::uint32_t network_context_finished_at_ms_ = 0;
     std::uint8_t clock_refreshed_second_ = 0xff;
     bool tools_ready_ = false;
     bool ble_started_ = false;
     bool ble_start_attempted_ = false;
     bool network_initialized_ = false;
+    bool context_lookup_attempted_ = false;
+    bool sntp_started_ = false;
+    bool sntp_complete_ = false;
+    bool sntp_start_attempted_ = false;
     bool display_wake_pending_ = false;
     bool display_sleep_pending_ = false;
     bool battery_checked_ = false;
