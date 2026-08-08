@@ -44,6 +44,22 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
             runtime.index("transcription_provider_.transcribe("),
         )
 
+    def test_optional_timezone_worker_uses_its_bounded_psram_stack(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        worker_start = runtime[
+            runtime.index("xTaskCreatePinnedToCoreWithCaps(") : runtime.index(
+                "if (created != pdPASS)",
+                runtime.index("xTaskCreatePinnedToCoreWithCaps("),
+            )
+        ]
+
+        self.assertIn("network_context_task_entry", worker_start)
+        self.assertIn("kNetworkContextStackBytes", worker_start)
+        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", worker_start)
+        self.assertIn("vTaskDeleteWithCaps(completed_task)", runtime)
+
     def test_board_audio_allocation_has_no_fatal_check(self) -> None:
         board = (
             ROOT

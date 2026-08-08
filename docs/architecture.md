@@ -40,11 +40,14 @@ view always uses the normal ChatESP orientation, including when Clock is
 active. It restores the Clock orientation when it closes. A voice button press
 always hides the passkey view.
 
-A debounced short press on the top GPIO0 button changes between ChatESP and
-Clock. A press longer than 700 ms has no app action. A top-button press has no
-effect during soft sleep, and GPIO0 is not a production wake source. A switch
-to Clock cancels active voice work, clears the in-memory thread, and stops
-Wi-Fi. The board adapter owns the GPIO0 pin value.
+A debounced top GPIO0 press from 80 through 700 ms changes between ChatESP and
+Clock. A shorter electrical pulse or a longer press has no app action. A
+top-button press has no effect during soft sleep, and GPIO0 is not a production
+wake source. A switch to Clock cancels active voice work and clears the
+in-memory thread. If local time is not ready, Clock keeps the startup Wi-Fi
+connection for at most 15 seconds while NTP and the timezone lookup finish. It
+stops Wi-Fi when local time becomes available or the limit expires. The board
+adapter owns the GPIO0 pin value.
 
 Clock uses LVGL software rotation to turn the UI 90 degrees counterclockwise.
 The 448-by-368 layout puts the USB port at the bottom. A large, anti-aliased
@@ -105,10 +108,12 @@ PWR-button wake. A later stop can retry or collect the incomplete shutdown.
 
 When no live app location is available, the runtime also stops BLE for one
 short IP-context HTTPS lookup. This gives TLS the same controller-memory
-headroom. The provider necessarily observes the public source IP, but the
-request does not ask the provider to return it. The firmware does not log or
-store the IP or the returned coarse location. BLE starts again after the worker
-stack is reclaimed.
+headroom. The optional worker uses one fixed 20 KiB PSRAM stack because it does
+not use DMA from the stack. Thus, its task can start without taking the internal
+RAM that Wi-Fi and I2S need. The provider necessarily observes the public
+source IP, but the request does not ask the provider to return it. The firmware
+does not log or store the IP or the returned coarse location. BLE starts again
+after the worker stack is reclaimed.
 
 Control movement sends the latest brightness and volume values through the
 same bounded callback. Volume uses safe atomic state at once, including during
