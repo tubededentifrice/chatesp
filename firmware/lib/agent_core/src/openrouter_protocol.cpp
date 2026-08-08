@@ -476,7 +476,7 @@ Error build_openrouter_route_request(
         !detail::append_json_string(body, config.chat_model) ||
         !body.append(",\"messages\":[{\"role\":\"system\",\"content\":") ||
         !append_system_message(
-            body, routing_prompt, memories, approximate_location,
+            body, routing_prompt(), memories, approximate_location,
             approximate_location_size, current_utc_minute) ||
         !body.push_back('}')) {
         return Error::request_too_large;

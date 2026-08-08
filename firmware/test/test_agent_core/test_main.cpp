@@ -1,5 +1,6 @@
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 
@@ -362,10 +363,27 @@ void test_prompt_is_short_and_voice_focused() {
         std::strstr(answer_prompt, "same language as the user's question"));
     TEST_ASSERT_NOT_NULL(
         std::strstr(system_prompt, "Never claim that search is unsupported"));
-    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "get_device_status"));
-    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "run_python"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "get_device_status"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "run_python"));
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "plot.line"));
-    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "explicitly asks"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "explicitly asks"));
+    TEST_ASSERT_NULL(std::strstr(system_prompt, "Never save a password"));
+    TEST_ASSERT_NULL(std::strstr(routing_prompt(), "Never save secrets"));
+    char memory_count[48]{};
+    char pending_count[48]{};
+    char fact_bytes[48]{};
+    std::snprintf(
+        memory_count, sizeof(memory_count), "at most %zu saved memories",
+        Limits::max_memory_facts);
+    std::snprintf(
+        pending_count, sizeof(pending_count), "at most %zu compacted entries",
+        Limits::max_memory_facts - 1);
+    std::snprintf(
+        fact_bytes, sizeof(fact_bytes), "at most %zu UTF-8 bytes",
+        Limits::max_memory_fact_bytes);
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), memory_count));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), pending_count));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), fact_bytes));
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "power-off is scheduled"));
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "bottom PWR-button"));
     TEST_ASSERT_NULL(std::strstr(system_prompt, "chain of thought"));
@@ -980,6 +998,37 @@ void test_registry_holds_search_and_device_tools() {
     assert_error(Error::none, registry.add(compact));
     TEST_ASSERT_EQUAL_UINT32(11, registry.size());
     TEST_ASSERT_EQUAL_UINT32(11, Limits::max_tool_count);
+}
+
+void test_memory_tool_text_uses_configured_limits() {
+    TestMemoryControl provider;
+    RememberMemoryTool remember(provider);
+    CompactMemoriesTool compact(provider);
+    char fact_limit[32]{};
+    char pending_limit[32]{};
+    char schema_fact_limit[32]{};
+    char schema_count_limit[32]{};
+    std::snprintf(
+        fact_limit, sizeof(fact_limit), "%zu UTF-8 bytes",
+        Limits::max_memory_fact_bytes);
+    std::snprintf(
+        pending_limit, sizeof(pending_limit), "at most %zu entries",
+        Limits::max_memory_facts - 1);
+    std::snprintf(
+        schema_fact_limit, sizeof(schema_fact_limit), "\"maxLength\":%zu",
+        Limits::max_memory_fact_bytes);
+    std::snprintf(
+        schema_count_limit, sizeof(schema_count_limit), "\"maxItems\":%zu",
+        Limits::max_memory_facts);
+
+    TEST_ASSERT_NOT_NULL(std::strstr(compact.description(), fact_limit));
+    TEST_ASSERT_NOT_NULL(std::strstr(compact.description(), pending_limit));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(remember.parameters_schema(), schema_fact_limit));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(compact.parameters_schema(), schema_fact_limit));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(compact.parameters_schema(), schema_count_limit));
 }
 
 void test_memory_record_round_trip_and_rejects_corruption() {
@@ -1772,6 +1821,7 @@ int main(int, char **) {
     RUN_TEST(test_python_tool_reports_limits_and_validates_exact_input);
     RUN_TEST(test_python_tool_bounds_escaped_output_and_arguments);
     RUN_TEST(test_registry_holds_search_and_device_tools);
+    RUN_TEST(test_memory_tool_text_uses_configured_limits);
     RUN_TEST(test_memory_record_round_trip_and_rejects_corruption);
     RUN_TEST(test_memory_facts_are_strict_and_bounded);
     RUN_TEST(test_memory_tools_validate_and_forward_exact_values);

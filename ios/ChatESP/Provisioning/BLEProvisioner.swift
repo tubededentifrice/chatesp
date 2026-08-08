@@ -202,7 +202,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
 
     func addMemory(_ fact: String) {
         guard MemoryProtocolV1.validFact(fact) else {
-            memoryMessage = "Enter one fact of at most 128 UTF-8 bytes."
+            memoryMessage = "Enter one fact of at most \(MemoryProtocolV1.maximumFactBytes) UTF-8 bytes."
             return
         }
         runMemoryMutation(operation: .add, fact: fact)

@@ -30,6 +30,8 @@ struct Limits {
     static constexpr std::size_t max_tool_arguments_bytes =
         max_python_source_bytes * 6 + 32;
     static constexpr std::size_t max_tool_result_bytes = 4'096;
+    // These two values are the firmware source of truth for memory capacity.
+    // Record buffers, tool schemas, and model prompt text derive from them.
     static constexpr std::size_t max_memory_facts = 10;
     static constexpr std::size_t max_memory_fact_bytes = 128;
     static constexpr std::size_t max_python_output_bytes = 2'048;
@@ -54,6 +56,19 @@ struct Limits {
     static constexpr std::size_t max_tts_pcm_bytes = 2'160'000;
     static constexpr std::uint16_t max_chat_output_tokens = 160;
 };
+
+static_assert(
+    Limits::max_memory_facts >= 2,
+    "Memory compaction needs space for a pending fact");
+static_assert(
+    Limits::max_memory_facts <= 255,
+    "The memory record stores its count in one byte");
+static_assert(
+    Limits::max_memory_fact_bytes >= 1,
+    "A memory fact must have a positive byte limit");
+static_assert(
+    Limits::max_memory_fact_bytes <= 65'535,
+    "The memory record stores fact length in two bytes");
 
 struct RequestPolicy {
     std::uint32_t connect_timeout_ms = 5'000;

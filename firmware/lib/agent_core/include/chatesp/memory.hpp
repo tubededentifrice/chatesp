@@ -69,7 +69,13 @@ struct MemoryCompactionPlan {
     void clear();
 };
 
-static constexpr std::size_t max_encoded_memory_record_bytes = 1'472;
+static constexpr std::size_t memory_record_header_bytes = 48;
+static constexpr std::size_t memory_record_checksum_bytes = 32;
+static constexpr std::size_t memory_record_entry_header_bytes = 6;
+static constexpr std::size_t max_encoded_memory_record_bytes =
+    memory_record_header_bytes + memory_record_checksum_bytes +
+    Limits::max_memory_facts *
+        (memory_record_entry_header_bytes + Limits::max_memory_fact_bytes);
 using EncodedMemoryRecord =
     std::array<std::uint8_t, max_encoded_memory_record_bytes>;
 

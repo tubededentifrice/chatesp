@@ -253,17 +253,24 @@ Version 1 has eleven tools:
 - `clear_memories()`: removes all facts only after an explicit user request.
 - `compact_memories(memories, include_pending)`: combines, shortens, or omits
   source facts. It runs automatically after a full `remember_memory` result,
-  or when the user asks for compaction.
+  or when the user asks for compaction. The tool description states the
+  ten-fact limit. With `include_pending` true, the model can return at most
+  nine compacted entries so the pending fact has one free slot.
 
 The memory store accepts at most ten facts and 128 UTF-8 bytes per fact. It
 rejects empty text, control characters, invalid UTF-8, and revision exhaustion.
-The model contract refuses passwords, tokens, API keys, precise locations,
-stable device identifiers, and other secrets. A full add keeps the new fact
-only in a per-turn RAM buffer. One
+It does not reject a fact because of its content. The plaintext-storage and
+model-sharing warnings apply to all facts. A full add keeps the new fact only
+in a per-turn RAM buffer. One
 successful compaction stores the rewritten facts and the pending fact in one
 commit. A failure, cancellation, sleep, or turn end clears the buffer and keeps
 the old durable record. Single-source unchanged facts keep their IDs. Changed
 or combined facts get new IDs. Omitted source IDs are deleted.
+
+The two firmware memory limits are adjacent constants. Record buffers, tool
+schemas, and routing-prompt text derive from them. The iOS protocol mirror also
+uses two adjacent constants, and its validation and user message derive from
+those values.
 
 The device-control prompt does not infer power-off from a greeting, a farewell,
 a hypothetical request, or an uncertain transcript. The final answer gives one

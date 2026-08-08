@@ -11,8 +11,8 @@ namespace {
 
 constexpr std::array<std::uint8_t, 4> kRecordMagic{'C', 'E', 'M', '1'};
 constexpr std::uint8_t kRecordVersion = 1;
-constexpr std::size_t kHeaderBytes = 48;
-constexpr std::size_t kChecksumBytes = 32;
+constexpr std::size_t kHeaderBytes = memory_record_header_bytes;
+constexpr std::size_t kChecksumBytes = memory_record_checksum_bytes;
 constexpr std::array<std::uint8_t, 17> kContentDomain{
     'C', 'H', 'A', 'T', 'E', 'S', 'P', '-', 'M', 'E', 'M', 'O', 'R', 'Y', '-', 'V', '1'};
 constexpr std::array<std::uint8_t, 24> kRecordDomain{
@@ -282,7 +282,8 @@ bool encode_memory_record(
         const MemoryEntry &entry = snapshot.entries[index];
         if (entry.id <= previous_id || entry.id >= snapshot.next_id ||
             !valid_memory_fact(entry.fact.data(), entry.fact.size()) ||
-            cursor + 6 + entry.fact.size() + kChecksumBytes > encoded.size()) return false;
+            cursor + memory_record_entry_header_bytes + entry.fact.size() +
+                    kChecksumBytes > encoded.size()) return false;
         for (std::size_t prior = 0; prior < index; ++prior) {
             if (snapshot.entries[prior].fact.size() == entry.fact.size() &&
                 std::memcmp(
@@ -291,8 +292,10 @@ bool encode_memory_record(
         }
         write_u32(encoded.data() + cursor, entry.id);
         write_u16(encoded.data() + cursor + 4, static_cast<std::uint16_t>(entry.fact.size()));
-        std::memcpy(encoded.data() + cursor + 6, entry.fact.data(), entry.fact.size());
-        cursor += 6 + entry.fact.size();
+        std::memcpy(
+            encoded.data() + cursor + memory_record_entry_header_bytes,
+            entry.fact.data(), entry.fact.size());
+        cursor += memory_record_entry_header_bytes + entry.fact.size();
         previous_id = entry.id;
     }
     std::copy(kRecordMagic.begin(), kRecordMagic.end(), encoded.begin());
@@ -336,10 +339,11 @@ bool decode_memory_record(
     std::size_t cursor = kHeaderBytes;
     std::uint32_t previous_id = 0;
     for (std::size_t index = 0; index < decoded.size; ++index) {
-        if (cursor + 6 > encoded_size - kChecksumBytes) return false;
+        if (cursor + memory_record_entry_header_bytes >
+            encoded_size - kChecksumBytes) return false;
         const std::uint32_t id = read_u32(encoded + cursor);
         const std::size_t fact_size = read_u16(encoded + cursor + 4);
-        cursor += 6;
+        cursor += memory_record_entry_header_bytes;
         if (id <= previous_id || id >= decoded.next_id ||
             cursor + fact_size > encoded_size - kChecksumBytes ||
             !valid_memory_fact(reinterpret_cast<const char *>(encoded + cursor), fact_size) ||

@@ -326,6 +326,7 @@ struct ProvisioningTransfer {
 
 enum MemoryProtocolV1 {
     static let version: UInt8 = 1
+    // Keep these protocol limits together. Validation and user text use them.
     static let maximumFacts = 10
     static let maximumFactBytes = 128
     static let commandHeaderSize = 54

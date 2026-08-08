@@ -40,24 +40,60 @@ constexpr char volume_schema[] =
     "\"integer\",\"minimum\":0,\"maximum\":100}},"
     "\"required\":[\"percent\"],\"additionalProperties\":false}";
 
-constexpr char remember_memory_schema[] =
-    "{\"type\":\"object\",\"properties\":{\"fact\":{\"type\":\"string\","
-    "\"maxLength\":128}},\"required\":[\"fact\"],"
-    "\"additionalProperties\":false}";
-
 constexpr char forget_memory_schema[] =
     "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\","
     "\"minimum\":1}},\"required\":[\"id\"],\"additionalProperties\":false}";
 
-constexpr char compact_memories_schema[] =
-    "{\"type\":\"object\",\"properties\":{\"memories\":{\"type\":\"array\","
-    "\"maxItems\":10,\"items\":{\"type\":\"object\",\"properties\":{"
-    "\"source_ids\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":10,"
-    "\"items\":{\"type\":\"integer\",\"minimum\":1}},\"fact\":{"
-    "\"type\":\"string\",\"maxLength\":128}},\"required\":[\"source_ids\","
-    "\"fact\"],\"additionalProperties\":false}},\"include_pending\":{"
-    "\"type\":\"boolean\"}},\"required\":[\"memories\",\"include_pending\"],"
-    "\"additionalProperties\":false}";
+const char *remember_memory_schema() {
+    static const std::array<char, 256> schema = [] {
+        std::array<char, 256> text{};
+        (void)std::snprintf(
+            text.data(), text.size(),
+            "{\"type\":\"object\",\"properties\":{\"fact\":{\"type\":"
+            "\"string\",\"maxLength\":%zu}},\"required\":[\"fact\"],"
+            "\"additionalProperties\":false}",
+            Limits::max_memory_fact_bytes);
+        return text;
+    }();
+    return schema.data();
+}
+
+const char *compact_memories_schema() {
+    static const std::array<char, Limits::max_tool_schema_bytes + 1> schema = [] {
+        std::array<char, Limits::max_tool_schema_bytes + 1> text{};
+        (void)std::snprintf(
+            text.data(), text.size(),
+            "{\"type\":\"object\",\"properties\":{\"memories\":{\"type\":"
+            "\"array\",\"maxItems\":%zu,\"items\":{\"type\":\"object\","
+            "\"properties\":{\"source_ids\":{\"type\":\"array\","
+            "\"minItems\":1,\"maxItems\":%zu,\"items\":{\"type\":"
+            "\"integer\",\"minimum\":1}},\"fact\":{\"type\":\"string\","
+            "\"maxLength\":%zu}},\"required\":[\"source_ids\",\"fact\"],"
+            "\"additionalProperties\":false}},\"include_pending\":{\"type\":"
+            "\"boolean\"}},\"required\":[\"memories\",\"include_pending\"],"
+            "\"additionalProperties\":false}",
+            Limits::max_memory_facts, Limits::max_memory_facts,
+            Limits::max_memory_fact_bytes);
+        return text;
+    }();
+    return schema.data();
+}
+
+const char *compact_memories_description() {
+    static const std::array<char, Limits::max_tool_description_bytes + 1>
+        description = [] {
+            std::array<char, Limits::max_tool_description_bytes + 1> text{};
+            (void)std::snprintf(
+                text.data(), text.size(),
+                "Replace saved memories with grounded facts. The store holds "
+                "at most %zu facts of %zu UTF-8 bytes. With include_pending "
+                "true, return at most %zu entries so the pending fact fits.",
+                Limits::max_memory_facts, Limits::max_memory_fact_bytes,
+                Limits::max_memory_facts - 1);
+            return text;
+        }();
+    return description.data();
+}
 
 enum class ImageActionKind : std::uint8_t { query, select };
 
@@ -557,7 +593,7 @@ const char *RememberMemoryTool::description() const {
     return "Save one concise fact only when the user explicitly asks to remember it.";
 }
 const char *RememberMemoryTool::parameters_schema() const {
-    return remember_memory_schema;
+    return remember_memory_schema();
 }
 Error RememberMemoryTool::execute(
     const char *arguments, std::size_t size,
@@ -632,10 +668,10 @@ Error ClearMemoriesTool::execute(
 
 const char *CompactMemoriesTool::name() const { return "compact_memories"; }
 const char *CompactMemoriesTool::description() const {
-    return "Replace saved memories with fewer or shorter grounded facts after a full result or an explicit request.";
+    return compact_memories_description();
 }
 const char *CompactMemoriesTool::parameters_schema() const {
-    return compact_memories_schema;
+    return compact_memories_schema();
 }
 Error CompactMemoriesTool::execute(
     const char *arguments, std::size_t size,
