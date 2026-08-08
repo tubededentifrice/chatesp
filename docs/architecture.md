@@ -84,6 +84,14 @@ for the audio DMA channels and the Bluetooth controller at the same time. An
 I2S or codec allocation failure returns an error. It does not stop or restart
 the firmware.
 
+During recording, the listening view analyzes only the latest 256 transient
+PCM samples. One fixed FFT groups all positive-frequency bins into 18
+continuous bands from 125 Hz through 8 kHz. It supplies one logarithmic level
+for each band.
+Rounded vertical bars rise quickly and fall smoothly, and a short peak marker
+shows recent energy. The analyzer uses fixed stack values, does not allocate,
+and does not keep or log audio outside the existing recording buffer.
+
 After a recording ends, the runtime stops BLE before it starts the cloud
 request. This releases the Bluetooth controller memory for TLS. Provisioning
 starts again when the interaction ends and the runtime returns to idle. A phone

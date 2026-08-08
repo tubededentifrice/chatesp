@@ -5,6 +5,7 @@
 
 #include "chatesp/agent_types.hpp"
 #include "chatesp/app_mode.hpp"
+#include "chatesp/audio_spectrum.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "esp_err.h"
 #include "image_frame.hpp"
@@ -56,7 +57,7 @@ void show_app_mode(AppMode mode, InteractionState chat_state);
 void show_clock_time(bool available, ClockTime time = {});
 
 void show_state(InteractionState state);
-void show_recording_level(std::uint8_t percent);
+void show_recording_spectrum(const AudioSpectrum &levels);
 void show_transcript(std::string_view transcript);
 void show_answer_stream(std::string_view answer);
 void show_answer(std::string_view answer);
