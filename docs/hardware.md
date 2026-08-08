@@ -68,6 +68,10 @@ peripherals. Turn the AMOLED off and request AXP2101 system-off. A PWR press
 then causes a cold boot and a new thread. Measure current on battery hardware
 before making a battery-life claim.
 
+The NimBLE shutdown completion wait has a one-second limit. A stalled shutdown
+must not block a development PWR-button wake or a production system-off
+request.
+
 Clock keeps the AMOLED and BLE on and stops Wi-Fi when it becomes active. It
 does not request automatic sleep. The bottom PWR button keeps its short-press
 sleep action. A bottom-button press first restores the portrait ChatESP layout,
@@ -112,6 +116,8 @@ The connected V2 board must pass these checks for this control change:
 - a short PWR press from idle turns the screen off and requests system-off;
 - 30 seconds without input in a manual production ChatESP session turns the
   screen off and requests system-off;
+- a stalled BLE shutdown does not block a PWR-button wake from development
+  soft sleep or a production system-off request;
 - after Wi-Fi and BLE start, repeated full-screen refreshes do not report a
   private transmit-buffer allocation failure or block the LVGL task;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the

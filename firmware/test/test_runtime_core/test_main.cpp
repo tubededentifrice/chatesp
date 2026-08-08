@@ -386,6 +386,24 @@ void test_poweroff_gate_keeps_development_sleep_out_of_poweroff() {
         static_cast<int>(gate.button_down()));
 }
 
+void test_async_shutdown_gate_bounds_one_worker_lifecycle() {
+    chatesp::runtime::AsyncShutdownGate gate;
+    TEST_ASSERT_TRUE(gate.begin());
+    TEST_ASSERT_TRUE(gate.running());
+    TEST_ASSERT_FALSE(gate.completed());
+    TEST_ASSERT_FALSE(gate.begin());
+    TEST_ASSERT_FALSE(gate.consume_completion());
+
+    gate.complete();
+    TEST_ASSERT_FALSE(gate.running());
+    TEST_ASSERT_TRUE(gate.completed());
+    TEST_ASSERT_TRUE(gate.consume_completion());
+    TEST_ASSERT_FALSE(gate.completed());
+    TEST_ASSERT_TRUE(gate.begin());
+    TEST_ASSERT_TRUE(gate.cancel_begin());
+    TEST_ASSERT_FALSE(gate.running());
+}
+
 void test_interaction_deadline_is_bounded_and_handles_wrap() {
     constexpr std::uint32_t started =
         std::numeric_limits<std::uint32_t>::max() - 49;
@@ -559,6 +577,7 @@ int main(int, char **) {
     RUN_TEST(test_poweroff_gate_routes_a_cold_wake_press);
     RUN_TEST(test_poweroff_gate_cancels_a_sleep_boundary);
     RUN_TEST(test_poweroff_gate_keeps_development_sleep_out_of_poweroff);
+    RUN_TEST(test_async_shutdown_gate_bounds_one_worker_lifecycle);
     RUN_TEST(test_interaction_deadline_is_bounded_and_handles_wrap);
     RUN_TEST(test_speech_segmenter_accepts_cumulative_split_updates);
     RUN_TEST(test_speech_segmenter_uses_clause_and_hard_limits);
