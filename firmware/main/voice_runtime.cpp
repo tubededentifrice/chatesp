@@ -25,6 +25,7 @@
 #include "chatesp/runtime_control.hpp"
 #include "chatesp/speech_segmenter.hpp"
 #include "chatesp/turn_timing.hpp"
+#include "chatesp/user_error_message.hpp"
 #include "cloud_providers.hpp"
 #include "device_control.hpp"
 #include "device_memory_store.hpp"
@@ -353,34 +354,6 @@ struct DeviceContextEvent {
     std::array<char, provisioning::kMaximumApproximateLocationSize + 1> approximate_location{};
 };
 
-const char *error_message(agent::Error error) {
-    switch (error) {
-        case agent::Error::authentication:
-            return "CHECK THE SERVICE KEY";
-        case agent::Error::payment_required:
-            return "THE SERVICE NEEDS CREDIT";
-        case agent::Error::rate_limited:
-            return "THE SERVICE IS BUSY";
-        case agent::Error::connect_timeout:
-        case agent::Error::disconnected:
-            return "CHECK THE WI-FI CONNECTION";
-        case agent::Error::first_byte_timeout:
-        case agent::Error::idle_timeout:
-        case agent::Error::total_timeout:
-            return "THE REQUEST TOOK TOO LONG";
-        case agent::Error::unsupported_media:
-            return "THE AUDIO FORMAT WAS NOT VALID";
-        case agent::Error::request_too_large:
-            return "THE REQUEST WAS TOO LARGE";
-        case agent::Error::response_too_large:
-            return "THE MODEL RESPONSE WAS TOO LARGE";
-        case agent::Error::limit_exceeded:
-            return "A DEVICE LIMIT WAS EXCEEDED";
-        default:
-            return "PLEASE TRY THE REQUEST AGAIN";
-    }
-}
-
 }  // namespace
 
 class VoiceRuntime::Impl final : public agent::AgentProgressObserver,
@@ -676,6 +649,7 @@ public:
                 timing_.mark(runtime::TurnPhase::playback_start, now_ms);
                 interaction_.speech_started(now_ms);
                 show_state(interaction_.state());
+                start_image_worker();
                 break;
         }
     }
@@ -759,7 +733,7 @@ private:
     void start_image_worker() {
         if (image_task_ != nullptr || speech_cancellation_ == nullptr ||
             speech_events_ == nullptr ||
-            !image_tool_.take_selected(selected_image_result_)) {
+            selected_image_result_.thumbnail_url.empty()) {
             return;
         }
         image_frame_.reset();
@@ -778,12 +752,12 @@ private:
 
     void prepare_visual() {
         pending_plot_.clear();
+        selected_image_result_.clear();
+        image_frame_.reset();
         if (python_tool_.take_plot(pending_plot_)) {
-            selected_image_result_.clear();
-            image_frame_.reset();
             return;
         }
-        start_image_worker();
+        (void)image_tool_.take_selected(selected_image_result_);
     }
 
     void run_image_worker() {
@@ -1803,11 +1777,8 @@ private:
                 kTag,
                 "Speech output failed (category %u)",
                 static_cast<unsigned>(error));
-            char speech_notice[32]{};
-            std::snprintf(
-                speech_notice, sizeof(speech_notice), "SPEECH ERROR %u",
-                static_cast<unsigned>(error));
-            with_display([&answer, &speech_notice]() {
+            const char *speech_notice = speech_error_message(error);
+            with_display([&answer, speech_notice]() {
                 ui::show_answer_notice(
                     {answer.data(), answer.size()}, speech_notice);
             });
@@ -1902,7 +1873,7 @@ private:
             network_.connected()) {
             fail("SERVICE CONNECTION FAILED");
         } else {
-            fail(error_message(error));
+            fail(request_error_message(error));
         }
     }
 

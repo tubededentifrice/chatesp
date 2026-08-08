@@ -135,6 +135,10 @@ The connected V2 board must pass these checks for this control change:
   does not stop microphone capture;
 - speech starts from the first complete sentence while later answer text and
   TTS segments continue. Segment order is correct and the codec stays active;
+- an image request reserves speech playback resources before JPEG work starts,
+  and a JPEG allocation failure does not stop speech;
+- a speech failure shows a clear operation and reason. It does not show an
+  internal numeric error category;
 - an English answer uses the `af_heart` Kokoro voice, a French answer uses
   `ff_siwis`, and the internal language tag is not visible or spoken;
 - a fast PCM transfer starts after the 200 ms prebuffer. A slow first segment

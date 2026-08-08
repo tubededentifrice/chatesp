@@ -17,8 +17,9 @@ input. It does not use a minimum splash timer. An in-session display wake shows
 the current interaction state instead.
 
 Each state has a visible black-screen presentation and a timeout. An error
-returns to idle with a short, useful message. Sleep stays available after a
-failure.
+returns to idle with a short message that identifies the failed operation. The
+UI does not show internal numeric error categories. Sleep stays available after
+a failure.
 
 One complete request has a 180-second monotonic limit. This limit includes
 Wi-Fi connection, transcription, model calls, tool calls, and speech. Provider
@@ -161,9 +162,11 @@ HTTPS origin. Settings changes, Wi-Fi disconnect, sleep, cancellation, or a
 transport error closes the handle. Request headers are removed before the next
 request, and no authorization header can move to another origin.
 
-The optional image worker starts after the model selects a current image ID.
-It downloads and decodes on a lower-priority task while final model text and
-speech continue. The device publishes the image only after speech ends.
+The runtime keeps a selected image ID until speech playback has started. Speech
+therefore reserves its task stack and speaker resources before the optional
+image worker can use internal memory. The image worker then downloads and
+decodes on a lower-priority task while speech continues. An image failure does
+not stop speech. The device publishes the image only after speech ends.
 
 Restricted Python runs in the voice worker before the final answer. It uses one
 fixed 256 KiB PSRAM heap, a 12 KiB stack limit, a 2,048-byte output limit, a

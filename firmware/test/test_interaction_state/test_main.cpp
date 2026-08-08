@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 #include <unity.h>
@@ -8,6 +9,7 @@
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/power_button_filter.hpp"
 #include "chatesp/quick_controls.hpp"
+#include "chatesp/user_error_message.hpp"
 
 using chatesp::InteractionConfig;
 using chatesp::InteractionState;
@@ -172,6 +174,51 @@ void test_error_returns_to_idle_after_visible_period() {
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(InteractionState::idle),
         static_cast<int>(machine.state()));
+}
+
+void test_request_errors_have_explicit_user_messages() {
+    TEST_ASSERT_EQUAL_STRING(
+        "THE SERVICE RETURNED INVALID DATA",
+        chatesp::request_error_message(
+            chatesp::agent::Error::malformed_response));
+    TEST_ASSERT_EQUAL_STRING(
+        "THE MODEL COULD NOT COMPLETE THE ANSWER",
+        chatesp::request_error_message(chatesp::agent::Error::model_failed));
+
+    for (unsigned value = 0;
+         value <= static_cast<unsigned>(chatesp::agent::Error::model_failed);
+         ++value) {
+        const char *message = chatesp::request_error_message(
+            static_cast<chatesp::agent::Error>(value));
+        TEST_ASSERT_NOT_NULL(message);
+        TEST_ASSERT_GREATER_THAN_UINT32(0, std::strlen(message));
+        TEST_ASSERT_NULL(std::strstr(message, "TRY AGAIN"));
+        for (const char *cursor = message; *cursor != '\0'; ++cursor) {
+            TEST_ASSERT_FALSE(*cursor >= '0' && *cursor <= '9');
+        }
+    }
+}
+
+void test_speech_errors_have_explicit_user_messages() {
+    TEST_ASSERT_EQUAL_STRING(
+        "THE WATCH COULD NOT PLAY THE ANSWER",
+        chatesp::speech_error_message(chatesp::agent::Error::model_failed));
+    TEST_ASSERT_EQUAL_STRING(
+        "THE SPEECH SERVICE RETURNED INVALID AUDIO",
+        chatesp::speech_error_message(
+            chatesp::agent::Error::unsupported_media));
+
+    for (unsigned value = 0;
+         value <= static_cast<unsigned>(chatesp::agent::Error::model_failed);
+         ++value) {
+        const char *message = chatesp::speech_error_message(
+            static_cast<chatesp::agent::Error>(value));
+        TEST_ASSERT_NOT_NULL(message);
+        TEST_ASSERT_GREATER_THAN_UINT32(0, std::strlen(message));
+        for (const char *cursor = message; *cursor != '\0'; ++cursor) {
+            TEST_ASSERT_FALSE(*cursor >= '0' && *cursor <= '9');
+        }
+    }
 }
 
 void test_button_hold_preempts_active_work() {
@@ -496,6 +543,8 @@ int main(int, char **) {
     RUN_TEST(test_idle_activity_extends_the_sleep_timer);
     RUN_TEST(test_busy_flow_returns_to_fresh_idle_timer);
     RUN_TEST(test_error_returns_to_idle_after_visible_period);
+    RUN_TEST(test_request_errors_have_explicit_user_messages);
+    RUN_TEST(test_speech_errors_have_explicit_user_messages);
     RUN_TEST(test_button_hold_preempts_active_work);
     RUN_TEST(test_button_debouncer_rejects_bounce_and_handles_wrap);
     RUN_TEST(test_power_button_filter_rejects_usb_source_transitions);
