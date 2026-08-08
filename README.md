@@ -11,8 +11,8 @@ companion for secure BLE configuration.
    shows a large white local time and a rounded seconds path. It stays on.
 2. Hold the bottom PWR button and speak. From Clock, the press first returns
    the display to ChatESP. Release the button to submit the recording.
-3. The device selects a direct, web, image, calculation, or memory
-   route. It then gets a concise answer with tools disabled. Text appears as
+3. The device selects a direct, web, image, device-control, calculation, or
+   memory route. It then gets a concise answer with tools disabled. Text appears as
    the model sends it. Complete
    sentences go to speech at once. One playback session joins up to four
    speech segments in order. Each model request includes the user's current
