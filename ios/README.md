@@ -21,9 +21,12 @@ The Models section explains each model role. Its searchable OpenRouter browser
 uses the public all-modality catalog and does not send the saved API key. It
 shows only compatible models. Chat and tool models require text input, text
 output, and tool calling. Transcription models require audio input and
-transcription output. Speech models require text input, speech output, and the
-English and French voices that the firmware uses. The catalog request has
-fixed time and response-size limits.
+transcription output. Speech models require text input, speech output, and a
+published voice list. Each model result shows its catalog input and output
+price. Separate searchable English and French voice browsers show the voices
+for the selected speech model. Models and voices support global values and
+per-device overrides. The catalog request has fixed time and response-size
+limits.
 
 The app opens device discovery in a separate Add page. A new record has the
 default name `ChatESP`. The main device list shows each connection status on
@@ -141,7 +144,9 @@ and integrated device firmware must pass these gates:
   and model values use built-in defaults. An invalid nonempty value does not
   block later edits, and the app syncs when the effective values are valid.
 - The model browser can search the OpenRouter catalog. Each list contains only
-  models that declare the capabilities required for that model role.
+  models that declare the capabilities required for that model role. Each
+  model shows its price. Speech voice searches show only voices published for
+  the selected model.
 - The installed app starts at the full native screen size and does not use a
   compatibility-size canvas.
 - The app sends time and a rounded location after each ChatESP device wake and

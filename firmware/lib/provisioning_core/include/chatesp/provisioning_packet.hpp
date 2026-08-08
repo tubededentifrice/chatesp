@@ -8,7 +8,7 @@
 namespace chatesp {
 namespace provisioning {
 
-constexpr std::uint8_t kProtocolVersion = 2;
+constexpr std::uint8_t kProtocolVersion = 3;
 constexpr std::uint8_t kMinimumProtocolVersion = 1;
 constexpr std::uint8_t kSettingsPacketType = 1;
 constexpr std::size_t kHeaderSize = 48;
@@ -21,7 +21,8 @@ constexpr std::size_t kMaximumDeviceContextSize =
     kDeviceContextHeaderSize + kMaximumApproximateLocationSize;
 constexpr std::size_t kDeviceContextAcknowledgementSize = 48;
 constexpr std::uint8_t kVersion1FieldCount = 8;
-constexpr std::uint8_t kRequiredFieldCount = 9;
+constexpr std::uint8_t kVersion2FieldCount = 9;
+constexpr std::uint8_t kRequiredFieldCount = 11;
 
 enum class ValidationError : std::uint8_t {
     none,
@@ -46,6 +47,7 @@ enum class ValidationError : std::uint8_t {
     invalid_wifi_password,
     invalid_model,
     invalid_approximate_location,
+    invalid_voice,
     stale_revision,
     revision_conflict,
 };
@@ -79,6 +81,8 @@ struct SettingsView {
     std::string_view transcription_model;
     std::string_view speech_model;
     std::string_view approximate_location;
+    std::string_view english_speech_voice;
+    std::string_view french_speech_voice;
 };
 
 [[nodiscard]] constexpr bool supported_protocol_version(std::uint8_t version) {

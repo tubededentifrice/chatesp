@@ -31,6 +31,8 @@ final class ProvisioningProtocolTests: XCTestCase {
             chatModel: "~deepseek/deepseek-v4-flash-latest",
             transcriptionModel: "openai/whisper-large-v3-turbo",
             speechModel: "google/gemini-3.1-flash-tts-preview",
+            englishSpeechVoice: "Zephyr",
+            frenchSpeechVoice: "Puck",
             approximateLocation: "Dubai, United Arab Emirates")
         let secrets = ProvisioningSecretValues(
             openRouterKey: "OPENROUTER_TOKEN_PLACEHOLDER",
@@ -49,7 +51,7 @@ final class ProvisioningProtocolTests: XCTestCase {
         flags: UInt16 = 0
     ) throws -> ProvisioningAcknowledgement {
         var bytes = Data("CESA".utf8)
-        bytes.append(ProvisioningProtocolV2.version)
+        bytes.append(ProvisioningProtocolV3.version)
         bytes.append(status.rawValue)
         bytes.appendBigEndian(flags)
         bytes.appendBigEndian(revision)
@@ -136,13 +138,13 @@ final class ProvisioningProtocolTests: XCTestCase {
 
     func testGoldenPacketMatchesFirmwareVector() throws {
         let packet = try goldenSettings().packet(revision: 7)
-        XCTAssertEqual(packet.data.count, 311)
+        XCTAssertEqual(packet.data.count, 327)
         XCTAssertEqual(
             packet.fingerprint.hexString,
-            "3dd4441effe5f36c424310634670e91ea4dd936e958b38c21db1449a5fda98ce")
+            "1960e12e83ee87f7595f353d6c65b186c1348b0e136d76dd1dd02e9286b0b0e6")
         XCTAssertEqual(packet.data.prefix(4), Data("CESP".utf8))
-        XCTAssertEqual(packet.data[4], 2)
-        XCTAssertEqual(packet.data[7], 9)
+        XCTAssertEqual(packet.data[4], 3)
+        XCTAssertEqual(packet.data[7], 11)
         XCTAssertEqual(packet.data.readBigEndianUInt32(at: 8), 7)
     }
 
@@ -154,7 +156,7 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(transfer.beginFrame.readBigEndianUInt32(at: 8), 0x01020304)
         XCTAssertEqual(transfer.dataFrames.count, 2)
         XCTAssertEqual(transfer.dataFrames[0].count, 194)
-        XCTAssertEqual(transfer.dataFrames[1].count, 145)
+        XCTAssertEqual(transfer.dataFrames[1].count, 161)
         XCTAssertEqual(transfer.dataFrames[0].readBigEndianUInt32(at: 6), 0x01020304)
         XCTAssertEqual(UInt16(transfer.dataFrames[0][10]) << 8 | UInt16(transfer.dataFrames[0][11]), 0)
         XCTAssertEqual(UInt16(transfer.dataFrames[1][10]) << 8 | UInt16(transfer.dataFrames[1][11]), 180)
@@ -163,7 +165,7 @@ final class ProvisioningProtocolTests: XCTestCase {
     func testAcknowledgementRequiresExactEnvelope() throws {
         let packet = try goldenSettings().packet(revision: 7)
         var bytes = Data("CESA".utf8)
-        bytes.append(ProvisioningProtocolV2.version)
+        bytes.append(ProvisioningProtocolV3.version)
         bytes.append(0)
         bytes.appendBigEndian(UInt16(0))
         bytes.appendBigEndian(UInt32(7))
@@ -188,7 +190,7 @@ final class ProvisioningProtocolTests: XCTestCase {
             status: .staleRevision,
             revision: 7,
             fingerprint: activeFingerprint,
-            flags: ProvisioningProtocolV2.activeVersionAcknowledgementFlag)
+            flags: ProvisioningProtocolV3.activeVersionAcknowledgementFlag)
         XCTAssertTrue(recovery.isRevisionRecovery)
 
         let legacyError = try acknowledgement(
@@ -201,12 +203,12 @@ final class ProvisioningProtocolTests: XCTestCase {
             status: .staleRevision,
             revision: 0,
             fingerprint: activeFingerprint,
-            flags: ProvisioningProtocolV2.activeVersionAcknowledgementFlag))
+            flags: ProvisioningProtocolV3.activeVersionAcknowledgementFlag))
         XCTAssertThrowsError(try acknowledgement(
             status: .storageFailure,
             revision: 7,
             fingerprint: activeFingerprint,
-            flags: ProvisioningProtocolV2.activeVersionAcknowledgementFlag))
+            flags: ProvisioningProtocolV3.activeVersionAcknowledgementFlag))
     }
 
     func testDeviceContextHasAuthenticatedBoundedLayout() throws {
@@ -267,6 +269,11 @@ final class ProvisioningProtocolTests: XCTestCase {
 
         configuration = ChatESPConfiguration()
         configuration.approximateLocation = "Dubai\nUnited Arab Emirates"
+        XCTAssertThrowsError(
+            try ProvisioningSettings(configuration: configuration, secrets: validSecrets).packet(revision: 1))
+
+        configuration = ChatESPConfiguration()
+        configuration.englishSpeechVoice = "voice with spaces"
         XCTAssertThrowsError(
             try ProvisioningSettings(configuration: configuration, secrets: validSecrets).packet(revision: 1))
 
@@ -386,6 +393,28 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(migrated.activeDeviceIdentifier, deviceID)
         XCTAssertEqual(migrated.devices.first?.provisioning.appliedRevision, 4)
         XCTAssertEqual(migrated.global.chatModel, "example/chat")
+        XCTAssertEqual(migrated.global.englishSpeechVoice, "af_heart")
+        XCTAssertEqual(migrated.global.frenchSpeechVoice, "ff_siwis")
+    }
+
+    func testCurrentPreferencesWithoutVoicesUseVoiceDefaults() throws {
+        let json = """
+        {
+          "formatVersion": 2,
+          "global": {
+            "chatEndpoint": "https://openrouter.ai/api/v1",
+            "chatModel": "example/chat",
+            "transcriptionModel": "example/transcription",
+            "speechModel": "example/speech",
+            "approximateLocation": ""
+          },
+          "devices": []
+        }
+        """
+        let decoded = try JSONDecoder().decode(
+            AppPreferences.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.global.englishSpeechVoice, "af_heart")
+        XCTAssertEqual(decoded.global.frenchSpeechVoice, "ff_siwis")
     }
 
     func testDeviceOverridesInheritGlobalValues() throws {
@@ -399,12 +428,15 @@ final class ProvisioningProtocolTests: XCTestCase {
                 name: "Desk",
                 overrides: ChatESPConfigurationOverrides(
                     speechModel: "device/speech",
+                    frenchSpeechVoice: "device-french",
                     approximateLocation: ""))
         ]
         let effective = try XCTUnwrap(
             preferences.effectiveConfiguration(for: deviceID))
         XCTAssertEqual(effective.chatModel, "global/chat")
         XCTAssertEqual(effective.speechModel, "device/speech")
+        XCTAssertEqual(effective.englishSpeechVoice, "af_heart")
+        XCTAssertEqual(effective.frenchSpeechVoice, "device-french")
         XCTAssertEqual(effective.approximateLocation, "")
     }
 
@@ -453,6 +485,8 @@ final class ProvisioningProtocolTests: XCTestCase {
         configuration.chatModel = ""
         configuration.transcriptionModel = ""
         configuration.speechModel = ""
+        configuration.englishSpeechVoice = ""
+        configuration.frenchSpeechVoice = ""
 
         let settings = ProvisioningSettings(
             configuration: configuration,
@@ -462,6 +496,8 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(settings.chatModel, defaults.chatModel)
         XCTAssertEqual(settings.transcriptionModel, defaults.transcriptionModel)
         XCTAssertEqual(settings.speechModel, defaults.speechModel)
+        XCTAssertEqual(settings.englishSpeechVoice, defaults.englishSpeechVoice)
+        XCTAssertEqual(settings.frenchSpeechVoice, defaults.frenchSpeechVoice)
         XCTAssertNoThrow(try settings.packet(revision: 1))
     }
 
@@ -551,7 +587,11 @@ final class ProvisioningProtocolTests: XCTestCase {
             "output_modalities": ["speech"]
           },
           "supported_parameters": [],
-          "supported_voices": ["af_heart", "ff_siwis"]
+          "supported_voices": ["Zephyr", "Puck"],
+          "pricing": {
+            "prompt": "0.000001",
+            "completion": "0.00002"
+          }
         }
         """
         let chat = try JSONDecoder().decode(
@@ -566,6 +606,9 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertTrue(chat.supports(.chat))
         XCTAssertTrue(transcription.supports(.transcription))
         XCTAssertTrue(speech.supports(.speech))
+        XCTAssertEqual(speech.preferredVoice(for: .english), "Zephyr")
+        XCTAssertEqual(speech.preferredVoice(for: .french), "Zephyr")
+        XCTAssertEqual(speech.pricingSummary, "Input $1/M · Output $20/M")
         XCTAssertFalse(chat.supports(.transcription))
         XCTAssertFalse(transcription.supports(.speech))
     }

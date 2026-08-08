@@ -40,6 +40,9 @@ ChatESP.*
 - **Optional iOS setup:** Provision any number of devices over authenticated,
   encrypted BLE. The app keeps provider secrets in Keychain and automatically
   sends each valid configuration after a connection or settings change.
+- **Clear model choices:** Search compatible chat, transcription, and speech
+  models with their prices. Select English and French voices from the speech
+  model's published voice list.
 - **Replaceable providers:** Chat, speech, search, and tools use narrow
   interfaces. You can change a provider without changes to the conversation
   state machine.

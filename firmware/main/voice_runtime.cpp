@@ -244,6 +244,8 @@ struct RuntimeSettings {
         chat_model.clear();
         transcription_model.clear();
         speech_model.clear();
+        english_speech_voice.clear();
+        french_speech_voice.clear();
         approximate_location.clear();
         configured = false;
     }
@@ -263,6 +265,8 @@ struct RuntimeSettings {
             chat_model.assign("~deepseek/deepseek-v4-flash-latest") &&
             transcription_model.assign("openai/whisper-large-v3-turbo") &&
             speech_model.assign("hexgrad/kokoro-82m") &&
+            english_speech_voice.assign("af_heart") &&
+            french_speech_voice.assign("ff_siwis") &&
             approximate_location.assign("");
         if (!configured) {
             clear();
@@ -283,6 +287,10 @@ struct RuntimeSettings {
             next.transcription_model.assign(
                 record.transcription_model.view()) &&
             next.speech_model.assign(record.speech_model.view()) &&
+            next.english_speech_voice.assign(
+                record.english_speech_voice.view()) &&
+            next.french_speech_voice.assign(
+                record.french_speech_voice.view()) &&
             next.approximate_location.assign(
                 record.approximate_location.view());
         if (!next.configured) {
@@ -306,7 +314,8 @@ struct RuntimeSettings {
                 chat_model.view().data(),
                 transcription_model.view().data(),
                 speech_model.view().data(),
-                "af_heart",
+                english_speech_voice.view().data(),
+                french_speech_voice.view().data(),
             },
         };
     }
@@ -335,7 +344,9 @@ struct RuntimeSettings {
         return configured && !endpoint.view().empty() &&
             !openrouter_key.view().empty() && !chat_model.view().empty() &&
             !transcription_model.view().empty() &&
-            !speech_model.view().empty();
+            !speech_model.view().empty() &&
+            !english_speech_voice.view().empty() &&
+            !french_speech_voice.view().empty();
     }
 
     provisioning::BoundedSetting<192> endpoint;
@@ -346,6 +357,8 @@ struct RuntimeSettings {
     provisioning::BoundedSetting<96> chat_model;
     provisioning::BoundedSetting<96> transcription_model;
     provisioning::BoundedSetting<96> speech_model;
+    provisioning::BoundedSetting<96> english_speech_voice;
+    provisioning::BoundedSetting<96> french_speech_voice;
     provisioning::BoundedSetting<96> approximate_location;
     bool configured = false;
 };

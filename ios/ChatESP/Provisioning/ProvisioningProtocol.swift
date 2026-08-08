@@ -2,11 +2,11 @@ import CryptoKit
 import Foundation
 import Security
 
-enum ProvisioningProtocolV2 {
-    static let version: UInt8 = 2
+enum ProvisioningProtocolV3 {
+    static let version: UInt8 = 3
     static let maximumPacketSize = 1_024
     static let packetHeaderSize = 48
-    static let fieldCount: UInt8 = 9
+    static let fieldCount: UInt8 = 11
     static let dataBytesPerFrame = 180
     static let activeVersionAcknowledgementFlag: UInt16 = 0x0001
 
@@ -101,6 +101,8 @@ struct ProvisioningSettings: Equatable {
     let transcriptionModel: String
     let speechModel: String
     let approximateLocation: String
+    let englishSpeechVoice: String
+    let frenchSpeechVoice: String
 
     init(
         configuration: ChatESPConfiguration,
@@ -120,6 +122,10 @@ struct ProvisioningSettings: Equatable {
         speechModel = configuration.speechModel.isEmpty
             ? defaults.speechModel : configuration.speechModel
         approximateLocation = configuration.approximateLocation
+        englishSpeechVoice = configuration.englishSpeechVoice.isEmpty
+            ? defaults.englishSpeechVoice : configuration.englishSpeechVoice
+        frenchSpeechVoice = configuration.frenchSpeechVoice.isEmpty
+            ? defaults.frenchSpeechVoice : configuration.frenchSpeechVoice
     }
 
     var validationIssues: [ConfigurationValidationIssue] {
@@ -133,6 +139,8 @@ struct ProvisioningSettings: Equatable {
             (7, transcriptionModel, .model),
             (8, speechModel, .model),
             (9, approximateLocation, .approximateLocation),
+            (10, englishSpeechVoice, .voice),
+            (11, frenchSpeechVoice, .voice),
         ]
         return candidates.compactMap { id, text, rule in
             (try? field(id: id, text: text, rule: rule)) == nil
@@ -143,10 +151,10 @@ struct ProvisioningSettings: Equatable {
 
     func contentFingerprint() throws -> Data {
         let payload = try encodedPayload()
-        var input = Data("CESP-CONTENT-V2".utf8)
-        input.append(ProvisioningProtocolV2.version)
+        var input = Data("CESP-CONTENT-V3".utf8)
+        input.append(ProvisioningProtocolV3.version)
         input.append(1)
-        input.append(ProvisioningProtocolV2.fieldCount)
+        input.append(ProvisioningProtocolV3.fieldCount)
         input.append(payload)
         return Data(SHA256.hash(data: input))
     }
@@ -157,16 +165,16 @@ struct ProvisioningSettings: Equatable {
         }
         let payload = try encodedPayload()
         let fingerprint = try contentFingerprint()
-        let totalLength = ProvisioningProtocolV2.packetHeaderSize + payload.count
-        guard totalLength <= ProvisioningProtocolV2.maximumPacketSize else {
+        let totalLength = ProvisioningProtocolV3.packetHeaderSize + payload.count
+        guard totalLength <= ProvisioningProtocolV3.maximumPacketSize else {
             throw ProvisioningError.packetTooLarge
         }
 
         var data = Data("CESP".utf8)
-        data.append(ProvisioningProtocolV2.version)
+        data.append(ProvisioningProtocolV3.version)
         data.append(1)
         data.append(0)
-        data.append(ProvisioningProtocolV2.fieldCount)
+        data.append(ProvisioningProtocolV3.fieldCount)
         data.appendBigEndian(revision)
         data.appendBigEndian(UInt16(payload.count))
         data.appendBigEndian(UInt16(totalLength))
@@ -186,6 +194,8 @@ struct ProvisioningSettings: Equatable {
             try field(id: 7, text: transcriptionModel, rule: .model),
             try field(id: 8, text: speechModel, rule: .model),
             try field(id: 9, text: approximateLocation, rule: .approximateLocation),
+            try field(id: 10, text: englishSpeechVoice, rule: .voice),
+            try field(id: 11, text: frenchSpeechVoice, rule: .voice),
         ]
         return values.reduce(into: Data()) { $0.append($1) }
     }
@@ -197,6 +207,7 @@ struct ProvisioningSettings: Equatable {
         case wifiSSID
         case wifiPassword
         case model
+        case voice
         case approximateLocation
     }
 
@@ -224,6 +235,12 @@ struct ProvisioningSettings: Equatable {
                 (0x30...0x39).contains(byte) || (0x41...0x5a).contains(byte) ||
                     (0x61...0x7a).contains(byte) ||
                     [0x2d, 0x2e, 0x2f, 0x3a, 0x5f, 0x7e].contains(byte)
+            }
+        case .voice:
+            isValid = (1...96).contains(bytes.count) && bytes.allSatisfy { byte in
+                (0x30...0x39).contains(byte) || (0x41...0x5a).contains(byte) ||
+                    (0x61...0x7a).contains(byte) ||
+                    [0x2d, 0x2e, 0x3a, 0x5f].contains(byte)
             }
         case .approximateLocation:
             isValid = bytes.count <= 96 && text.unicodeScalars.allSatisfy {
@@ -279,6 +296,8 @@ struct ConfigurationValidationIssue: Identifiable, Equatable {
         case 7: return "Select a speech-to-text model."
         case 8: return "Select a text-to-speech model."
         case 9: return "Use a city-level location of 96 bytes or less."
+        case 10: return "Select an English speech voice."
+        case 11: return "Select a French speech voice."
         default: return "This setting is not valid."
         }
     }
@@ -316,20 +335,20 @@ struct ProvisioningAcknowledgement: Equatable {
 
     var isRevisionRecovery: Bool {
         (status == .staleRevision || status == .revisionConflict) &&
-            flags == ProvisioningProtocolV2.activeVersionAcknowledgementFlag &&
+            flags == ProvisioningProtocolV3.activeVersionAcknowledgementFlag &&
             revision > 0
     }
 
     init(data: Data) throws {
         guard data.count == 44,
               data.prefix(4) == Data("CESA".utf8),
-              data[4] == ProvisioningProtocolV2.version,
+              data[4] == ProvisioningProtocolV3.version,
               let status = ProvisioningStatus(rawValue: data[5]) else {
             throw ProvisioningError.malformedAcknowledgement
         }
         flags = data.readBigEndianUInt16(at: 6)
         let hasActiveVersion =
-            flags == ProvisioningProtocolV2.activeVersionAcknowledgementFlag
+            flags == ProvisioningProtocolV3.activeVersionAcknowledgementFlag
         guard flags == 0 || hasActiveVersion,
               !hasActiveVersion || (
                 status == .staleRevision || status == .revisionConflict
@@ -365,12 +384,12 @@ struct ProvisioningTransfer {
 
     var beginFrame: Data {
         var data = Data("CESB".utf8)
-        data.append(ProvisioningProtocolV2.version)
+        data.append(ProvisioningProtocolV3.version)
         data.append(1)
         data.appendBigEndian(UInt16(0))
         data.appendBigEndian(transferID)
         data.appendBigEndian(UInt16(packet.data.count))
-        data.appendBigEndian(UInt16(ProvisioningProtocolV2.dataBytesPerFrame))
+        data.appendBigEndian(UInt16(ProvisioningProtocolV3.dataBytesPerFrame))
         return data
     }
 
@@ -378,12 +397,12 @@ struct ProvisioningTransfer {
         stride(
             from: 0,
             to: packet.data.count,
-            by: ProvisioningProtocolV2.dataBytesPerFrame
+            by: ProvisioningProtocolV3.dataBytesPerFrame
         ).map { offset in
-            let end = min(offset + ProvisioningProtocolV2.dataBytesPerFrame, packet.data.count)
+            let end = min(offset + ProvisioningProtocolV3.dataBytesPerFrame, packet.data.count)
             let bytes = packet.data.subdata(in: offset..<end)
             var frame = Data("CESD".utf8)
-            frame.append(ProvisioningProtocolV2.version)
+            frame.append(ProvisioningProtocolV3.version)
             frame.append(0)
             frame.appendBigEndian(transferID)
             frame.appendBigEndian(UInt16(offset))

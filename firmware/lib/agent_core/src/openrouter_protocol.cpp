@@ -13,8 +13,6 @@ namespace agent {
 namespace {
 
 constexpr char multipart_boundary[] = "ChatESPBoundary7MA4YWxk";
-constexpr char kokoro_model[] = "hexgrad/kokoro-82m";
-constexpr char kokoro_french_voice[] = "ff_siwis";
 
 template <std::size_t Capacity>
 bool append_key(FixedText<Capacity> &output, const char *key) {
@@ -83,7 +81,7 @@ bool valid_config_token(const char *text, std::size_t max_size = 128) {
         if (!((value >= 'A' && value <= 'Z') ||
               (value >= 'a' && value <= 'z') ||
               (value >= '0' && value <= '9') || value == '-' || value == '_' ||
-              value == '.' || value == '/' || value == '~')) {
+              value == '.' || value == '/' || value == ':' || value == '~')) {
             return false;
         }
     }
@@ -608,7 +606,7 @@ Error build_openrouter_speech_request(
     SpeechRequestBody &body) {
     body.clear();
     if (!valid_config_token(config.speech_model) ||
-        !valid_config_token(config.speech_voice, 64) || text == nullptr ||
+        !valid_config_token(config.speech_voice, 96) || text == nullptr ||
         size == 0 || size > Limits::max_tts_input_bytes) {
         return Error::invalid_argument;
     }
@@ -628,10 +626,8 @@ Error build_openrouter_speech_request(
 OpenRouterConfig openrouter_speech_config_for_language(
     const OpenRouterConfig &config, SpeechLanguage language) {
     OpenRouterConfig selected = config;
-    if (language == SpeechLanguage::french &&
-        config.speech_model != nullptr &&
-        std::strcmp(config.speech_model, kokoro_model) == 0) {
-        selected.speech_voice = kokoro_french_voice;
+    if (language == SpeechLanguage::french) {
+        selected.speech_voice = config.french_speech_voice;
     }
     return selected;
 }

@@ -277,9 +277,11 @@ The model browser gets the bounded public OpenRouter all-modality catalog. It
 does not send the saved API key for this public request. It filters chat
 models for text input, text output, and tool calling. It filters transcription
 models for audio input and transcription output. It filters speech models for
-text input, speech output, and both firmware-selected voices. Catalog or
-network failure does not remove the saved model IDs or block other settings
-edits.
+text input, speech output, and a published voice list. Each model result shows
+the catalog input and output price. English and French voice browsers show the
+voices published for the selected speech model. Model and voice values support
+global inheritance and device overrides. Catalog or network failure does not
+remove the saved selections or block other settings edits.
 
 ## Model contract
 

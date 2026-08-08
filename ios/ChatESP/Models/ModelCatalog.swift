@@ -22,7 +22,21 @@ enum ModelPurpose: String, CaseIterable, Identifiable {
         case .transcription:
             return "Converts microphone audio into the text request. Requires audio input and transcription output."
         case .speech:
-            return "Converts the final answer into spoken audio. Requires text input, speech output, and the English and French voices used by ChatESP."
+            return "Converts the final answer into spoken audio. Requires text input, speech output, and a published voice list."
+        }
+    }
+}
+
+enum SpeechVoiceLanguage: String, CaseIterable, Identifiable {
+    case english
+    case french
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .english: return "English voice"
+        case .french: return "French voice"
         }
     }
 }
@@ -50,10 +64,27 @@ struct OpenRouterModel: Decodable, Equatable, Identifiable {
         }
     }
 
+    struct Pricing: Decodable, Equatable {
+        let prompt: String?
+        let completion: String?
+        let request: String?
+        let image: String?
+        let webSearch: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case prompt
+            case completion
+            case request
+            case image
+            case webSearch = "web_search"
+        }
+    }
+
     let id: String
     let name: String
     let description: String
     let architecture: Architecture
+    let pricing: Pricing?
     let supportedParameters: [String]
     let supportedVoices: [String]
 
@@ -62,6 +93,7 @@ struct OpenRouterModel: Decodable, Equatable, Identifiable {
         case name
         case description
         case architecture
+        case pricing
         case supportedParameters = "supported_parameters"
         case supportedVoices = "supported_voices"
     }
@@ -77,6 +109,7 @@ struct OpenRouterModel: Decodable, Equatable, Identifiable {
         architecture = try values.decode(
             Architecture.self,
             forKey: .architecture)
+        pricing = try values.decodeIfPresent(Pricing.self, forKey: .pricing)
         supportedParameters = try values.decodeIfPresent(
             [String].self,
             forKey: .supportedParameters
@@ -98,9 +131,99 @@ struct OpenRouterModel: Decodable, Equatable, Identifiable {
             return inputs.contains("audio") && outputs.contains("transcription")
         case .speech:
             return inputs.contains("text") && outputs.contains("speech") &&
-                supportedVoices.contains("af_heart") &&
-                supportedVoices.contains("ff_siwis")
+                !supportedVoices.isEmpty
         }
+    }
+
+    func preferredVoice(
+        for language: SpeechVoiceLanguage,
+        preserving current: String? = nil
+    ) -> String? {
+        if let current, supportedVoices.contains(current) {
+            return current
+        }
+        let preferred: [String]
+        switch language {
+        case .english:
+            preferred = ["af_heart", "en-US-Harper:MAI-Voice-2"]
+        case .french:
+            preferred = ["ff_siwis", "fr-FR-Soleil:MAI-Voice-2"]
+        }
+        if let exact = preferred.first(where: supportedVoices.contains) {
+            return exact
+        }
+        if let languageMatch = supportedVoices.first(where: {
+            Self.voice($0, matches: language)
+        }) {
+            return languageMatch
+        }
+        return supportedVoices.first
+    }
+
+    var pricingSummary: String {
+        guard let pricing else { return "Pricing not listed" }
+        var parts: [String] = []
+        if let prompt = Self.perMillionPrice(pricing.prompt) {
+            parts.append("Input \(prompt)/M")
+        }
+        if let completion = Self.perMillionPrice(pricing.completion) {
+            parts.append("Output \(completion)/M")
+        }
+        if let request = Self.unitPrice(pricing.request), request != "$0" {
+            parts.append("Request \(request)")
+        }
+        if let image = Self.unitPrice(pricing.image), image != "$0" {
+            parts.append("Image \(image)")
+        }
+        if let search = Self.unitPrice(pricing.webSearch), search != "$0" {
+            parts.append("Search \(search)")
+        }
+        if parts == ["Input $0/M", "Output $0/M"] {
+            return "Free"
+        }
+        return parts.isEmpty ? "Pricing not listed" : parts.joined(separator: " · ")
+    }
+
+    private static func voice(
+        _ voice: String,
+        matches language: SpeechVoiceLanguage
+    ) -> Bool {
+        let value = voice.lowercased()
+        switch language {
+        case .english:
+            return value.hasPrefix("en-") || value.hasPrefix("en_") ||
+                value.hasPrefix("gb_") || value.hasPrefix("af_") ||
+                value.hasPrefix("am_") || value.hasPrefix("bf_") ||
+                value.hasPrefix("bm_") || value.hasSuffix("-en")
+        case .french:
+            return value.hasPrefix("fr-") || value.hasPrefix("fr_") ||
+                value.hasPrefix("ff_") || value.hasSuffix("-fr")
+        }
+    }
+
+    private static func perMillionPrice(_ raw: String?) -> String? {
+        guard let raw, let value = Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")) else {
+            return nil
+        }
+        return formattedUSD(value * 1_000_000)
+    }
+
+    private static func unitPrice(_ raw: String?) -> String? {
+        guard let raw, let value = Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")) else {
+            return nil
+        }
+        return formattedUSD(value)
+    }
+
+    private static func formattedUSD(_ value: Decimal) -> String {
+        let number = NSDecimalNumber(decimal: value)
+        if number == .zero { return "$0" }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = value < 1 ? 4 : 2
+        return "$\(formatter.string(from: number) ?? number.stringValue)"
     }
 }
 

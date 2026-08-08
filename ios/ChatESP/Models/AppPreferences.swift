@@ -5,7 +5,56 @@ struct ChatESPConfiguration: Codable, Equatable {
     var chatModel = "~deepseek/deepseek-v4-flash-latest"
     var transcriptionModel = "openai/whisper-large-v3-turbo"
     var speechModel = "hexgrad/kokoro-82m"
+    var englishSpeechVoice = "af_heart"
+    var frenchSpeechVoice = "ff_siwis"
     var approximateLocation = ""
+
+    private enum CodingKeys: String, CodingKey {
+        case chatEndpoint
+        case chatModel
+        case transcriptionModel
+        case speechModel
+        case englishSpeechVoice
+        case frenchSpeechVoice
+        case approximateLocation
+    }
+
+    init(
+        chatEndpoint: String = "https://openrouter.ai/api/v1",
+        chatModel: String = "~deepseek/deepseek-v4-flash-latest",
+        transcriptionModel: String = "openai/whisper-large-v3-turbo",
+        speechModel: String = "hexgrad/kokoro-82m",
+        englishSpeechVoice: String = "af_heart",
+        frenchSpeechVoice: String = "ff_siwis",
+        approximateLocation: String = ""
+    ) {
+        self.chatEndpoint = chatEndpoint
+        self.chatModel = chatModel
+        self.transcriptionModel = transcriptionModel
+        self.speechModel = speechModel
+        self.englishSpeechVoice = englishSpeechVoice
+        self.frenchSpeechVoice = frenchSpeechVoice
+        self.approximateLocation = approximateLocation
+    }
+
+    init(from decoder: Decoder) throws {
+        let defaults = Self()
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chatEndpoint = try values.decodeIfPresent(
+            String.self, forKey: .chatEndpoint) ?? defaults.chatEndpoint
+        chatModel = try values.decodeIfPresent(
+            String.self, forKey: .chatModel) ?? defaults.chatModel
+        transcriptionModel = try values.decodeIfPresent(
+            String.self, forKey: .transcriptionModel) ?? defaults.transcriptionModel
+        speechModel = try values.decodeIfPresent(
+            String.self, forKey: .speechModel) ?? defaults.speechModel
+        englishSpeechVoice = try values.decodeIfPresent(
+            String.self, forKey: .englishSpeechVoice) ?? defaults.englishSpeechVoice
+        frenchSpeechVoice = try values.decodeIfPresent(
+            String.self, forKey: .frenchSpeechVoice) ?? defaults.frenchSpeechVoice
+        approximateLocation = try values.decodeIfPresent(
+            String.self, forKey: .approximateLocation) ?? defaults.approximateLocation
+    }
 }
 
 struct ChatESPConfigurationOverrides: Codable, Equatable {
@@ -13,11 +62,14 @@ struct ChatESPConfigurationOverrides: Codable, Equatable {
     var chatModel: String?
     var transcriptionModel: String?
     var speechModel: String?
+    var englishSpeechVoice: String?
+    var frenchSpeechVoice: String?
     var approximateLocation: String?
 
     var isEmpty: Bool {
         chatEndpoint == nil && chatModel == nil && transcriptionModel == nil &&
-            speechModel == nil && approximateLocation == nil
+            speechModel == nil && englishSpeechVoice == nil &&
+            frenchSpeechVoice == nil && approximateLocation == nil
     }
 
     func applying(to global: ChatESPConfiguration) -> ChatESPConfiguration {
@@ -26,6 +78,8 @@ struct ChatESPConfigurationOverrides: Codable, Equatable {
             chatModel: chatModel ?? global.chatModel,
             transcriptionModel: transcriptionModel ?? global.transcriptionModel,
             speechModel: speechModel ?? global.speechModel,
+            englishSpeechVoice: englishSpeechVoice ?? global.englishSpeechVoice,
+            frenchSpeechVoice: frenchSpeechVoice ?? global.frenchSpeechVoice,
             approximateLocation: approximateLocation ?? global.approximateLocation)
     }
 }

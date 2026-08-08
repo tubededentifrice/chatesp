@@ -29,6 +29,8 @@ Fields valid_fields() {
         {7, "openai/whisper-large-v3-turbo"},
         {8, "google/gemini-3.1-flash-tts-preview"},
         {9, "Dubai, United Arab Emirates"},
+        {10, "Zephyr"},
+        {11, "Puck"},
     };
 }
 
@@ -170,14 +172,19 @@ void test_valid_golden_packet_is_accepted() {
     TEST_ASSERT_EQUAL_STRING(
         "Dubai, United Arab Emirates",
         std::string(result.settings.approximate_location).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "Zephyr", std::string(result.settings.english_speech_voice).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "Puck", std::string(result.settings.french_speech_voice).c_str());
 
     constexpr std::array<std::uint8_t, 32> expected{{
-        0x3d, 0xd4, 0x44, 0x1e, 0xff, 0xe5, 0xf3, 0x6c,
-        0x42, 0x43, 0x10, 0x63, 0x46, 0x70, 0xe9, 0x1e,
-        0xa4, 0xdd, 0x93, 0x6e, 0x95, 0x8b, 0x38, 0xc2,
-        0x1d, 0xb1, 0x44, 0x9a, 0x5f, 0xda, 0x98, 0xce,
+        0x19, 0x60, 0xe1, 0x2e, 0x83, 0xee, 0x87, 0xf7,
+        0x59, 0x5f, 0x35, 0x3d, 0x6c, 0x65, 0xb1, 0x86,
+        0xc1, 0x34, 0x8b, 0x0e, 0x13, 0x6d, 0x76, 0xdd,
+        0x1d, 0xd0, 0x2e, 0x92, 0x86, 0xb0, 0xb0, 0xe6,
     }};
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected.data(), result.fingerprint.data(), expected.size());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(
+        expected.data(), result.fingerprint.data(), expected.size());
 }
 
 void test_optional_credentials_can_be_empty() {
@@ -228,7 +235,7 @@ void test_packet_envelope_is_strict() {
     changed[0] = 'X';
     assert_error(changed, provisioning::ValidationError::bad_magic);
     changed = packet;
-    changed[4] = 3;
+    changed[4] = 4;
     assert_error(changed, provisioning::ValidationError::unsupported_version);
     changed = packet;
     changed[5] = 2;
@@ -275,12 +282,15 @@ void test_transfer_assembles_ordered_bounded_frames() {
 void test_version_one_packet_and_transfer_remain_supported() {
     auto fields = valid_fields();
     fields.pop_back();
+    fields.pop_back();
+    fields.pop_back();
     const auto packet = make_packet(fields, 7, 1);
     const auto validation = validate(packet);
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(provisioning::ValidationError::none),
         static_cast<int>(validation.error));
     TEST_ASSERT_TRUE(validation.settings.approximate_location.empty());
+    TEST_ASSERT_TRUE(validation.settings.english_speech_voice.empty());
 
     provisioning::TransferAssembler assembler;
     const auto control = make_control(packet.size(), 180, 0x01020304, 1);
@@ -303,6 +313,21 @@ void test_version_one_packet_and_transfer_remain_supported() {
     TEST_ASSERT_EQUAL_UINT8(1, assembler.version());
 }
 
+void test_version_two_packet_remains_supported() {
+    auto fields = valid_fields();
+    fields.pop_back();
+    fields.pop_back();
+    const auto packet = make_packet(fields, 7, 2);
+    const auto validation = validate(packet);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::ValidationError::none),
+        static_cast<int>(validation.error));
+    TEST_ASSERT_EQUAL_STRING(
+        "Dubai, United Arab Emirates",
+        std::string(validation.settings.approximate_location).c_str());
+    TEST_ASSERT_TRUE(validation.settings.english_speech_voice.empty());
+}
+
 void test_transfer_rejects_insecure_and_malformed_frames() {
     const auto packet = make_packet();
     provisioning::TransferAssembler assembler;
@@ -318,7 +343,7 @@ void test_transfer_rejects_insecure_and_malformed_frames() {
         static_cast<int>(provisioning::TransferError::bad_magic),
         static_cast<int>(assembler.handle_control(changed.data(), changed.size(), kSecureLink)));
     changed = control;
-    changed[4] = 3;
+    changed[4] = 4;
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(provisioning::TransferError::unsupported_version),
         static_cast<int>(assembler.handle_control(changed.data(), changed.size(), kSecureLink)));
@@ -492,6 +517,11 @@ void test_each_field_has_a_fixed_limit_and_format() {
     assert_error(
         make_packet(fields),
         provisioning::ValidationError::invalid_approximate_location);
+
+    fields = valid_fields();
+    replace_field(fields, 10, "voice with space");
+    assert_error(
+        make_packet(fields), provisioning::ValidationError::invalid_voice);
 }
 
 void test_revision_rules_reject_stale_and_conflicting_packets() {
@@ -533,6 +563,7 @@ int main(int, char **) {
     RUN_TEST(test_revision_rules_reject_stale_and_conflicting_packets);
     RUN_TEST(test_transfer_assembles_ordered_bounded_frames);
     RUN_TEST(test_version_one_packet_and_transfer_remain_supported);
+    RUN_TEST(test_version_two_packet_remains_supported);
     RUN_TEST(test_transfer_rejects_insecure_and_malformed_frames);
     RUN_TEST(test_acknowledgement_has_exact_binary_layout);
     RUN_TEST(test_device_context_has_bounded_authenticated_layout);
