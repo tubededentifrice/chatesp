@@ -942,14 +942,16 @@ private struct ModelIDPriceRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer(minLength: 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Text(model.pricingSummary)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.blue)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
+                .frame(maxWidth: 180, alignment: .trailing)
                 .layoutPriority(1)
         }
+        .frame(maxWidth: .infinity)
     }
 }
 
