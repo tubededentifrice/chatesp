@@ -75,14 +75,19 @@ struct ClockSnakeSpan {
         section < static_cast<std::uint8_t>(span.first + span.count);
 }
 
-// Seven-segment masks use bits A through G from least to most significant.
-[[nodiscard]] constexpr std::uint8_t clock_digit_segments(
-    std::uint8_t digit) {
-    constexpr std::array<std::uint8_t, 10> masks{
-        0x3f, 0x06, 0x5b, 0x4f, 0x66,
-        0x6d, 0x7d, 0x07, 0x7f, 0x6f,
+[[nodiscard]] constexpr std::array<char, 6> clock_time_text(
+    bool available, ClockTime time) {
+    if (!available || !time.valid()) {
+        return {'-', '-', ':', '-', '-', '\0'};
+    }
+    return {
+        static_cast<char>('0' + time.hour / 10U),
+        static_cast<char>('0' + time.hour % 10U),
+        ':',
+        static_cast<char>('0' + time.minute / 10U),
+        static_cast<char>('0' + time.minute % 10U),
+        '\0',
     };
-    return digit < masks.size() ? masks[digit] : 0;
 }
 
 class ShortPressGesture {
