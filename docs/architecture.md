@@ -276,6 +276,10 @@ the field. The app sends each valid effective configuration automatically after
 connection or a settings change. The firmware receives one validated, atomic
 settings packet. It reports a runtime error when a cloud action needs missing
 Wi-Fi or OpenRouter credentials. An empty Brave key disables search.
+The settings, device-context, and memory responses use one serialized ATT
+indication path. A memory response cannot discard a settings acknowledgement.
+The runtime keeps the current radio state until the phone confirms a successful
+settings indication. It then applies the complete settings record.
 An explicit device change cancels an active settings transfer before the app
 changes the selected peripheral.
 

@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "chatesp/ble_shutdown.hpp"
+#include "chatesp/indication_gate.hpp"
 #include "chatesp/provisioning_session.hpp"
 #include "chatesp/runtime_control.hpp"
 #include "crash_diagnostics.hpp"
@@ -163,7 +164,7 @@ std::size_t s_queued_memory_response_size = 0;
 std::uint16_t s_queued_memory_connection = kNoConnection;
 agent::MemorySnapshot s_pending_memory_change;
 bool s_memory_change_pending = false;
-bool s_memory_indication_in_flight = false;
+std::atomic<bool> s_memory_indication_in_flight{false};
 bool s_memory_command_active = false;
 std::array<std::uint8_t, agent::max_memory_ble_command_bytes>
     s_cached_memory_command{};
@@ -178,6 +179,11 @@ runtime::BleShutdown s_shutdown;
 runtime::AsyncShutdownGate s_stop_gate;
 SemaphoreHandle_t s_stop_done = nullptr;
 std::atomic<esp_err_t> s_stop_result{ESP_OK};
+provisioning::IndicationGate s_acknowledgement_gate;
+std::atomic<bool> s_acknowledgement_waiting{false};
+std::atomic<bool> s_acknowledgement_in_flight{false};
+std::atomic<bool> s_settings_confirmation_pending{false};
+std::atomic<bool> s_indication_send_active{false};
 
 int gap_event(ble_gap_event *event, void *argument);
 int gatt_access(
@@ -309,19 +315,36 @@ provisioning::LinkSecurity link_security(std::uint16_t connection_handle) {
     };
 }
 
+void try_send_acknowledgement();
+
 void send_acknowledgement(
     std::uint16_t connection_handle,
     const provisioning::SessionResult &result) {
     if (!result.has_acknowledgement || s_acknowledgement_handle == 0) {
         return;
     }
-    os_mbuf *packet = ble_hs_mbuf_from_flat(
-        result.acknowledgement.data(), result.acknowledgement.size());
-    if (packet == nullptr) {
+    const bool settings_confirmation =
+        result.acknowledgement[5] == static_cast<std::uint8_t>(
+            provisioning::AcknowledgementStatus::applied) ||
+        result.acknowledgement[5] == static_cast<std::uint8_t>(
+            provisioning::AcknowledgementStatus::unchanged);
+    if (!s_acknowledgement_gate.enqueue(
+            connection_handle, provisioning::IndicationKind::settings,
+            result.acknowledgement.data(), result.acknowledgement.size(),
+            settings_confirmation)) {
+        if (settings_confirmation) {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::settings_ack_failed);
+        }
         return;
     }
-    ble_gatts_indicate_custom(
-        connection_handle, s_acknowledgement_handle, packet);
+    s_acknowledgement_waiting.store(
+        s_acknowledgement_gate.waiting(), std::memory_order_release);
+    if (settings_confirmation) {
+        s_settings_confirmation_pending.store(true, std::memory_order_release);
+        crash_diagnostics::mark(runtime::CrashEvent::settings_ack_waiting);
+    }
+    try_send_acknowledgement();
 }
 
 void send_device_context_acknowledgement(
@@ -331,11 +354,47 @@ void send_device_context_acknowledgement(
     if (s_acknowledgement_handle == 0) {
         return;
     }
-    os_mbuf *packet = ble_hs_mbuf_from_flat(
-        acknowledgement.data(), acknowledgement.size());
-    if (packet != nullptr) {
-        ble_gatts_indicate_custom(
-            connection_handle, s_acknowledgement_handle, packet);
+    if (s_acknowledgement_gate.enqueue(
+            connection_handle, provisioning::IndicationKind::device_context,
+            acknowledgement.data(), acknowledgement.size(), false)) {
+        s_acknowledgement_waiting.store(
+            s_acknowledgement_gate.waiting(), std::memory_order_release);
+    }
+    try_send_acknowledgement();
+}
+
+void try_send_acknowledgement() {
+    if (s_memory_indication_in_flight.load(std::memory_order_acquire) ||
+        s_acknowledgement_in_flight.load(std::memory_order_acquire) ||
+        s_acknowledgement_handle == 0) {
+        return;
+    }
+    std::uint16_t connection_handle = kNoConnection;
+    const std::uint8_t *data = nullptr;
+    std::size_t size = 0;
+    if (!s_acknowledgement_gate.pending(
+            connection_handle, data, size)) {
+        return;
+    }
+    os_mbuf *packet = ble_hs_mbuf_from_flat(data, size);
+    if (packet == nullptr) {
+        return;
+    }
+    s_indication_send_active.store(true, std::memory_order_release);
+    const int result = ble_gatts_indicate_custom(
+        connection_handle, s_acknowledgement_handle, packet);
+    s_indication_send_active.store(false, std::memory_order_release);
+    if (result != 0) {
+        if (s_settings_confirmation_pending.load(std::memory_order_acquire)) {
+            crash_diagnostics::mark(runtime::CrashEvent::settings_ack_failed);
+        }
+        return;
+    }
+    (void)s_acknowledgement_gate.mark_sent();
+    s_acknowledgement_waiting.store(false, std::memory_order_release);
+    s_acknowledgement_in_flight.store(true, std::memory_order_release);
+    if (s_settings_confirmation_pending.load(std::memory_order_acquire)) {
+        crash_diagnostics::mark(runtime::CrashEvent::settings_ack_sent);
     }
 }
 
@@ -372,7 +431,10 @@ agent::MemoryBleStatus memory_ble_status(
 }
 
 void try_send_memory_indication_locked() {
-    if (s_memory_indication_in_flight || s_memory_response_handle == 0 ||
+    if (s_memory_indication_in_flight.load(std::memory_order_acquire) ||
+        s_acknowledgement_waiting.load(std::memory_order_acquire) ||
+        s_acknowledgement_in_flight.load(std::memory_order_acquire) ||
+        s_memory_response_handle == 0 ||
         s_active_connection == kNoConnection) {
         return;
     }
@@ -406,10 +468,12 @@ void try_send_memory_indication_locked() {
     if (packet == nullptr) {
         return;
     }
+    s_indication_send_active.store(true, std::memory_order_release);
     const int result = ble_gatts_indicate_custom(
         s_active_connection, s_memory_response_handle, packet);
+    s_indication_send_active.store(false, std::memory_order_release);
     if (result == 0) {
-        s_memory_indication_in_flight = true;
+        s_memory_indication_in_flight.store(true, std::memory_order_release);
         if (sending_change) {
             s_memory_change_pending = false;
         } else {
@@ -606,13 +670,14 @@ provisioning::SessionResult authentication_acknowledgement() {
 }
 
 void release_connection(std::uint16_t connection_handle) {
+    crash_diagnostics::mark(runtime::CrashEvent::ble_disconnected);
     if (s_owner_connection == connection_handle) {
         s_session.disconnect();
         s_owner_connection = kNoConnection;
     }
     if (s_active_connection == connection_handle && memory_ble_lock()) {
         s_active_connection = kNoConnection;
-        s_memory_indication_in_flight = false;
+        s_memory_indication_in_flight.store(false, std::memory_order_release);
         s_memory_change_pending = false;
         s_pending_memory_change.clear();
         s_queued_memory_response.fill(0);
@@ -625,6 +690,11 @@ void release_connection(std::uint16_t connection_handle) {
         s_cached_memory_connection = kNoConnection;
         memory_ble_unlock();
     }
+    if (s_acknowledgement_gate.clear_connection(connection_handle)) {
+        s_settings_confirmation_pending.store(false, std::memory_order_release);
+    }
+    s_acknowledgement_waiting.store(false, std::memory_order_release);
+    s_acknowledgement_in_flight.store(false, std::memory_order_release);
     hide_passkey(connection_handle);
 }
 
@@ -667,7 +737,7 @@ void on_reset(int) {
     s_owner_connection = kNoConnection;
     if (memory_ble_lock()) {
         s_active_connection = kNoConnection;
-        s_memory_indication_in_flight = false;
+        s_memory_indication_in_flight.store(false, std::memory_order_release);
         s_memory_command_active = false;
         s_memory_change_pending = false;
         s_queued_memory_response_size = 0;
@@ -675,6 +745,11 @@ void on_reset(int) {
         s_cached_memory_response_size = 0;
         memory_ble_unlock();
     }
+    s_acknowledgement_gate.reset();
+    s_acknowledgement_waiting.store(false, std::memory_order_release);
+    s_acknowledgement_in_flight.store(false, std::memory_order_release);
+    s_settings_confirmation_pending.store(false, std::memory_order_release);
+    s_indication_send_active.store(false, std::memory_order_release);
     hide_all_passkeys();
 }
 
@@ -721,6 +796,12 @@ esp_err_t stop_host() {
     s_session.disconnect();
     s_owner_connection = kNoConnection;
     hide_all_passkeys();
+    s_acknowledgement_gate.reset();
+    s_acknowledgement_waiting.store(false, std::memory_order_release);
+    s_acknowledgement_in_flight.store(false, std::memory_order_release);
+    s_settings_confirmation_pending.store(false, std::memory_order_release);
+    s_indication_send_active.store(false, std::memory_order_release);
+    s_memory_indication_in_flight.store(false, std::memory_order_release);
     if (s_memory_ble_mutex != nullptr) {
         vSemaphoreDelete(s_memory_ble_mutex);
         s_memory_ble_mutex = nullptr;
@@ -780,6 +861,7 @@ int gap_event(ble_gap_event *event, void *) {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
+                crash_diagnostics::mark(runtime::CrashEvent::ble_connected);
                 if (memory_ble_lock()) {
                     s_active_connection = event->connect.conn_handle;
                     memory_ble_unlock();
@@ -798,8 +880,10 @@ int gap_event(ble_gap_event *event, void *) {
             return 0;
         case BLE_GAP_EVENT_ENC_CHANGE:
             hide_passkey(event->enc_change.conn_handle);
-            if (!provisioning::link_is_secure(
+            if (provisioning::link_is_secure(
                     link_security(event->enc_change.conn_handle))) {
+                crash_diagnostics::mark(runtime::CrashEvent::ble_secure);
+            } else {
                 release_connection(event->enc_change.conn_handle);
             }
             return 0;
@@ -836,10 +920,46 @@ int gap_event(ble_gap_event *event, void *) {
             }
             return BLE_GAP_REPEAT_PAIRING_RETRY;
         }
-        case BLE_GAP_EVENT_NOTIFY_TX:
-            if (event->notify_tx.attr_handle == s_memory_response_handle &&
-                memory_ble_lock()) {
-                s_memory_indication_in_flight = false;
+        case BLE_GAP_EVENT_NOTIFY_TX: {
+            if (event->notify_tx.indication == 0 ||
+                event->notify_tx.status == 0) {
+                return 0;
+            }
+            // NimBLE reports an immediate send error from inside
+            // ble_gatts_indicate_custom(). Do not re-enter either sender while
+            // its state and the memory mutex still belong to that call.
+            if (s_indication_send_active.load(std::memory_order_acquire)) {
+                return 0;
+            }
+            if (event->notify_tx.attr_handle == s_acknowledgement_handle) {
+                const bool settings_confirmation =
+                    s_acknowledgement_gate.complete();
+                s_acknowledgement_in_flight.store(
+                    false, std::memory_order_release);
+                if (settings_confirmation) {
+                    s_settings_confirmation_pending.store(
+                        s_acknowledgement_gate.settings_confirmation_pending(),
+                        std::memory_order_release);
+                    crash_diagnostics::mark(
+                        event->notify_tx.status == BLE_HS_EDONE
+                            ? runtime::CrashEvent::settings_ack_confirmed
+                            : runtime::CrashEvent::settings_ack_failed);
+                }
+            } else if (event->notify_tx.attr_handle ==
+                       s_memory_response_handle) {
+                s_memory_indication_in_flight.store(
+                    false, std::memory_order_release);
+            }
+            try_send_acknowledgement();
+            if (memory_ble_lock()) {
+                try_send_memory_indication_locked();
+                memory_ble_unlock();
+            }
+            return 0;
+        }
+        case BLE_GAP_EVENT_SUBSCRIBE:
+            try_send_acknowledgement();
+            if (memory_ble_lock()) {
                 try_send_memory_indication_locked();
                 memory_ble_unlock();
             }
@@ -988,6 +1108,13 @@ int gatt_access(
         : s_session.handle_data(
               frame.data(), copied_size, security, *s_settings_store);
     clear_bytes(frame.data(), frame.size());
+    if (characteristic == 1 && s_session.active()) {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::settings_transfer_begin);
+    } else if (characteristic == 2 && result.has_acknowledgement) {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::settings_packet_complete);
+    }
     send_acknowledgement(connection_handle, result);
     if (!s_session.active()) {
         s_owner_connection = kNoConnection;
@@ -1038,6 +1165,11 @@ esp_err_t start(
     s_callback_context = callback_context;
     s_session.disconnect();
     s_owner_connection = kNoConnection;
+    s_acknowledgement_gate.reset();
+    s_acknowledgement_waiting.store(false, std::memory_order_release);
+    s_acknowledgement_in_flight.store(false, std::memory_order_release);
+    s_settings_confirmation_pending.store(false, std::memory_order_release);
+    s_indication_send_active.store(false, std::memory_order_release);
     s_memory_ble_mutex = xSemaphoreCreateMutex();
     if (s_memory_ble_mutex == nullptr) {
         s_settings_store = nullptr;
@@ -1159,6 +1291,10 @@ esp_err_t stop(std::uint32_t timeout_ms) {
 }
 
 bool running() { return s_running.load(std::memory_order_acquire); }
+
+bool settings_confirmation_pending() {
+    return s_settings_confirmation_pending.load(std::memory_order_acquire);
+}
 
 }  // namespace ble_provisioning
 }  // namespace chatesp

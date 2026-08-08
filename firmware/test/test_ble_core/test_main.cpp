@@ -8,6 +8,7 @@
 #include <unity.h>
 
 #include "chatesp/ble_settings.hpp"
+#include "chatesp/indication_gate.hpp"
 #include "chatesp/provisioning_packet.hpp"
 #include "chatesp/provisioning_session.hpp"
 
@@ -331,6 +332,116 @@ void test_valid_transfer_can_follow_a_rejected_packet() {
     TEST_ASSERT_EQUAL_INT(1, settings.store_calls);
 }
 
+void test_indication_gate_keeps_settings_until_confirmation() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 4> settings{1, 2, 3, 4};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        7, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+    TEST_ASSERT_TRUE(gate.waiting());
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+
+    std::uint16_t connection_handle = 0;
+    const std::uint8_t *data = nullptr;
+    std::size_t size = 0;
+    TEST_ASSERT_TRUE(gate.pending(connection_handle, data, size));
+    TEST_ASSERT_EQUAL_UINT16(7, connection_handle);
+    TEST_ASSERT_EQUAL_size_t(settings.size(), size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(settings.data(), data, size);
+
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_TRUE(gate.in_flight());
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+    TEST_ASSERT_TRUE(gate.complete());
+    TEST_ASSERT_FALSE(gate.waiting());
+    TEST_ASSERT_FALSE(gate.in_flight());
+    TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
+}
+
+void test_indication_gate_does_not_replace_a_pending_acknowledgement() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 3> settings{1, 2, 3};
+    const std::array<std::uint8_t, 2> context{8, 9};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        4, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+    TEST_ASSERT_FALSE(gate.enqueue(
+        4, provisioning::IndicationKind::device_context,
+        context.data(), context.size(), false));
+    TEST_ASSERT_TRUE(gate.enqueue(
+        4, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+
+    std::uint16_t connection_handle = 0;
+    const std::uint8_t *data = nullptr;
+    std::size_t size = 0;
+    TEST_ASSERT_TRUE(gate.pending(connection_handle, data, size));
+    TEST_ASSERT_EQUAL_size_t(settings.size(), size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(settings.data(), data, size);
+    TEST_ASSERT_TRUE(gate.clear_connection(4));
+    TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
+}
+
+void test_indication_gate_queues_settings_behind_an_active_context() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 2> context{8, 9};
+    const std::array<std::uint8_t, 4> settings{1, 2, 3, 4};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        4, provisioning::IndicationKind::device_context,
+        context.data(), context.size(), false));
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_TRUE(gate.enqueue(
+        4, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+    TEST_ASSERT_TRUE(gate.in_flight());
+    TEST_ASSERT_TRUE(gate.waiting());
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+
+    TEST_ASSERT_FALSE(gate.complete());
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_TRUE(gate.complete());
+    TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
+}
+
+void test_indication_gate_replaces_waiting_context_with_settings() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 2> active_context{7, 8};
+    const std::array<std::uint8_t, 2> waiting_context{9, 10};
+    const std::array<std::uint8_t, 4> settings{1, 2, 3, 4};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        4, provisioning::IndicationKind::device_context,
+        active_context.data(), active_context.size(), false));
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_TRUE(gate.enqueue(
+        4, provisioning::IndicationKind::device_context,
+        waiting_context.data(), waiting_context.size(), false));
+    TEST_ASSERT_TRUE(gate.enqueue(
+        4, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+
+    std::uint16_t connection_handle = 0;
+    const std::uint8_t *data = nullptr;
+    std::size_t size = 0;
+    TEST_ASSERT_TRUE(gate.pending(connection_handle, data, size));
+    TEST_ASSERT_EQUAL_size_t(settings.size(), size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(settings.data(), data, size);
+}
+
+void test_indication_gate_rejects_invalid_payloads() {
+    provisioning::IndicationGate gate;
+    std::array<std::uint8_t, provisioning::IndicationGate::kMaximumSize + 1>
+        oversized{};
+    TEST_ASSERT_FALSE(gate.enqueue(
+        1, provisioning::IndicationKind::settings, nullptr, 1, true));
+    TEST_ASSERT_FALSE(gate.enqueue(
+        1, provisioning::IndicationKind::settings,
+        oversized.data(), 0, true));
+    TEST_ASSERT_FALSE(gate.enqueue(
+        1, provisioning::IndicationKind::settings,
+        oversized.data(), oversized.size(), true));
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_complete_packet_is_stored_before_applied_ack);
@@ -343,5 +454,10 @@ int main(int, char **) {
     RUN_TEST(test_settings_record_owns_and_clears_values);
     RUN_TEST(test_old_settings_records_receive_safe_voice_defaults);
     RUN_TEST(test_valid_transfer_can_follow_a_rejected_packet);
+    RUN_TEST(test_indication_gate_keeps_settings_until_confirmation);
+    RUN_TEST(test_indication_gate_does_not_replace_a_pending_acknowledgement);
+    RUN_TEST(test_indication_gate_queues_settings_behind_an_active_context);
+    RUN_TEST(test_indication_gate_replaces_waiting_context_with_settings);
+    RUN_TEST(test_indication_gate_rejects_invalid_payloads);
     return UNITY_END();
 }
