@@ -301,9 +301,11 @@ selected, the companion sends a location rounded to 0.1 degree when the ChatESP 
 connects and at most once per hour while connected. Without live app context,
 the firmware makes one HTTPS request to `ipwho.is`. It requests only city,
 region, country code, and UTC offset, and has a three-second total limit. A
-saved city and country is the last fallback. Each live or IP value stays in RAM
-and is not written to flash. It must not contain a precise position or a street
-address. The changing time suffix follows the stable instruction text.
+worker-start failure stops this optional lookup for the current settings
+session and restores BLE without a retry loop. A saved city and country is the
+last fallback. Each live or IP value stays in RAM and is not written to flash.
+It must not contain a precise position or a street address. The changing time
+suffix follows the stable instruction text.
 
 The firmware also sets a short output limit. The display can scroll, but the
 normal answer must fit a spoken interaction.

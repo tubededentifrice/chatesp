@@ -971,7 +971,11 @@ private:
             &network_context_task_, 0);
         if (created != pdPASS) {
             network_context_task_ = nullptr;
-            context_lookup_attempted_ = false;
+            network_context_finished_at_ms_ = monotonic_ms();
+            ESP_LOGW(
+                kTag,
+                "Optional IP context worker could not start; "
+                "the lookup will not retry in this settings session");
             ensure_ble_started();
         }
     }
