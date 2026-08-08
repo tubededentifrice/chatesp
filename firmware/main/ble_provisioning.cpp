@@ -9,6 +9,7 @@
 #include "chatesp/provisioning_session.hpp"
 #include "chatesp/runtime_control.hpp"
 #include "device_memory_store.hpp"
+#include "esp_log.h"
 #include "esp_random.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
@@ -39,6 +40,82 @@ constexpr std::size_t kMaximumDataFrameSize =
 constexpr std::uint32_t kStopTaskStackBytes = 4 * 1024;
 constexpr UBaseType_t kStopTaskPriority = 5;
 constexpr std::uint32_t kStopTaskReclaimDelayMs = 10;
+constexpr char kLogTag[] = "ble_provisioning";
+
+#if !defined(CONFIG_BT_NIMBLE_NVS_PERSIST) || \
+    !CONFIG_BT_NIMBLE_NVS_PERSIST
+constexpr std::size_t kVolatileStoreCapacity =
+    3U * CONFIG_BT_NIMBLE_MAX_BONDS + CONFIG_BT_NIMBLE_MAX_CCCDS;
+
+struct VolatileStoreEntry {
+    int object_type = 0;
+    union ble_store_value value{};
+};
+
+struct VolatileStoreCapture {
+    std::array<VolatileStoreEntry, kVolatileStoreCapacity> entries{};
+    std::size_t count = 0;
+    bool overflow = false;
+};
+
+VolatileStoreCapture s_volatile_store;
+bool s_volatile_store_valid = false;
+
+int capture_volatile_store_entry(
+    int object_type,
+    union ble_store_value *value,
+    void *cookie) {
+    auto *capture = static_cast<VolatileStoreCapture *>(cookie);
+    if (capture == nullptr || value == nullptr ||
+        capture->count >= capture->entries.size()) {
+        if (capture != nullptr) {
+            capture->overflow = true;
+        }
+        return 1;
+    }
+    capture->entries[capture->count++] = {object_type, *value};
+    return 0;
+}
+
+bool capture_volatile_store() {
+    VolatileStoreCapture capture;
+    constexpr std::array<int, 5> kObjectTypes{
+        BLE_STORE_OBJ_TYPE_OUR_SEC,
+        BLE_STORE_OBJ_TYPE_PEER_SEC,
+        BLE_STORE_OBJ_TYPE_CCCD,
+        BLE_STORE_OBJ_TYPE_PEER_ADDR,
+        BLE_STORE_OBJ_TYPE_LOCAL_IRK,
+    };
+    for (const int object_type : kObjectTypes) {
+        if (ble_store_iterate(
+                object_type, capture_volatile_store_entry, &capture) != 0 ||
+            capture.overflow) {
+            s_volatile_store = {};
+            s_volatile_store_valid = false;
+            return false;
+        }
+    }
+    s_volatile_store = capture;
+    s_volatile_store_valid = true;
+    return true;
+}
+
+bool restore_volatile_store() {
+    if (!s_volatile_store_valid) {
+        return true;
+    }
+    for (std::size_t index = 0; index < s_volatile_store.count; ++index) {
+        const auto &entry = s_volatile_store.entries[index];
+        if (ble_store_write(entry.object_type, &entry.value) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+#else
+bool capture_volatile_store() { return true; }
+bool restore_volatile_store() { return true; }
+#endif
 
 const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
     0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
@@ -612,6 +689,9 @@ esp_err_t stop_host() {
             }
             return ESP_FAIL;
         }
+        if (!capture_volatile_store()) {
+            ESP_LOGE(kLogTag, "Could not retain the volatile BLE bond store");
+        }
         s_shutdown.host_stopped();
     }
     if (s_shutdown.step() ==
@@ -1004,6 +1084,19 @@ esp_err_t start(
     }
 
     ble_store_config_init();
+    if (!restore_volatile_store()) {
+        ESP_LOGE(kLogTag, "Could not restore the volatile BLE bond store");
+        nimble_port_deinit();
+        s_memory_store->set_change_callback(nullptr, nullptr);
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
+        s_settings_store = nullptr;
+        s_memory_store = nullptr;
+        s_passkey_callback = nullptr;
+        s_device_context_callback = nullptr;
+        s_callback_context = nullptr;
+        return ESP_FAIL;
+    }
     s_shutdown.reset();
     s_running.store(true, std::memory_order_release);
     nimble_port_freertos_init(host_task);

@@ -1,11 +1,31 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import MagicMock, patch
 
-from tools.device_doctor import diagnose_boot, main, redact_doctor_text
+from tools.device_doctor import (
+    collect_boot_log,
+    diagnose_boot,
+    main,
+    redact_doctor_text,
+)
 
 
 class DeviceDoctorTests(unittest.TestCase):
+    def test_boot_log_closes_serial_with_the_safe_reset_sequence(self) -> None:
+        connection = MagicMock()
+        connection.in_waiting = 0
+        connection.read.return_value = b""
+
+        with patch(
+            "tools.device_doctor.open_safe_serial", return_value=connection
+        ), patch("tools.device_doctor.close_safe_serial") as safe_close, patch(
+            "tools.device_doctor.time.monotonic", side_effect=(0.0, 1.0)
+        ):
+            self.assertEqual("", collect_boot_log("LOCAL_PORT", 0.5))
+
+        safe_close.assert_called_once_with(connection)
+
     def test_accepts_complete_current_development_boot(self) -> None:
         log = """
 I app_init: App version:      abc1234-dirty
