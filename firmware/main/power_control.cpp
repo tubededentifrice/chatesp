@@ -16,15 +16,25 @@ constexpr char kTag[] = "power";
 constexpr std::uint16_t kAxp2101Address = 0x34;
 constexpr std::uint8_t kAxp2101CommonConfig = 0x10;
 constexpr std::uint8_t kAxp2101Status1 = 0x00;
+constexpr std::uint8_t kAxp2101IrqEnable2 = 0x41;
+constexpr std::uint8_t kAxp2101IrqStatus2 = 0x49;
 constexpr std::uint8_t kAxp2101BatteryPercent = 0xA4;
 constexpr std::uint8_t kAxp2101BatteryPresent = 1U << 3;
 constexpr std::uint8_t kAxp2101SoftwareOff = 1U << 0;
 constexpr std::uint8_t kAxp2101PowerKeyShutdown = 1U << 2;
+constexpr std::uint8_t kAxp2101PowerKeyPositiveEdge = 1U << 0;
+constexpr std::uint8_t kAxp2101PowerKeyNegativeEdge = 1U << 1;
+constexpr std::uint8_t kAxp2101PowerKeyEdgeMask =
+    kAxp2101PowerKeyPositiveEdge | kAxp2101PowerKeyNegativeEdge;
+constexpr std::uint8_t kAxp2101VbusRemoveEvent = 1U << 6;
+constexpr std::uint8_t kAxp2101VbusInsertEvent = 1U << 7;
+constexpr std::uint8_t kAxp2101PowerSourceEventMask =
+    kAxp2101VbusRemoveEvent | kAxp2101VbusInsertEvent;
 constexpr std::uint32_t kPowerButtonPin = IO_EXPANDER_PIN_NUM_4;
 constexpr int kI2cTimeoutMs = 100;
 constexpr std::uint32_t kPolicyErrorLogIntervalMs = 1'000;
 
-ButtonDebouncer action_button;
+PowerButtonFilter action_button;
 esp_io_expander_handle_t io_expander = nullptr;
 i2c_master_dev_handle_t axp2101 = nullptr;
 bool initialized = false;
@@ -77,6 +87,77 @@ esp_err_t set_hardware_hold_shutdown(bool enabled) {
     return ESP_OK;
 }
 
+esp_err_t prepare_power_key_events(
+    bool *startup_press_event, bool *startup_vbus_remove_event) {
+    ESP_RETURN_ON_FALSE(
+        startup_press_event != nullptr &&
+            startup_vbus_remove_event != nullptr,
+        ESP_ERR_INVALID_ARG,
+        kTag,
+        "No startup PWR event output");
+    std::uint8_t enabled = 0;
+    esp_err_t error = read_axp2101(kAxp2101IrqEnable2, &enabled);
+    if (error != ESP_OK) {
+        return error;
+    }
+    enabled |= kAxp2101PowerKeyEdgeMask | kAxp2101PowerSourceEventMask;
+    error = write_axp2101(kAxp2101IrqEnable2, enabled);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    std::uint8_t status = 0;
+    error = read_axp2101(kAxp2101IrqStatus2, &status);
+    if (error != ESP_OK) {
+        return error;
+    }
+    *startup_press_event =
+        (status & kAxp2101PowerKeyNegativeEdge) != 0;
+    *startup_vbus_remove_event =
+        (status & kAxp2101VbusRemoveEvent) != 0;
+    // IRQ status bits are write-one-to-clear. Clear only observed events so an
+    // event that arrives after the read stays available to the first poll.
+    const std::uint8_t observed = status &
+        (kAxp2101PowerKeyEdgeMask | kAxp2101PowerSourceEventMask);
+    return observed == 0
+        ? ESP_OK
+        : write_axp2101(kAxp2101IrqStatus2, observed);
+}
+
+esp_err_t read_power_key_events(
+    bool *pressed_event,
+    bool *released_event,
+    bool *power_source_event) {
+    ESP_RETURN_ON_FALSE(
+        pressed_event != nullptr && released_event != nullptr &&
+            power_source_event != nullptr,
+        ESP_ERR_INVALID_ARG,
+        kTag,
+        "No PWR event output");
+    std::uint8_t status = 0;
+    esp_err_t error = read_axp2101(kAxp2101IrqStatus2, &status);
+    if (error != ESP_OK) {
+        return error;
+    }
+    const std::uint8_t observed = status &
+        (kAxp2101PowerKeyEdgeMask | kAxp2101PowerSourceEventMask);
+    if (observed != 0) {
+        error = write_axp2101(kAxp2101IrqStatus2, observed);
+        if (error != ESP_OK) {
+            return error;
+        }
+    }
+    // PWRON is active low: its negative electrical edge is a press and its
+    // positive electrical edge is a release.
+    *pressed_event =
+        (status & kAxp2101PowerKeyNegativeEdge) != 0;
+    *released_event =
+        (status & kAxp2101PowerKeyPositiveEdge) != 0;
+    *power_source_event =
+        (status & kAxp2101PowerSourceEventMask) != 0;
+    return ESP_OK;
+}
+
 }  // namespace
 
 esp_err_t initialize() {
@@ -105,10 +186,26 @@ esp_err_t initialize() {
             bsp_i2c_get_handle(), &axp2101_config, &axp2101),
         kTag,
         "AXP2101 start failed");
-
-    bool pressed = false;
+    bool startup_press_event = false;
+    bool startup_vbus_remove_event = false;
     ESP_RETURN_ON_ERROR(
-        read_action_button(&pressed), kTag, "PWR button start read failed");
+        prepare_power_key_events(
+            &startup_press_event, &startup_vbus_remove_event),
+        kTag,
+        "PWR event setup failed");
+
+    bool level_pressed = false;
+    ESP_RETURN_ON_ERROR(
+        read_action_button(&level_pressed),
+        kTag,
+        "PWR button start read failed");
+    const bool pressed = level_pressed &&
+        (!startup_vbus_remove_event || startup_press_event);
+    if (level_pressed && !pressed) {
+        ESP_LOGW(
+            kTag,
+            "Ignored PWR level after USB removal without a PWR edge");
+    }
     if (pressed) {
         const esp_err_t policy_error = set_hardware_hold_shutdown(false);
         if (policy_error != ESP_OK) {
@@ -132,10 +229,16 @@ esp_err_t poll(std::uint32_t now_ms, ButtonEdges *edges) {
         edges != nullptr, ESP_ERR_INVALID_ARG, kTag, "No edge output");
     ESP_RETURN_ON_FALSE(
         initialized, ESP_ERR_INVALID_STATE, kTag, "Power not ready");
-    bool pressed = false;
+    bool pressed_event = false;
+    bool released_event = false;
+    bool power_source_event = false;
     ESP_RETURN_ON_ERROR(
-        read_action_button(&pressed), kTag, "PWR button read failed");
-    *edges = action_button.update(pressed, now_ms);
+        read_power_key_events(
+            &pressed_event, &released_event, &power_source_event),
+        kTag,
+        "PWR event read failed");
+    *edges = action_button.update(
+        pressed_event, released_event, power_source_event, now_ms);
     if (edges->pressed) {
         action_button_stably_pressed = true;
     } else if (edges->released) {
@@ -177,8 +280,7 @@ esp_err_t poll(std::uint32_t now_ms, ButtonEdges *edges) {
 }
 
 bool action_button_is_pressed() {
-    bool pressed = false;
-    return initialized && read_action_button(&pressed) == ESP_OK && pressed;
+    return initialized && action_button_stably_pressed;
 }
 
 std::optional<std::uint8_t> battery_percent() {

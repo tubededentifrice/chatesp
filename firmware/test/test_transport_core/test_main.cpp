@@ -56,7 +56,9 @@ void test_persistent_sessions_are_bound_to_one_https_origin() {
 
 void test_transfer_limits_have_absolute_and_request_caps() {
     assert_error(Error::none, validate_transfer_limits(100, 100, 200));
-    assert_error(Error::limit_exceeded, validate_transfer_limits(101, 100, 200));
+    assert_error(
+        Error::request_too_large,
+        validate_transfer_limits(101, 100, 200));
     assert_error(
         Error::invalid_argument,
         validate_transfer_limits(0, max_http_request_bytes + 1, 200));
@@ -79,7 +81,7 @@ void test_response_head_checks_status_media_and_declared_size() {
         Error::none,
         validate_response_head(200, "application/json", 100, policy));
     assert_error(
-        Error::limit_exceeded,
+        Error::response_too_large,
         validate_response_head(200, "application/json", 101, policy));
     assert_error(
         Error::unsupported_media,
@@ -90,6 +92,11 @@ void test_response_head_checks_status_media_and_declared_size() {
     assert_error(
         Error::server_error,
         validate_response_head(503, "application/json", 20, policy));
+    const ResponsePolicy invalid_policy{types, 1, 0};
+    assert_error(
+        Error::invalid_argument,
+        validate_response_head(
+            200, "application/json", 20, invalid_policy));
 }
 
 void test_response_budget_stops_chunked_overflow() {

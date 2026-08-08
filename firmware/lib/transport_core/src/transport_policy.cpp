@@ -232,11 +232,13 @@ agent::Error validate_response_head(
         return status_error;
     }
     if (policy.max_response_bytes == 0 ||
-        policy.max_response_bytes > max_http_response_bytes ||
-        (content_length >= 0 &&
-         static_cast<std::uint64_t>(content_length) >
-             policy.max_response_bytes)) {
-        return agent::Error::limit_exceeded;
+        policy.max_response_bytes > max_http_response_bytes) {
+        return agent::Error::invalid_argument;
+    }
+    if (content_length >= 0 &&
+        static_cast<std::uint64_t>(content_length) >
+            policy.max_response_bytes) {
+        return agent::Error::response_too_large;
     }
     if (policy.accepted_content_type_count == 0 ||
         policy.accepted_content_type_count > max_accepted_content_types ||
@@ -261,7 +263,7 @@ agent::Error validate_transfer_limits(
         response_limit > max_http_response_bytes) {
         return agent::Error::invalid_argument;
     }
-    return body_bytes > request_limit ? agent::Error::limit_exceeded
+    return body_bytes > request_limit ? agent::Error::request_too_large
                                       : agent::Error::none;
 }
 

@@ -33,8 +33,9 @@ in-session display wake does not show the splash.
 
 - Chat: `deepseek/deepseek-v4-flash` through OpenRouter.
 - Speech recognition: `openai/whisper-large-v3-turbo` through OpenRouter.
-- Speech synthesis: `hexgrad/kokoro-82m` with the `af_heart` voice through
-  OpenRouter. It returns streaming 24 kHz, 16-bit, mono PCM.
+- Speech synthesis: `hexgrad/kokoro-82m` through OpenRouter. It uses
+  `af_heart` for English and `ff_siwis` for French. It returns streaming
+  24 kHz, 16-bit, mono PCM.
 - Search: Brave Web Search and Brave Image Search through a provider adapter.
 
 One OpenRouter key can supply chat, transcription, and speech. The provider

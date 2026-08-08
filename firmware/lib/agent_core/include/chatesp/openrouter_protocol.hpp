@@ -49,6 +49,9 @@ Error build_openrouter_speech_request(
     const OpenRouterConfig &config, const char *text, std::size_t size,
     SpeechRequestBody &body);
 
+OpenRouterConfig openrouter_speech_config_for_language(
+    const OpenRouterConfig &config, SpeechLanguage language);
+
 Error parse_openrouter_chat_response(
     const char *json, std::size_t size, ChatTurn &turn);
 
@@ -79,10 +82,13 @@ private:
     Error process_line();
 
     FixedText<Limits::max_sse_line_bytes> line_;
+    ChatTurn raw_turn_;
     ChatTurn turn_;
     Error error_ = Error::none;
     ChatTextSink *text_sink_ = nullptr;
     std::size_t published_size_ = 0;
+    bool language_resolved_ = false;
+    bool language_published_ = false;
     bool saw_finish_ = false;
     bool done_ = false;
 };

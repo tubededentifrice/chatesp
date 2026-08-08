@@ -18,8 +18,8 @@ struct Limits {
     static constexpr std::size_t max_message_bytes = 4'096;
     static constexpr std::size_t max_history_messages = 12;
     static constexpr std::size_t max_chat_request_bytes = 32'768;
-    static constexpr std::size_t max_chat_response_bytes = 64'000;
-    static constexpr std::size_t max_sse_line_bytes = 8'192;
+    static constexpr std::size_t max_chat_response_bytes = 128'000;
+    static constexpr std::size_t max_sse_line_bytes = 16'384;
     static constexpr std::size_t max_tool_count = 6;
     static constexpr std::size_t max_tool_rounds = 3;
     static constexpr std::size_t max_tool_name_bytes = 32;

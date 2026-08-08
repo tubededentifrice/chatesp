@@ -43,7 +43,15 @@ class ChatTextRecorder final : public ChatTextSink {
 public:
     std::array<FixedText<Limits::max_answer_bytes>, 4> updates{};
     std::size_t size = 0;
+    SpeechLanguage language = SpeechLanguage::english;
+    std::size_t language_updates = 0;
     TestCancellation *cancellation = nullptr;
+
+    Error set_speech_language(SpeechLanguage value) override {
+        language = value;
+        ++language_updates;
+        return Error::none;
+    }
 
     Error write_chat_text(const char *text, std::size_t text_size) override {
         if (size >= updates.size() ||
@@ -253,6 +261,8 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "power-off is scheduled"));
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "bottom PWR-button"));
     TEST_ASSERT_NULL(std::strstr(system_prompt, "chain of thought"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "[[lang=en]]"));
+    TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "[[lang=fr]]"));
     TEST_ASSERT_NOT_NULL(
         std::strstr(system_prompt, "ask one short clarifying question"));
     TEST_ASSERT_NOT_NULL(
@@ -338,6 +348,24 @@ void test_agent_loop_executes_one_tool_and_keeps_history() {
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(MessageRole::assistant_tool_call),
         static_cast<int>(loop.history().at(1).role));
+}
+
+void test_agent_loop_keeps_short_followups_bounded() {
+    EchoTool tool;
+    ToolRegistry registry;
+    assert_error(Error::none, registry.add(tool));
+    SequenceChat chat;
+    AgentLoop loop(chat, registry);
+    FixedText<Limits::max_answer_bytes> answer;
+    TestCancellation cancellation;
+
+    for (std::size_t turn = 0; turn < 10; ++turn) {
+        assert_error(
+            Error::none, loop.run("Again", 5, answer, cancellation));
+        TEST_ASSERT_EQUAL_STRING("A short answer.", answer.c_str());
+        TEST_ASSERT_LESS_OR_EQUAL_UINT32(
+            Limits::max_history_messages, loop.history().size());
+    }
 }
 
 void test_agent_loop_stops_after_three_tool_rounds() {
@@ -504,6 +532,10 @@ void test_agent_loop_nonstream_provider_publishes_only_final_answer() {
 
     assert_error(
         Error::none, loop.run("Question", 8, answer, cancellation));
+    TEST_ASSERT_EQUAL_UINT32(1, text.language_updates);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(SpeechLanguage::english),
+        static_cast<int>(text.language));
     TEST_ASSERT_EQUAL_UINT32(1, text.size);
     TEST_ASSERT_EQUAL_STRING("A short answer.", text.updates[0].c_str());
     TEST_ASSERT_EQUAL_STRING("A short answer.", answer.c_str());
@@ -870,13 +902,17 @@ void test_openrouter_chat_builder_has_bounded_contract() {
 void test_openrouter_parses_answer_and_tool_call() {
     const char answer_json[] =
         "{\"choices\":[{\"message\":{\"role\":\"assistant\","
-        "\"content\":\"It is 35\\u00b0C.\"},\"finish_reason\":\"stop\"}]}";
+        "\"content\":\"[[lang=fr]]Il fait 35\\u00b0C.\"},"
+        "\"finish_reason\":\"stop\"}]}";
     ChatTurn turn;
     assert_error(
         Error::none,
         parse_openrouter_chat_response(
             answer_json, sizeof(answer_json) - 1, turn));
-    TEST_ASSERT_EQUAL_STRING("It is 35\xC2\xB0" "C.", turn.answer.c_str());
+    TEST_ASSERT_EQUAL_STRING("Il fait 35\xC2\xB0" "C.", turn.answer.c_str());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(SpeechLanguage::french),
+        static_cast<int>(turn.speech_language));
 
     const char tool_json[] =
         "{\"choices\":[{\"message\":{\"content\":\"draft\","
@@ -892,6 +928,63 @@ void test_openrouter_parses_answer_and_tool_call() {
         static_cast<int>(turn.kind));
     TEST_ASSERT_EQUAL_STRING("search_web", turn.tool_call.name.c_str());
     TEST_ASSERT_TRUE(turn.answer.empty());
+}
+
+void test_openrouter_sse_strips_split_language_tag() {
+    ChatTextRecorder text;
+    OpenRouterSseParser parser(&text);
+    const char first[] =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"[[lang=\"},"
+        "\"finish_reason\":null}]}\n\n";
+    assert_error(Error::none, parser.feed(first, sizeof(first) - 1));
+    TEST_ASSERT_EQUAL_UINT32(0, text.size);
+    TEST_ASSERT_EQUAL_UINT32(0, text.language_updates);
+
+    const char second[] =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"fr]]Bon\"},"
+        "\"finish_reason\":null}]}\n\n";
+    assert_error(Error::none, parser.feed(second, sizeof(second) - 1));
+    TEST_ASSERT_EQUAL_UINT32(1, text.size);
+    TEST_ASSERT_EQUAL_STRING("Bon", text.updates[0].c_str());
+    TEST_ASSERT_EQUAL_UINT32(1, text.language_updates);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(SpeechLanguage::french),
+        static_cast<int>(text.language));
+
+    const char final[] =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"jour.\"},"
+        "\"finish_reason\":\"stop\"}]}\n\n"
+        "data: [DONE]\n\n";
+    assert_error(Error::none, parser.feed(final, sizeof(final) - 1));
+    assert_error(Error::none, parser.finish());
+    TEST_ASSERT_EQUAL_UINT32(2, text.size);
+    TEST_ASSERT_EQUAL_STRING("Bonjour.", text.updates[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("Bonjour.", parser.turn().answer.c_str());
+    TEST_ASSERT_EQUAL_UINT32(1, text.language_updates);
+}
+
+void test_openrouter_sse_rejects_unsupported_language_tag() {
+    ChatTextRecorder text;
+    OpenRouterSseParser parser(&text);
+    const char stream[] =
+        "data: {\"choices\":[{\"delta\":{"
+        "\"content\":\"[[lang=de]]Guten Tag.\"},"
+        "\"finish_reason\":\"stop\"}]}\n\n";
+    assert_error(
+        Error::malformed_response,
+        parser.feed(stream, sizeof(stream) - 1));
+    TEST_ASSERT_EQUAL_UINT32(0, text.size);
+    TEST_ASSERT_EQUAL_UINT32(0, text.language_updates);
+}
+
+void test_openrouter_sse_reports_oversized_response_line() {
+    OpenRouterSseParser parser;
+    std::array<char, Limits::max_sse_line_bytes + 1> line{};
+    line.fill('x');
+    assert_error(
+        Error::response_too_large,
+        parser.feed(line.data(), line.size()));
+    TEST_ASSERT_EQUAL_UINT32(128'000, Limits::max_chat_response_bytes);
 }
 
 void test_openrouter_sse_parser_handles_split_input_and_comments() {
@@ -923,6 +1016,10 @@ void test_openrouter_sse_publishes_cumulative_complete_lines() {
     TEST_ASSERT_EQUAL_UINT32(0, text.size);
     assert_error(Error::none, parser.feed("\n\n", 2));
     TEST_ASSERT_EQUAL_UINT32(1, text.size);
+    TEST_ASSERT_EQUAL_UINT32(1, text.language_updates);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(SpeechLanguage::english),
+        static_cast<int>(text.language));
     TEST_ASSERT_EQUAL_STRING("Hello ", text.updates[0].c_str());
 
     const char final[] =
@@ -1012,6 +1109,14 @@ void test_openrouter_transcription_and_speech_protocols() {
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"input\":\"Hello.\""));
     TEST_ASSERT_NOT_NULL(
         std::strstr(body.c_str(), "\"voice\":\"af_heart\""));
+    const OpenRouterConfig french = openrouter_speech_config_for_language(
+        OpenRouterConfig{}, SpeechLanguage::french);
+    assert_error(
+        Error::none,
+        build_openrouter_speech_request(
+            french, "Bonjour.", 8, body));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(body.c_str(), "\"voice\":\"ff_siwis\""));
     TEST_ASSERT_NULL(std::strstr(body.c_str(), "Transcript:"));
     assert_error(
         Error::none,
@@ -1119,6 +1224,7 @@ int main(int, char **) {
     RUN_TEST(test_history_rejects_empty_and_overlong_text);
     RUN_TEST(test_registry_rejects_duplicate_and_unknown_tool);
     RUN_TEST(test_agent_loop_executes_one_tool_and_keeps_history);
+    RUN_TEST(test_agent_loop_keeps_short_followups_bounded);
     RUN_TEST(test_agent_loop_stops_after_three_tool_rounds);
     RUN_TEST(test_agent_loop_honors_cancellation_before_provider);
     RUN_TEST(test_agent_loop_rolls_back_cancelled_turn);
@@ -1139,6 +1245,9 @@ int main(int, char **) {
     RUN_TEST(test_agent_loop_searches_selects_and_then_answers);
     RUN_TEST(test_openrouter_chat_builder_has_bounded_contract);
     RUN_TEST(test_openrouter_parses_answer_and_tool_call);
+    RUN_TEST(test_openrouter_sse_strips_split_language_tag);
+    RUN_TEST(test_openrouter_sse_rejects_unsupported_language_tag);
+    RUN_TEST(test_openrouter_sse_reports_oversized_response_line);
     RUN_TEST(test_openrouter_sse_parser_handles_split_input_and_comments);
     RUN_TEST(test_openrouter_sse_publishes_cumulative_complete_lines);
     RUN_TEST(test_openrouter_sse_never_publishes_tool_calls);

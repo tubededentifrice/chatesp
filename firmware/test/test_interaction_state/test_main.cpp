@@ -5,6 +5,7 @@
 
 #include "chatesp/button_debouncer.hpp"
 #include "chatesp/interaction_state.hpp"
+#include "chatesp/power_button_filter.hpp"
 
 using chatesp::InteractionConfig;
 using chatesp::InteractionState;
@@ -209,6 +210,65 @@ void test_button_debouncer_rejects_bounce_and_handles_wrap() {
     TEST_ASSERT_TRUE(button.update(false, 20).released);
 }
 
+void test_power_button_filter_rejects_usb_source_transitions() {
+    chatesp::PowerButtonFilter button{30};
+    button.reset(false, 100);
+
+    TEST_ASSERT_FALSE(button.update(true, false, true, 110).pressed);
+    TEST_ASSERT_FALSE(button.update(false, false, false, 500).pressed);
+}
+
+void test_power_button_filter_accepts_pmu_edges() {
+    chatesp::PowerButtonFilter button{30};
+    button.reset(false, 100);
+
+    TEST_ASSERT_FALSE(button.update(true, false, false, 110).pressed);
+    TEST_ASSERT_FALSE(button.update(false, false, false, 139).pressed);
+    TEST_ASSERT_TRUE(button.update(false, false, false, 140).pressed);
+    TEST_ASSERT_FALSE(button.update(false, true, false, 500).released);
+    TEST_ASSERT_TRUE(button.update(false, false, false, 530).released);
+}
+
+void test_power_button_filter_accepts_release_without_an_exio_change() {
+    chatesp::PowerButtonFilter button{30};
+    button.reset(true, 100);
+
+    TEST_ASSERT_FALSE(button.update(false, true, false, 110).released);
+    TEST_ASSERT_FALSE(button.update(false, false, false, 139).released);
+    TEST_ASSERT_TRUE(button.update(false, false, false, 140).released);
+}
+
+void test_power_button_filter_keeps_a_press_across_usb_removal() {
+    chatesp::PowerButtonFilter button{30};
+    button.reset(false, 100);
+
+    TEST_ASSERT_FALSE(button.update(true, false, false, 110).pressed);
+    TEST_ASSERT_TRUE(button.update(false, false, false, 140).pressed);
+    TEST_ASSERT_FALSE(button.update(false, false, true, 200).released);
+    TEST_ASSERT_FALSE(button.update(false, true, false, 300).released);
+    TEST_ASSERT_TRUE(button.update(false, false, false, 330).released);
+}
+
+void test_power_button_filter_rejects_key_edges_with_a_usb_event() {
+    chatesp::PowerButtonFilter button{30};
+    button.reset(false, 100);
+
+    TEST_ASSERT_FALSE(button.update(true, false, true, 110).pressed);
+    TEST_ASSERT_FALSE(button.update(false, false, false, 500).pressed);
+
+    button.reset(true, 600);
+    TEST_ASSERT_FALSE(button.update(false, true, true, 610).released);
+    TEST_ASSERT_FALSE(button.update(false, false, false, 1'000).released);
+}
+
+void test_power_button_filter_ignores_two_key_edges_in_one_poll() {
+    chatesp::PowerButtonFilter button{30};
+    button.reset(false, 100);
+
+    TEST_ASSERT_FALSE(button.update(true, true, false, 110).pressed);
+    TEST_ASSERT_FALSE(button.update(false, false, false, 500).pressed);
+}
+
 void test_short_wake_press_returns_to_idle() {
     InteractionStateMachine machine;
     machine.ready(100);
@@ -247,6 +307,12 @@ int main(int, char **) {
     RUN_TEST(test_error_returns_to_idle_after_visible_period);
     RUN_TEST(test_button_hold_preempts_active_work);
     RUN_TEST(test_button_debouncer_rejects_bounce_and_handles_wrap);
+    RUN_TEST(test_power_button_filter_rejects_usb_source_transitions);
+    RUN_TEST(test_power_button_filter_accepts_pmu_edges);
+    RUN_TEST(test_power_button_filter_accepts_release_without_an_exio_change);
+    RUN_TEST(test_power_button_filter_keeps_a_press_across_usb_removal);
+    RUN_TEST(test_power_button_filter_rejects_key_edges_with_a_usb_event);
+    RUN_TEST(test_power_button_filter_ignores_two_key_edges_in_one_poll);
     RUN_TEST(test_short_wake_press_returns_to_idle);
     RUN_TEST(test_held_wake_press_records_until_release);
     return UNITY_END();

@@ -113,7 +113,7 @@ public:
             return agent::Error::unsupported_media;
         }
         if (content_length > static_cast<std::int64_t>(buffer_.capacity())) {
-            return agent::Error::limit_exceeded;
+            return agent::Error::response_too_large;
         }
         return agent::Error::none;
     }
@@ -121,7 +121,7 @@ public:
     agent::Error write(
         const std::uint8_t *data, std::size_t size) override {
         return buffer_.append(data, size) ? agent::Error::none
-                                          : agent::Error::limit_exceeded;
+                                          : agent::Error::response_too_large;
     }
 
     agent::Error finish() override {
@@ -157,7 +157,7 @@ public:
         }
         if (content_length >
             static_cast<std::int64_t>(agent::Limits::max_chat_response_bytes)) {
-            return agent::Error::limit_exceeded;
+            return agent::Error::response_too_large;
         }
         return cancellation_.cancelled() ? agent::Error::cancelled
                                          : agent::Error::none;
@@ -605,8 +605,12 @@ agent::Error OpenRouterSpeechProvider::speak(
     }
     agent::SpeechRequestBody body;
     if (error == agent::Error::none) {
+        const agent::OpenRouterConfig speech_config =
+            agent::openrouter_speech_config_for_language(
+                connection_.models,
+                language_.load(std::memory_order_acquire));
         error = agent::build_openrouter_speech_request(
-            connection_.models, text, size, body);
+            speech_config, text, size, body);
     }
     std::array<char, kAuthorizationBytes> authorization{};
     if (error == agent::Error::none) {
@@ -667,8 +671,12 @@ agent::Error OpenRouterSpeechProvider::speak_segments(
         }
 
         agent::SpeechRequestBody body;
+        const agent::OpenRouterConfig speech_config =
+            agent::openrouter_speech_config_for_language(
+                connection_.models,
+                language_.load(std::memory_order_acquire));
         error = agent::build_openrouter_speech_request(
-            connection_.models, segment.data(), segment.size(), body);
+            speech_config, segment.data(), segment.size(), body);
         ESP_LOGI(
             kTag, "Phase event: TTS request %u",
             static_cast<unsigned>(segment_count + 1));

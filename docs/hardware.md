@@ -44,7 +44,10 @@ The app disables the AXP2101 automatic long-hold shutdown while the PWR button
 is pressed. This lets a recording continue for more than six seconds. It
 restores hardware long-hold shutdown when the button is released. The top BOOT
 button is GPIO0. It has no normal app action and stays available for firmware
-recovery.
+recovery. Firmware uses the EXIO4 level only to detect a held key at start.
+During operation, it uses AXP2101 PWRON edge events. On the connected V2 board,
+EXIO4 stayed active after key release during battery operation. Firmware rejects
+an edge sample that also contains a USB power-source event.
 
 ## Power behavior
 
@@ -71,6 +74,10 @@ The connected V2 board must pass these checks for this control change:
 - a held bottom PWR press shows `LISTENING`, and release shows `TRANSCRIBING`;
 - a held PWR press longer than six seconds does not stop the board during a
   recording;
+- unplugging or reconnecting USB power does not start, stop, or submit a
+  recording;
+- with USB disconnected, a held PWR press starts recording and its release
+  submits without a USB reconnection;
 - a short PWR press from idle turns the screen off and requests system-off;
 - 30 seconds without input turns the screen off and requests system-off;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
@@ -83,6 +90,8 @@ The connected V2 board must pass these checks for this control change:
   does not stop microphone capture;
 - speech starts from the first complete sentence while later answer text and
   TTS segments continue. Segment order is correct and the codec stays active;
+- an English answer uses the `af_heart` Kokoro voice, a French answer uses
+  `ff_siwis`, and the internal language tag is not visible or spoken;
 - a fast PCM transfer starts after the 200 ms prebuffer. A slow first segment
   buffers before playback so that audio stays clear;
 - a new held press returns to `LISTENING` within 250 ms and stops model, TTS,

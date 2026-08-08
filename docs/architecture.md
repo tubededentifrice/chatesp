@@ -28,7 +28,10 @@ The bottom PWR-button duration selects the action. A press shorter than the
 recording threshold requests sleep. A held press cancels active work or speech
 and starts audio capture. Release ends the capture and submits it. A held wake
 continues into audio capture. The exact threshold is a tested configuration
-value.
+value. At start, the power module uses the IO-expander level to detect a held
+PWR key. During operation, it uses debounced AXP2101 PWR-key edge events. It
+rejects a PWR-key event when the same PMU sample contains a USB power-source
+event. A USB power-source change does not start or submit a recording.
 
 The button poll runs separately from cloud work. A button press cancels active
 audio and HTTPS work. A separate bounded task shows BLE passkeys, but a voice
@@ -68,7 +71,15 @@ turn instead of giving the model a false time.
 OpenRouter sends that answer as an event stream. The UI receives bounded copies
 of the complete answer so far. It limits display updates to keep the button and
 network paths responsive. Tool-call data cannot enter the answer or speech
-path. Only the final validated answer enters chat history.
+path. The model stream has a 128,000-byte response limit and a 16,384-byte
+line limit. These limits include provider event framing. They do not increase
+the answer, tool argument, or spoken-text limits. The answer starts with one
+bounded internal language tag. The stream
+parser removes this tag before the display, speech queue, and chat history. It
+uses `af_heart` for an English Kokoro answer and `ff_siwis` for a French Kokoro
+answer. A missing tag uses English for compatibility. An invalid language tag
+stops the answer before it can reach the user. Only the final validated answer
+enters chat history.
 
 The answer stream forms a segment at a question mark, exclamation mark,
 newline, or safe period. After 96 bytes, a comma, semicolon, or colon is also a
@@ -134,6 +145,7 @@ The system prompt tells the model to:
 - reply in the language of the current user question;
 - ask one short clarifying question when needed;
 - avoid Markdown unless it materially helps the display;
+- identify an English or French answer with one internal language tag;
 - use a tool only when current or visual information is necessary;
 - never expose tool protocol or hidden reasoning.
 

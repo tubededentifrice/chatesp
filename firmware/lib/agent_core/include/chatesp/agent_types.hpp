@@ -14,6 +14,8 @@ enum class Error : std::uint8_t {
     none,
     invalid_argument,
     limit_exceeded,
+    request_too_large,
+    response_too_large,
     malformed_response,
     cancelled,
     connect_timeout,
@@ -36,6 +38,11 @@ enum class MessageRole : std::uint8_t {
     assistant,
     assistant_tool_call,
     tool,
+};
+
+enum class SpeechLanguage : std::uint8_t {
+    english,
+    french,
 };
 
 struct ToolInvocation {
@@ -93,11 +100,13 @@ enum class ChatTurnKind : std::uint8_t { answer, tool_call };
 
 struct ChatTurn {
     ChatTurnKind kind = ChatTurnKind::answer;
+    SpeechLanguage speech_language = SpeechLanguage::english;
     FixedText<Limits::max_answer_bytes> answer;
     ToolInvocation tool_call;
 
     void clear() {
         kind = ChatTurnKind::answer;
+        speech_language = SpeechLanguage::english;
         answer.clear();
         tool_call.id.clear();
         tool_call.name.clear();

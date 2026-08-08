@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <string_view>
 
@@ -108,6 +109,9 @@ public:
     agent::Error speak_segments(
         SegmentSource &source, agent::PcmSink &sink,
         agent::CancellationToken &cancellation) override;
+    void set_language(agent::SpeechLanguage language) override {
+        language_.store(language, std::memory_order_release);
+    }
     void set_connection(const OpenRouterConnectionView &connection) {
         connection_ = connection;
     }
@@ -117,6 +121,8 @@ private:
     transport::HttpTransport &transport_;
     network::NetworkManager &network_;
     OpenRouterConnectionView connection_;
+    std::atomic<agent::SpeechLanguage> language_{
+        agent::SpeechLanguage::english};
 };
 
 class BraveWebSearchProvider final : public agent::WebSearchProvider {

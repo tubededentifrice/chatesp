@@ -58,10 +58,12 @@ agent::Error StreamingPcmResponseSink::begin(
         return media_error;
     }
     if (content_length == 0 ||
-        content_length >
-            static_cast<std::int64_t>(agent::Limits::max_tts_pcm_bytes) ||
         (content_length > 0 && content_length % 2 != 0)) {
         return agent::Error::malformed_response;
+    }
+    if (content_length >
+        static_cast<std::int64_t>(agent::Limits::max_tts_pcm_bytes)) {
+        return agent::Error::response_too_large;
     }
     if (cancellation_.cancelled()) {
         return agent::Error::cancelled;
@@ -73,11 +75,13 @@ agent::Error StreamingPcmResponseSink::begin(
             return start_error;
         }
     }
-    if (response_active_ || producer_done_ ||
-        (content_length > 0 &&
-         static_cast<std::size_t>(content_length) >
-             kMaximumBufferBytes - total_bytes_)) {
+    if (response_active_ || producer_done_) {
         return agent::Error::limit_exceeded;
+    }
+    if (content_length > 0 &&
+        static_cast<std::size_t>(content_length) >
+            kMaximumBufferBytes - total_bytes_) {
+        return agent::Error::response_too_large;
     }
     response_active_ = true;
     response_bytes_ = 0;
@@ -131,7 +135,7 @@ agent::Error StreamingPcmResponseSink::write(
     }
     if (size > agent::Limits::max_tts_pcm_bytes - total_bytes_) {
         request_stop();
-        return agent::Error::limit_exceeded;
+        return agent::Error::response_too_large;
     }
 
     std::size_t offset = 0;
@@ -179,7 +183,7 @@ agent::Error StreamingPcmResponseSink::write(
         }
         if (total_bytes_ >= buffer_capacity_) {
             request_stop();
-            return agent::Error::limit_exceeded;
+            return agent::Error::response_too_large;
         }
         const EventBits_t bits = xEventGroupWaitBits(
             events_, kSpaceReadyBit | kWorkerDoneBit, pdFALSE, pdFALSE,

@@ -65,7 +65,7 @@ agent::Error validate_request(const HttpRequest &request) {
         return limit_error;
     }
     if (body_size > INT_MAX) {
-        return agent::Error::limit_exceeded;
+        return agent::Error::request_too_large;
     }
     if (request.method == HttpMethod::get &&
         request.body != nullptr && request.body->size() != 0) {
@@ -268,7 +268,7 @@ agent::Error HttpTransport::execute(
     std::size_t response_bytes = 0;
     agent::FixedText<max_http_url_bytes> current_url;
     if (!current_url.assign(request.url)) {
-        return agent::Error::limit_exceeded;
+        return agent::Error::request_too_large;
     }
 
     for (std::uint8_t redirect_count = 0;; ++redirect_count) {
@@ -350,7 +350,7 @@ agent::Error HttpTransport::execute(
                              ? agent::Error::first_byte_timeout
                              : agent::Error::disconnected;
             } else if (response_headers_.invalid) {
-                result = agent::Error::limit_exceeded;
+                result = agent::Error::response_too_large;
             }
         }
 
@@ -405,7 +405,7 @@ agent::Error HttpTransport::execute(
                     break;
                 }
                 if (!budget.accept(static_cast<std::size_t>(read))) {
-                    result = agent::Error::limit_exceeded;
+                    result = agent::Error::response_too_large;
                     break;
                 }
                 result = sink.write(

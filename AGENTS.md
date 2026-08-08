@@ -91,6 +91,9 @@ Some files can be absent during initial setup. Read them when they exist.
 
 ## Change workflow
 
+Other agents can work in this repository at the same time. Do not revert their
+changes. Adapt your work to the current worktree.
+
 1. Inspect Git status and preserve changes that do not belong to the task.
 2. Identify user-visible, hardware, protocol, privacy, and power effects.
 3. Update source, tests, and the authoritative documents together.

@@ -41,7 +41,7 @@ agent::Error PcmPlaybackSink::write(
         return output_error_;
     }
     if (size > agent::Limits::max_tts_pcm_bytes - byte_count_) {
-        output_error_ = agent::Error::limit_exceeded;
+        output_error_ = agent::Error::response_too_large;
         return output_error_;
     }
     if (playback_.cancelled()) {

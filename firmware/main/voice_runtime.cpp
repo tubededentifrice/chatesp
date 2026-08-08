@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <new>
 #include <optional>
@@ -362,8 +363,12 @@ const char *error_message(agent::Error error) {
             return "THE REQUEST TOOK TOO LONG";
         case agent::Error::unsupported_media:
             return "THE AUDIO FORMAT WAS NOT VALID";
-        case agent::Error::limit_exceeded:
+        case agent::Error::request_too_large:
             return "THE REQUEST WAS TOO LARGE";
+        case agent::Error::response_too_large:
+            return "THE MODEL RESPONSE WAS TOO LARGE";
+        case agent::Error::limit_exceeded:
+            return "A DEVICE LIMIT WAS EXCEEDED";
         default:
             return "PLEASE TRY THE REQUEST AGAIN";
     }
@@ -640,6 +645,15 @@ public:
             stream_text_shown_ = true;
             stream_text_refreshed_at_ms_ = now_ms;
         }
+        return agent::Error::none;
+    }
+
+    agent::Error set_speech_language(
+        agent::SpeechLanguage language) override {
+        if (cancellation_.cancelled()) {
+            return agent::Error::cancelled;
+        }
+        speech_provider_.set_language(language);
         return agent::Error::none;
     }
 
@@ -1379,6 +1393,7 @@ private:
         SecureTextGuard answer_guard(answer);
         SecureTextGuard stream_answer_guard(
             request_scratch_->stream_answer);
+        speech_provider_.set_language(agent::SpeechLanguage::english);
         if (!start_speech_worker(request_cancellation)) {
             fail("SPEECH PIPELINE COULD NOT START");
             return;
@@ -1459,10 +1474,13 @@ private:
                 kTag,
                 "Speech output failed (category %u)",
                 static_cast<unsigned>(error));
-            with_display([&answer]() {
+            char speech_notice[32]{};
+            std::snprintf(
+                speech_notice, sizeof(speech_notice), "SPEECH ERROR %u",
+                static_cast<unsigned>(error));
+            with_display([&answer, &speech_notice]() {
                 ui::show_answer_notice(
-                    {answer.data(), answer.size()},
-                    "SPEECH TEMPORARILY UNAVAILABLE");
+                    {answer.data(), answer.size()}, speech_notice);
             });
         }
 

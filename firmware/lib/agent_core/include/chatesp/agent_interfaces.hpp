@@ -49,6 +49,11 @@ class ChatTextSink {
 public:
     virtual ~ChatTextSink() = default;
 
+    // A streaming provider reports the language before it publishes text.
+    virtual Error set_speech_language(SpeechLanguage) {
+        return Error::none;
+    }
+
     // Text is private user content. The sink must not log or retain it after
     // the active request. Each update is the complete answer received so far.
     virtual Error write_chat_text(const char *text, std::size_t size) = 0;
@@ -77,6 +82,11 @@ public:
         if (error != Error::none || cancellation.cancelled() ||
             turn.kind != ChatTurnKind::answer || turn.answer.empty()) {
             return cancellation.cancelled() ? Error::cancelled : error;
+        }
+        const Error language_error =
+            text_sink.set_speech_language(turn.speech_language);
+        if (language_error != Error::none) {
+            return language_error;
         }
         return text_sink.write_chat_text(
             turn.answer.data(), turn.answer.size());
@@ -121,6 +131,7 @@ public:
 class SpeechProvider {
 public:
     virtual ~SpeechProvider() = default;
+    virtual void set_language(SpeechLanguage) {}
     virtual Error speak(
         const char *text, std::size_t size, PcmSink &sink,
         CancellationToken &cancellation) = 0;
