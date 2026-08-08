@@ -12,6 +12,8 @@ class SimulatorPackageTests(unittest.TestCase):
     def test_package_has_a_standalone_boundary(self) -> None:
         cmake = (SIMULATOR_ROOT / "CMakeLists.txt").read_text()
         self.assertIn("CHATESP_APP_CORE_DIR", cmake)
+        self.assertIn("CHATESP_PROVISIONING_CORE_DIR", cmake)
+        self.assertIn("CHATESP_BLE_CORE_DIR", cmake)
         self.assertNotIn("firmware/main", cmake)
         self.assertTrue((SIMULATOR_ROOT / "LICENSE").is_file())
         self.assertTrue((SIMULATOR_ROOT / "ARCHITECTURE.md").is_file())
@@ -79,6 +81,25 @@ class SimulatorPackageTests(unittest.TestCase):
             text = scenario.read_text().lower()
             for value in forbidden:
                 self.assertNotIn(value, text, scenario)
+
+    def test_ble_simulator_uses_real_portable_firmware_cores(self) -> None:
+        cmake = (SIMULATOR_ROOT / "CMakeLists.txt").read_text()
+        implementation = (SIMULATOR_ROOT / "src" / "ble_simulator.cpp").read_text()
+        interface = (
+            SIMULATOR_ROOT
+            / "include"
+            / "chatesp"
+            / "simulator"
+            / "ble_simulator.hpp"
+        ).read_text()
+        build_tool = (SIMULATOR_ROOT / "tools" / "build.py").read_text()
+        self.assertIn("provisioning_packet.cpp", cmake)
+        self.assertIn("provisioning_transfer.cpp", cmake)
+        self.assertIn("provisioning_session.cpp", cmake)
+        self.assertIn("SettingsRecord", interface)
+        self.assertIn("ProvisioningSession", implementation)
+        self.assertIn("-fsanitize=address,undefined", build_tool)
+        self.assertIn("kMaximumBleFuzzCases = 100'000", interface)
 
 
 if __name__ == "__main__":

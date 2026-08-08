@@ -43,6 +43,23 @@ canonical `PWD` and cache path. It also removes only the generated ChatESP devic
 directory when stored build data contains a path alias. It does not remove
 source files or a complete tool cache.
 
+## Reproduce product and BLE faults locally
+
+Build the desktop simulator and run all scenarios with memory checks:
+
+```sh
+uv run --locked python simulator/tools/build.py --test --sanitize
+```
+
+Run `simulator/.build/chatesp-sim` without arguments for the line command
+protocol. Use `ble connect`, `ble pair`, `ble provision`, `ble radio`,
+`ble reboot`, and `ble fuzz` to reproduce one flow. Each command writes one
+bounded JSON state record. Use an explicit seed for a repeatable fuzz run.
+
+The simulator compiles the real portable app, packet, transfer, settings, and
+provisioning-session code. It does not compile ESP-IDF or NimBLE. A local pass
+does not close a physical board or iPhone gate.
+
 ## Improve a repeatable workflow
 
 When a tool or workflow fails:

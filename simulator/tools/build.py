@@ -31,26 +31,33 @@ def compiler() -> str:
     raise RuntimeError("A C++17 compiler is required")
 
 
-def default_app_core_root() -> Path:
-    configured = os.environ.get("CHATESP_APP_CORE_DIR")
+def default_core_root(environment_name: str, directory_name: str, marker: str) -> Path:
+    configured = os.environ.get(environment_name)
     candidates = [
         Path(configured).expanduser() if configured else None,
-        REPOSITORY_ROOT / "firmware" / "lib" / "app_core",
-        SIMULATOR_ROOT / "app_core",
+        REPOSITORY_ROOT / "firmware" / "lib" / directory_name,
+        SIMULATOR_ROOT / directory_name,
     ]
     for candidate in candidates:
-        if candidate is not None and (
-            candidate / "src" / "interaction_state.cpp"
-        ).is_file():
+        if candidate is not None and (candidate / "src" / marker).is_file():
             return candidate.resolve()
     raise RuntimeError(
-        "Set CHATESP_APP_CORE_DIR to the portable ChatESP app_core library"
+        f"Set {environment_name} to the portable ChatESP {directory_name} library"
     )
 
 
-def common_sources(app_core_root: Path) -> list[Path]:
+def common_sources(
+    app_core_root: Path,
+    provisioning_core_root: Path,
+    ble_core_root: Path,
+) -> list[Path]:
     return [
         app_core_root / "src" / "interaction_state.cpp",
+        provisioning_core_root / "src" / "provisioning_packet.cpp",
+        provisioning_core_root / "src" / "provisioning_transfer.cpp",
+        ble_core_root / "src" / "ble_settings.cpp",
+        ble_core_root / "src" / "provisioning_session.cpp",
+        SIMULATOR_ROOT / "src" / "ble_simulator.cpp",
         SIMULATOR_ROOT / "src" / "simulator.cpp",
         SIMULATOR_ROOT / "src" / "svg_renderer.cpp",
     ]
@@ -62,6 +69,8 @@ def compile_target(
     entry: Path,
     *,
     app_core_root: Path,
+    provisioning_core_root: Path,
+    ble_core_root: Path,
     sanitize: bool,
 ) -> None:
     flags = [
@@ -74,6 +83,8 @@ def compile_target(
         "-g",
         f"-I{SIMULATOR_ROOT / 'include'}",
         f"-I{app_core_root / 'include'}",
+        f"-I{provisioning_core_root / 'include'}",
+        f"-I{ble_core_root / 'include'}",
     ]
     if sanitize:
         flags.extend(
@@ -85,7 +96,12 @@ def compile_target(
     command = [
         compiler_path,
         *flags,
-        *(str(path) for path in common_sources(app_core_root)),
+        *(
+            str(source)
+            for source in common_sources(
+                app_core_root, provisioning_core_root, ble_core_root
+            )
+        ),
         str(entry),
         "-o",
         str(output),
@@ -135,6 +151,16 @@ def parse_args() -> argparse.Namespace:
         help="Path to the portable ChatESP app_core library",
     )
     parser.add_argument(
+        "--provisioning-core-dir",
+        type=Path,
+        help="Path to the portable ChatESP provisioning_core library",
+    )
+    parser.add_argument(
+        "--ble-core-dir",
+        type=Path,
+        help="Path to the portable ChatESP ble_core library",
+    )
+    parser.add_argument(
         "--sanitize",
         action="store_true",
         help="Enable address and undefined-behavior sanitizers",
@@ -147,7 +173,25 @@ def main() -> int:
     app_core_root = (
         args.app_core_dir.expanduser().resolve()
         if args.app_core_dir is not None
-        else default_app_core_root()
+        else default_core_root(
+            "CHATESP_APP_CORE_DIR", "app_core", "interaction_state.cpp"
+        )
+    )
+    provisioning_core_root = (
+        args.provisioning_core_dir.expanduser().resolve()
+        if args.provisioning_core_dir is not None
+        else default_core_root(
+            "CHATESP_PROVISIONING_CORE_DIR",
+            "provisioning_core",
+            "provisioning_packet.cpp",
+        )
+    )
+    ble_core_root = (
+        args.ble_core_dir.expanduser().resolve()
+        if args.ble_core_dir is not None
+        else default_core_root(
+            "CHATESP_BLE_CORE_DIR", "ble_core", "provisioning_session.cpp"
+        )
     )
     if not (app_core_root / "src" / "interaction_state.cpp").is_file():
         raise RuntimeError("The ChatESP app_core source is not available")
@@ -159,6 +203,8 @@ def main() -> int:
         simulator_binary,
         SIMULATOR_ROOT / "src" / "main.cpp",
         app_core_root=app_core_root,
+        provisioning_core_root=provisioning_core_root,
+        ble_core_root=ble_core_root,
         sanitize=args.sanitize,
     )
     if args.test:
@@ -168,6 +214,8 @@ def main() -> int:
             test_binary,
             SIMULATOR_ROOT / "tests" / "test_simulator.cpp",
             app_core_root=app_core_root,
+            provisioning_core_root=provisioning_core_root,
+            ble_core_root=ble_core_root,
             sanitize=args.sanitize,
         )
         run_tests(simulator_binary, test_binary)

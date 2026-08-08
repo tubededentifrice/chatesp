@@ -176,6 +176,19 @@ uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run -e watch_dev
 ```
 
+Run the complete local product and BLE simulator with address and
+undefined-behavior checks:
+
+```sh
+uv run --locked python simulator/tools/build.py --test --sanitize
+```
+
+The simulator runs the real portable firmware state and provisioning cores. It
+models passkey pairing, secure-link rejection, disconnect and acknowledgement
+loss, bounded retry, bond restart behavior, storage failure, and malformed BLE
+frames. It does not replace the physical-iPhone, NimBLE, AMOLED, audio, or power
+acceptance gates. See [the simulator guide](simulator/README.md).
+
 Upload the development image:
 
 ```sh
@@ -220,6 +233,7 @@ recovery procedure, and local credential setup. Read the
 - [Development mode](docs/development-mode.md): safe firmware work and
   recovery.
 - [Agent tooling](docs/agent-tooling.md): task and tool procedures.
+- [Simulator](simulator/README.md): local product, BLE, fault, and crash tests.
 
 Never put credentials in tracked files. Local development values belong in
 `.secrets/device.env`, which Git ignores.

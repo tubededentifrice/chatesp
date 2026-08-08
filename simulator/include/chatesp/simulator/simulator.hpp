@@ -9,6 +9,7 @@
 #include "chatesp/app_mode.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/quick_controls.hpp"
+#include "chatesp/simulator/ble_simulator.hpp"
 
 namespace chatesp::simulator {
 
@@ -47,6 +48,7 @@ struct Snapshot {
     bool controls_open = false;
     bool return_to_clock_pending = false;
     bool clock_network_shutdown_pending = false;
+    BleSnapshot ble{};
 };
 
 struct DisplayView {
@@ -78,6 +80,18 @@ public:
     bool set_clock_time(bool available, ClockTime time = {});
     void set_wifi(WifiState state);
     bool set_battery(bool available, std::uint32_t percent = 0);
+    bool ble_connect();
+    bool ble_confirm_pairing(std::uint32_t passkey);
+    bool ble_reject_pairing();
+    bool ble_disconnect();
+    void ble_start_radio();
+    void ble_stop_radio();
+    void ble_restart_radio();
+    void ble_reboot();
+    bool ble_provision(
+        std::uint32_t revision,
+        BleFault fault = BleFault::none);
+    bool ble_fuzz(std::size_t cases, std::uint32_t seed);
 
     [[nodiscard]] Snapshot snapshot() const;
     [[nodiscard]] DisplayView display_view() const;
@@ -97,6 +111,7 @@ private:
 
     const bool development_mode_;
     InteractionStateMachine interaction_;
+    BleSimulator ble_;
     ShortPressGesture mode_button_;
     QuickControlsGesture controls_;
     AppMode mode_ = AppMode::chat;

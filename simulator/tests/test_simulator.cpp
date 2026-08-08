@@ -252,6 +252,218 @@ void test_large_advance_is_bounded_and_keeps_intermediate_time() {
         "failed advance must not change time");
 }
 
+void test_ble_pairing_security_and_retry_flow() {
+    Simulator simulator(true);
+    check(simulator.ready(), "BLE simulator must become ready");
+    check(simulator.ble_connect(), "BLE connection must start pairing");
+    check(
+        simulator.snapshot().ble.state ==
+            chatesp::simulator::BleState::pairing,
+        "unbonded BLE connection must require pairing");
+    check(
+        simulator.snapshot().pairing_code_visible,
+        "BLE pairing must show the passkey on the simulated display");
+    check(
+        simulator.mode_button(100),
+        "mode change during BLE pairing must be processed");
+    check(
+        simulator.snapshot().pairing_code_visible,
+        "Clock entry must not hide an active BLE passkey");
+    check(
+        simulator.snapshot().orientation == DisplayOrientation::chat,
+        "active BLE pairing must keep the portrait orientation");
+    check(
+        simulator.ble_provision(1),
+        "insecure provisioning attempt must be processed");
+    check(
+        simulator.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::authentication_required,
+        "insecure provisioning must be rejected");
+    check(
+        simulator.snapshot().ble.storage_writes == 0,
+        "insecure provisioning must not write settings");
+    check(
+        simulator.ble_confirm_pairing(123'456),
+        "matching passkey must complete pairing");
+    check(simulator.snapshot().ble.secure, "paired link must be secure");
+    check(simulator.snapshot().ble.bonded, "paired link must be bonded");
+    check(
+        !simulator.snapshot().pairing_code_visible,
+        "completed pairing must hide the passkey");
+    check(
+        simulator.snapshot().orientation == DisplayOrientation::clock,
+        "pairing completion must restore the Clock orientation");
+    check(simulator.ble_provision(1), "secure provisioning must run");
+    check(
+        simulator.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::applied,
+        "first secure provisioning must apply");
+    check(
+        simulator.snapshot().ble.storage_writes == 1,
+        "first secure provisioning must write once");
+
+    check(
+        simulator.ble_provision(
+            2, chatesp::simulator::BleFault::drop_acknowledgement),
+        "dropped acknowledgement simulation must run");
+    check(
+        simulator.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::unchanged,
+        "retry after a dropped acknowledgement must return unchanged");
+    check(
+        simulator.snapshot().ble.attempts == 2,
+        "dropped acknowledgement must cause one bounded retry");
+    check(
+        simulator.snapshot().ble.state ==
+            chatesp::simulator::BleState::connected,
+        "acknowledgement retry must keep the secure connection");
+    check(
+        simulator.snapshot().ble.storage_writes == 2,
+        "retry must not cause a second settings write");
+}
+
+void test_ble_faults_recover_without_partial_state() {
+    Simulator simulator(true);
+    check(simulator.ready(), "BLE fault simulator must become ready");
+    check(simulator.ble_connect(), "BLE fault connection must start");
+    check(simulator.ble_confirm_pairing(123'456), "BLE fault pairing failed");
+    check(simulator.ble_provision(1), "initial BLE settings must apply");
+
+    check(
+        simulator.ble_provision(
+            2, chatesp::simulator::BleFault::corrupt_data),
+        "corrupt BLE transfer must be processed");
+    check(
+        simulator.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::malformed_transfer,
+        "corrupt BLE data must be rejected as a malformed transfer");
+    check(
+        simulator.snapshot().ble.active_revision == 1,
+        "corrupt BLE data must keep the old revision");
+
+    check(
+        simulator.ble_provision(
+            2, chatesp::simulator::BleFault::storage_failure),
+        "BLE storage failure must be processed");
+    check(
+        simulator.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::storage_failure,
+        "storage failure must not report applied");
+    check(
+        simulator.snapshot().ble.active_revision == 1,
+        "storage failure must keep the old revision");
+
+    check(
+        simulator.ble_provision(
+            2, chatesp::simulator::BleFault::disconnect_after_data),
+        "mid-transfer disconnect must be processed");
+    check(
+        simulator.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::disconnected,
+        "mid-transfer disconnect must fail the active iOS request");
+    check(
+        simulator.snapshot().ble.attempts == 1,
+        "mid-transfer disconnect must not retry the iOS request");
+    check(
+        simulator.snapshot().ble.storage_writes == 1,
+        "mid-transfer disconnect must not write partial settings");
+    check(
+        simulator.ble_connect(),
+        "bonded device must reconnect after a transfer disconnect");
+    check(
+        simulator.ble_provision(2),
+        "a new request after reconnect must apply");
+    check(
+        simulator.snapshot().ble.active_revision == 2,
+        "a new request must apply only after reconnect");
+}
+
+void test_ble_bond_restart_and_sanitized_fuzz() {
+    Simulator rejected(true);
+    check(rejected.ready(), "rejected pairing simulator must be ready");
+    check(rejected.ble_connect(), "rejected pairing must connect");
+    check(rejected.ble_reject_pairing(), "pairing rejection must run");
+    check(
+        rejected.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::pairing_failed,
+        "pairing rejection must report failure");
+    check(
+        rejected.snapshot().ble.state ==
+            chatesp::simulator::BleState::advertising,
+        "pairing rejection must return to advertising");
+    check(rejected.ble_connect(), "second pairing attempt must connect");
+    check(
+        rejected.ble_confirm_pairing(123'456),
+        "wrong passkey must be processed");
+    check(
+        rejected.snapshot().ble.outcome ==
+            chatesp::simulator::BleOutcome::pairing_failed,
+        "wrong passkey must fail pairing");
+
+    Simulator development(true);
+    check(development.ready(), "development BLE simulator must be ready");
+    check(development.ble_connect(), "development BLE connect failed");
+    check(
+        development.ble_confirm_pairing(123'456),
+        "development BLE pairing failed");
+    development.ble_restart_radio();
+    check(
+        development.ble_connect(),
+        "development BLE radio restart must reconnect");
+    check(
+        development.snapshot().ble.secure,
+        "radio restart must retain the in-memory bond");
+    development.ble_reboot();
+    check(
+        !development.snapshot().ble.bonded,
+        "development cold restart must clear the bond");
+
+    Simulator production(false);
+    check(production.ready(), "production BLE simulator must be ready");
+    check(production.ble_connect(), "production BLE connect failed");
+    check(
+        production.ble_confirm_pairing(123'456),
+        "production BLE pairing failed");
+    check(production.ble_provision(1), "production BLE settings failed");
+    production.ble_reboot();
+    check(
+        production.snapshot().ble.bonded,
+        "production cold restart must retain the bond");
+    check(
+        production.snapshot().ble.active_revision == 1,
+        "production cold restart must retain settings metadata");
+
+    check(
+        !production.ble_fuzz(0, 1),
+        "zero BLE fuzz cases must be rejected");
+    check(
+        !production.ble_fuzz(
+            chatesp::simulator::kMaximumBleFuzzCases + 1, 1),
+        "an excessive BLE fuzz run must be rejected");
+    check(
+        production.ble_fuzz(20'000, 0x1234abcdU),
+        "bounded BLE protocol fuzz run must complete");
+    check(
+        production.snapshot().ble.fuzz_cases == 20'000,
+        "BLE fuzz run must report its bounded case count");
+
+    Simulator voice(true);
+    check(voice.ready(), "voice BLE simulator must be ready");
+    check(voice.ble_connect(), "voice BLE connection must start");
+    check(voice.ble_confirm_pairing(123'456), "voice BLE pairing failed");
+    check(voice.action_button(true), "recording press must start");
+    check(voice.advance(600), "recording hold must advance");
+    check(voice.action_button(false), "recording release must submit");
+    check(
+        voice.snapshot().ble.state == chatesp::simulator::BleState::off,
+        "voice request must stop BLE");
+    check(voice.fail_interaction(), "voice request failure must run");
+    check(
+        voice.snapshot().ble.state ==
+            chatesp::simulator::BleState::advertising,
+        "voice request completion must restart BLE advertising");
+}
+
 }  // namespace
 
 int main() {
@@ -263,6 +475,9 @@ int main() {
     test_invalid_text_and_wake_paths();
     test_large_advance_is_bounded_and_keeps_intermediate_time();
     test_answer_limit_and_clock_network_window();
+    test_ble_pairing_security_and_retry_flow();
+    test_ble_faults_recover_without_partial_state();
+    test_ble_bond_restart_and_sanitized_fuzz();
     if (failures != 0) {
         std::cerr << failures << " simulator test(s) failed\n";
         return EXIT_FAILURE;

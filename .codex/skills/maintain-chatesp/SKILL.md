@@ -78,12 +78,14 @@ uv sync --locked
 uv run --locked python -m unittest discover -s tests -p 'test_*.py'
 uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run
+uv run --locked python simulator/tools/build.py --test --sanitize
 uv run --locked python tools/check_secrets.py
 ```
 
 Run only applicable firmware commands while firmware profiles are not yet
-present. Run iOS commands from `ios/README.md` for each iOS change. Do not use
-bare Python package tools or global PlatformIO.
+present. Run the simulator command for portable product-state or BLE protocol
+work. Run iOS commands from `ios/README.md` for each iOS change. Do not use bare
+Python package tools or global PlatformIO.
 
 For a black display, or after a display or power change, run:
 

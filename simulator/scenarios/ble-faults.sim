@@ -1,0 +1,8 @@
+ready
+ble connect
+ble pair 123456
+ble provision 1
+ble provision 2 corrupt-data
+ble provision 2 storage-failure
+ble provision 2 disconnect-after-control
+ble fuzz 10000 305419896

@@ -90,13 +90,15 @@ bool valid_private_text(std::string_view text) {
 
 Simulator::Simulator(bool development_mode)
     : development_mode_(development_mode),
-      interaction_(interaction_config_for_mode(development_mode)) {
+      interaction_(interaction_config_for_mode(development_mode)),
+      ble_(development_mode) {
     refresh_controls_allowed();
 }
 
 void Simulator::reset() {
     interaction_ = InteractionStateMachine(
         interaction_config_for_mode(development_mode_));
+    ble_.factory_reset();
     mode_button_.cancel();
     controls_ = QuickControlsGesture();
     mode_ = AppMode::chat;
@@ -123,6 +125,7 @@ bool Simulator::ready() {
         return false;
     }
     interaction_.ready(now_ms_);
+    ble_.start_radio();
     refresh_controls_allowed();
     return true;
 }
@@ -155,6 +158,7 @@ void Simulator::process_time() {
 
     if (interaction_.state() == InteractionState::sleep_pending) {
         screen_on_ = false;
+        ble_.stop_radio();
         return_to_clock_pending_ = false;
         pairing_code_visible_ = false;
         controls_.set_allowed(false);
@@ -186,6 +190,7 @@ bool Simulator::action_button(bool pressed) {
                 interaction_config_for_mode(development_mode_));
             interaction_.ready(now_ms_);
             interaction_.wake_button_down(now_ms_);
+            ble_.start_radio();
             refresh_controls_allowed();
             return true;
         }
@@ -199,6 +204,9 @@ bool Simulator::action_button(bool pressed) {
             return false;
         }
         interaction_.button_up(now_ms_);
+        if (interaction_.state() == InteractionState::transcribing) {
+            ble_.stop_radio();
+        }
         process_time();
     }
     refresh_controls_allowed();
@@ -278,6 +286,7 @@ bool Simulator::finish_interaction() {
         return false;
     }
     interaction_.interaction_finished(now_ms_);
+    ble_.start_radio();
     return_to_clock_pending_ = true;
     refresh_controls_allowed();
     return true;
@@ -288,6 +297,7 @@ bool Simulator::fail_interaction() {
         return false;
     }
     interaction_.fail(now_ms_);
+    ble_.start_radio();
     return_to_clock_pending_ = false;
     clear_private_text();
     refresh_controls_allowed();
@@ -381,6 +391,69 @@ bool Simulator::set_battery(bool available, std::uint32_t percent) {
     return true;
 }
 
+bool Simulator::ble_connect() {
+    const bool accepted = ble_.connect();
+    const BleSnapshot state = ble_.snapshot();
+    if (accepted && state.passkey_visible) {
+        (void)show_pairing_code(state.passkey);
+    }
+    return accepted;
+}
+
+bool Simulator::ble_confirm_pairing(std::uint32_t passkey) {
+    const bool accepted = ble_.confirm_pairing(passkey);
+    if (accepted) {
+        hide_pairing_code();
+    }
+    return accepted;
+}
+
+bool Simulator::ble_reject_pairing() {
+    const bool accepted = ble_.reject_pairing();
+    if (accepted) {
+        hide_pairing_code();
+    }
+    return accepted;
+}
+
+bool Simulator::ble_disconnect() {
+    const bool accepted = ble_.disconnect();
+    if (accepted) {
+        hide_pairing_code();
+    }
+    return accepted;
+}
+
+void Simulator::ble_start_radio() { ble_.start_radio(); }
+
+void Simulator::ble_stop_radio() {
+    ble_.stop_radio();
+    hide_pairing_code();
+}
+
+void Simulator::ble_restart_radio() {
+    ble_.restart_radio();
+    hide_pairing_code();
+}
+
+void Simulator::ble_reboot() {
+    ble_.reboot();
+    hide_pairing_code();
+}
+
+bool Simulator::ble_provision(std::uint32_t revision, BleFault fault) {
+    const bool accepted = ble_.provision(revision, fault);
+    const BleSnapshot state = ble_.snapshot();
+    if (!state.passkey_visible) {
+        hide_pairing_code();
+    }
+    return accepted;
+}
+
+bool Simulator::ble_fuzz(std::size_t cases, std::uint32_t seed) {
+    return ble_.fuzz(cases, seed);
+}
+
 Snapshot Simulator::snapshot() const {
     Snapshot value;
     value.now_ms = now_ms_;
@@ -404,6 +477,7 @@ Snapshot Simulator::snapshot() const {
     value.return_to_clock_pending = return_to_clock_pending_;
     value.clock_network_shutdown_pending =
         clock_network_shutdown_pending_;
+    value.ble = ble_.snapshot();
     return value;
 }
 
@@ -446,6 +520,16 @@ std::string Simulator::status_json(bool ok) const {
            << (value.return_to_clock_pending ? "true" : "false")
            << ",\"clock_network_shutdown_pending\":"
            << (value.clock_network_shutdown_pending ? "true" : "false")
+           << ",\"ble\":{\"state\":\""
+           << ble_state_name(value.ble.state) << '"'
+           << ",\"secure\":" << (value.ble.secure ? "true" : "false")
+           << ",\"bonded\":" << (value.ble.bonded ? "true" : "false")
+           << ",\"outcome\":\""
+           << ble_outcome_name(value.ble.outcome) << '"'
+           << ",\"active_revision\":" << value.ble.active_revision
+           << ",\"attempts\":" << value.ble.attempts
+           << ",\"storage_writes\":" << value.ble.storage_writes
+           << ",\"fuzz_cases\":" << value.ble.fuzz_cases << '}'
            << '}';
     return output.str();
 }
@@ -494,7 +578,6 @@ void Simulator::enter_clock() {
     }
     interaction_.ready(now_ms_);
     return_to_clock_pending_ = false;
-    pairing_code_visible_ = false;
     controls_.set_open(false, now_ms_);
     clear_private_text();
 }

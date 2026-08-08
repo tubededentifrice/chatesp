@@ -80,6 +80,19 @@ before it. A separate five-second runtime heartbeat shows if the main runtime
 loop continued after its last recorded stage. The heartbeat does not use an
 event slot and does not change the event checksum.
 
+For a local reproduction before a board test, run:
+
+```sh
+uv run --locked python simulator/tools/build.py --test --sanitize
+```
+
+This runs the production portable app and BLE provisioning cores with address
+and undefined-behavior checks. It covers pairing state, insecure-link rejection,
+disconnects, retry, acknowledgement loss, storage failure, and malformed
+frames. It does not run NimBLE, Core Bluetooth, the ESP32 controller, or the
+physical memory layout. Use the retained crash trace and a physical board for
+those gates.
+
 A model `power_off` request uses the same development soft-sleep path. The
 model gives a short confirmation first. A PWR-button action can cancel the
 pending request before cleanup starts. After soft sleep, one PWR-button press

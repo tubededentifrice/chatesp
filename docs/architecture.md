@@ -257,6 +257,9 @@ PWR-button wake causes a cold boot and creates a new thread.
   optional connected iOS BLE manager. The ChatESP device is the source of truth.
 - `power`: inactivity, PWR-button input, peripheral shutdown, AXP2101
   system-off, and cold-boot reset.
+- `simulator`: desktop adapters around the portable app, provisioning, and BLE
+  cores. It models deterministic product input, pairing state, phone retries,
+  link faults, storage faults, and bounded malformed-frame tests.
 
 ## iOS settings model
 

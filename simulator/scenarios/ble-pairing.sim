@@ -1,0 +1,9 @@
+ready
+ble connect
+ble provision 1
+ble pair 123456
+ble provision 1
+ble provision 2 drop-ack
+ble disconnect
+ble connect
+ble provision 3 disconnect-after-data

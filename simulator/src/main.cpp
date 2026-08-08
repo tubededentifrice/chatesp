@@ -13,6 +13,7 @@
 namespace {
 
 using chatesp::ClockTime;
+using chatesp::simulator::BleFault;
 using chatesp::simulator::Simulator;
 using chatesp::simulator::WifiState;
 
@@ -66,6 +67,11 @@ void print_help(std::ostream &output) {
            "action down|up\nmode DURATION_MILLISECONDS\n"
            "transcript TEXT\ntool\nanswer TEXT\nfinish\nfail\n"
            "pairing show SIX_DIGIT_CODE\npairing hide\n"
+           "ble connect\nble pair SIX_DIGIT_CODE\nble reject\n"
+           "ble disconnect\nble radio on|off|restart\nble reboot\n"
+           "ble provision REVISION [none|disconnect-after-control|"
+           "disconnect-after-data|drop-ack|corrupt-data|storage-failure]\n"
+           "ble fuzz CASES SEED\n"
            "touch down X Y\ntouch up X Y\n"
            "controls brightness PERCENT\ncontrols volume PERCENT\n"
            "clock HH:MM:SS|unavailable\n"
@@ -103,6 +109,34 @@ CommandResult process_command(Simulator &simulator, std::string_view line) {
     }
     if (line == "pairing hide") {
         simulator.hide_pairing_code();
+        return CommandResult::accepted;
+    }
+    if (line == "ble connect") {
+        return simulator.ble_connect() ? CommandResult::accepted
+                                       : CommandResult::rejected;
+    }
+    if (line == "ble reject") {
+        return simulator.ble_reject_pairing() ? CommandResult::accepted
+                                              : CommandResult::rejected;
+    }
+    if (line == "ble disconnect") {
+        return simulator.ble_disconnect() ? CommandResult::accepted
+                                          : CommandResult::rejected;
+    }
+    if (line == "ble radio on") {
+        simulator.ble_start_radio();
+        return CommandResult::accepted;
+    }
+    if (line == "ble radio off") {
+        simulator.ble_stop_radio();
+        return CommandResult::accepted;
+    }
+    if (line == "ble radio restart") {
+        simulator.ble_restart_radio();
+        return CommandResult::accepted;
+    }
+    if (line == "ble reboot") {
+        simulator.ble_reboot();
         return CommandResult::accepted;
     }
     if (line == "quit") {
@@ -160,6 +194,53 @@ CommandResult process_command(Simulator &simulator, std::string_view line) {
         std::uint32_t code = 0;
         return code_text.size() == 6 && parse_integer(code_text, code) &&
                 simulator.show_pairing_code(code)
+            ? CommandResult::accepted
+            : CommandResult::rejected;
+    }
+
+    constexpr std::string_view ble_pair_prefix = "ble pair ";
+    if (line.substr(0, ble_pair_prefix.size()) == ble_pair_prefix) {
+        const std::string_view code_text = line.substr(ble_pair_prefix.size());
+        std::uint32_t code = 0;
+        return code_text.size() == 6 && parse_integer(code_text, code) &&
+                simulator.ble_confirm_pairing(code)
+            ? CommandResult::accepted
+            : CommandResult::rejected;
+    }
+
+    constexpr std::string_view ble_provision_prefix = "ble provision ";
+    if (line.substr(0, ble_provision_prefix.size()) ==
+        ble_provision_prefix) {
+        std::istringstream input{
+            std::string(line.substr(ble_provision_prefix.size()))};
+        std::uint32_t revision = 0;
+        std::string fault_text;
+        std::string extra;
+        if (!(input >> revision)) {
+            return CommandResult::rejected;
+        }
+        if (!(input >> fault_text)) {
+            fault_text = "none";
+        }
+        if (input >> extra) {
+            return CommandResult::rejected;
+        }
+        BleFault fault = BleFault::none;
+        return chatesp::simulator::parse_ble_fault(fault_text, fault) &&
+                simulator.ble_provision(revision, fault)
+            ? CommandResult::accepted
+            : CommandResult::rejected;
+    }
+
+    constexpr std::string_view ble_fuzz_prefix = "ble fuzz ";
+    if (line.substr(0, ble_fuzz_prefix.size()) == ble_fuzz_prefix) {
+        std::istringstream input{
+            std::string(line.substr(ble_fuzz_prefix.size()))};
+        std::size_t cases = 0;
+        std::uint32_t seed = 0;
+        std::string extra;
+        return (input >> cases >> seed) && !(input >> extra) &&
+                simulator.ble_fuzz(cases, seed)
             ? CommandResult::accepted
             : CommandResult::rejected;
     }

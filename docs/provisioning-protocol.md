@@ -418,6 +418,22 @@ unknown versions, flags, lengths, fingerprints, UTF-8, field limits, field
 order, repeated fields, missing fields, stale revisions, conflicts, and
 unchanged retries.
 
+The desktop simulator compiles these firmware packet, transfer, settings, and
+session implementations. Its BLE scenarios cover passkey state, link security,
+disconnects, a lost acknowledgement, retry deduplication, storage failure, and
+bounded malformed frames. Run them with address and undefined-behavior checks:
+
+```sh
+uv run --locked python simulator/tools/build.py --test --sanitize
+```
+
+This does not test the ESP32 controller, NimBLE, or the Core Bluetooth system
+pairing prompt.
+
+The simulated iOS policy retries a lost acknowledgement once on the same
+secure connection. It fails the active request after a disconnect. A new
+request can start after the bonded device reconnects.
+
 The live-context cross-language vector is:
 
 - epoch seconds: `1786147200`
