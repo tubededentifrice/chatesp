@@ -249,6 +249,10 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "power-off is scheduled"));
     TEST_ASSERT_NOT_NULL(std::strstr(answer_prompt, "bottom PWR-button"));
     TEST_ASSERT_NULL(std::strstr(system_prompt, "chain of thought"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(system_prompt, "ask one short clarifying question"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(answer_prompt, "ask one short clarifying question"));
 }
 
 void test_history_rejects_empty_and_overlong_text() {
