@@ -657,7 +657,11 @@ lv_display_t *bsp_display_start(void)
         .buffer_size = BSP_LCD_H_RES * LVGL_BUFFER_HEIGHT,
         .double_buffer = false,
         .flags = {
-            .buff_dma = false,
+            // The QSPI panel driver otherwise allocates a temporary DMA
+            // buffer for each flush. A 48-row frame can exceed the largest
+            // free DMA block after Wi-Fi and BLE start, which leaves LVGL
+            // waiting for a completion callback that cannot arrive.
+            .buff_dma = true,
             .buff_spiram = false,
         }};
     return bsp_display_start_with_config(&cfg);

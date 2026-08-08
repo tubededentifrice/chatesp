@@ -51,6 +51,11 @@ panel is not available during start, recording, sleep, or BLE passkey display.
 A PWR-button action keeps priority. Opening the panel or changing a control
 resets the idle timer only when the runtime is idle.
 
+The 48-row LVGL draw and rotation buffers use DMA-capable internal memory.
+They are allocated once during display start. The QSPI driver does not allocate
+a large temporary DMA buffer while Wi-Fi and BLE are active. This keeps a
+failed late allocation from leaving LVGL in a permanent flush wait.
+
 Control movement sends the latest brightness and volume values through the
 same bounded callback. Volume uses safe atomic state at once, including during
 speech. The runtime sends the latest brightness command. It retries the command

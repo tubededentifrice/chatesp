@@ -26,6 +26,12 @@ creates a CO5300 panel. It probes both touch types, but it does not select an
 SH8601 display. The ChatESP board adapter must add the original-board SH8601
 path before original-board support is complete.
 
+The LVGL draw and software-rotation buffers are DMA-capable and use internal
+memory. The board allocates them during display start. Do not use a normal
+48-row buffer that makes the SPI driver allocate an equivalent temporary DMA
+buffer for each flush. After Wi-Fi and BLE start, that temporary allocation can
+fail and leave LVGL waiting for a transfer completion that cannot occur.
+
 Probe the touch controller after reset release. Address `0x15` identifies V2.
 Address `0x38` identifies the original board. Do not infer the display revision
 from a failed display start.
@@ -87,6 +93,8 @@ The connected V2 board must pass these checks for this control change:
   submits without a USB reconnection;
 - a short PWR press from idle turns the screen off and requests system-off;
 - 30 seconds without input turns the screen off and requests system-off;
+- after Wi-Fi and BLE start, repeated full-screen refreshes do not report a
+  private transmit-buffer allocation failure or block the LVGL task;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
   normal hold threshold;
 - the top BOOT button does not change application state;
