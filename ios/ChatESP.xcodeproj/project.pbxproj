@@ -15,6 +15,7 @@
 		A00000000000000000000006 /* ProvisioningProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000006 /* ProvisioningProtocol.swift */; };
 		A00000000000000000000007 /* BLEProvisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000007 /* BLEProvisioner.swift */; };
 		A00000000000000000000008 /* ConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000008 /* ConfigurationView.swift */; };
+		A00000000000000000000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000C /* Assets.xcassets */; };
 		B00000000000000000000001 /* ProvisioningProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000009 /* ProvisioningProtocolTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -40,6 +41,7 @@
 		F00000000000000000000009 /* ProvisioningProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvisioningProtocolTests.swift; sourceTree = "<group>"; };
 		F0000000000000000000000A /* ChatESP.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChatESP.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F0000000000000000000000B /* ChatESPTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ChatESPTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F0000000000000000000000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,6 +74,7 @@
 		D00000000000000000000021 /* ChatESP */ = {
 			isa = PBXGroup;
 			children = (
+				F0000000000000000000000C /* Assets.xcassets */,
 				F00000000000000000000001 /* ChatESPApp.swift */,
 				F00000000000000000000002 /* AppPreferences.swift */,
 				F00000000000000000000003 /* ConfigurationStore.swift */,
@@ -169,7 +172,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		D00000000000000000000014 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		D00000000000000000000014 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000009 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
 		D00000000000000000000015 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
@@ -211,6 +214,7 @@
 		D00000000000000000000050 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -231,6 +235,7 @@
 		D00000000000000000000051 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
