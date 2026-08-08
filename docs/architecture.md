@@ -34,8 +34,10 @@ rejects a PWR-key event when the same PMU sample contains a USB power-source
 event. A USB power-source change does not start or submit a recording.
 
 The button poll runs separately from cloud work. A button press cancels active
-audio and HTTPS work. A separate bounded task shows BLE passkeys, but a voice
-button press always hides the passkey view.
+audio and HTTPS work. A separate bounded task shows BLE passkeys. The passkey
+view always uses the normal ChatESP orientation, including when Clock is
+active. It restores the Clock orientation when it closes. A voice button press
+always hides the passkey view.
 
 A debounced short press on the top GPIO0 button changes between ChatESP and
 Clock. A press longer than 700 ms has no app action. A top-button press has no

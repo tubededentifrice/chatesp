@@ -317,6 +317,29 @@ void layout_overlays(std::int32_t width, std::int32_t height) {
     }
 }
 
+void apply_display_orientation() {
+    if (display_handle == nullptr) {
+        return;
+    }
+    const AppMode mode = clock_mode ? AppMode::clock : AppMode::chat;
+    if (display_orientation_for(mode, passkey_visible) ==
+        DisplayOrientation::clock) {
+#if LVGL_VERSION_MAJOR >= 9
+        bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_90);
+#else
+        bsp_display_rotate(display_handle, LV_DISP_ROT_90);
+#endif
+        layout_overlays(kClockWidth, kClockHeight);
+        return;
+    }
+#if LVGL_VERSION_MAJOR >= 9
+    bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_0);
+#else
+    bsp_display_rotate(display_handle, LV_DISP_ROT_NONE);
+#endif
+    layout_overlays(image::kDisplayWidth, image::kDisplayHeight);
+}
+
 void rounded_clock_point(double distance, double &x, double &y) {
     const double inset = clock_style.edge_inset_px;
     const double left = inset;
@@ -851,10 +874,14 @@ void set_controls_state_allowed(bool allowed) {
 }
 
 void hide_passkey() {
+    const bool restore_orientation = passkey_visible;
     if (passkey_overlay != nullptr) {
         lv_obj_add_flag(passkey_overlay, LV_OBJ_FLAG_HIDDEN);
     }
     passkey_visible = false;
+    if (restore_orientation) {
+        apply_display_orientation();
+    }
     set_controls_state_allowed(controls_state_allowed);
     std::fill(passkey_buffer.begin(), passkey_buffer.end(), '\0');
 }
@@ -1311,12 +1338,7 @@ void show_app_mode(AppMode mode, InteractionState chat_state) {
     if (mode == AppMode::clock) {
         hide_fullscreen_visual();
         clock_mode = true;
-#if LVGL_VERSION_MAJOR >= 9
-        bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_90);
-#else
-        bsp_display_rotate(display_handle, LV_DISP_ROT_90);
-#endif
-        layout_overlays(kClockWidth, kClockHeight);
+        apply_display_orientation();
         lv_obj_set_size(clock_root, kClockWidth, kClockHeight);
         if (!clock_face_initialized) {
             show_clock_time(false);
@@ -1331,12 +1353,7 @@ void show_app_mode(AppMode mode, InteractionState chat_state) {
 
     clock_mode = false;
     set_hidden(clock_root, true);
-#if LVGL_VERSION_MAJOR >= 9
-    bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_0);
-#else
-    bsp_display_rotate(display_handle, LV_DISP_ROT_NONE);
-#endif
-    layout_overlays(image::kDisplayWidth, image::kDisplayHeight);
+    apply_display_orientation();
     shown_clock_minute = 0xff;
     shown_clock_hour = 0xff;
     shown_clock_second = 0xff;
@@ -1525,6 +1542,7 @@ void show_ble_passkey(std::uint32_t passkey, bool visible) {
         static_cast<unsigned long>(passkey));
     passkey_visible = true;
     set_controls_state_allowed(controls_state_allowed);
+    apply_display_orientation();
     set_static_text(passkey_label, passkey_buffer.data());
     show_activity(false);
     if (level_bar != nullptr) {

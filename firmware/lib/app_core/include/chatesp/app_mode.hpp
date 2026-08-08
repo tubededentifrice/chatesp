@@ -11,6 +11,20 @@ enum class AppMode : std::uint8_t {
     clock,
 };
 
+enum class DisplayOrientation : std::uint8_t {
+    chat,
+    clock,
+};
+
+// A pairing code always uses the normal ChatESP orientation. If pairing starts
+// in Clock mode, the display returns to the Clock orientation after pairing.
+[[nodiscard]] constexpr DisplayOrientation display_orientation_for(
+    AppMode mode, bool pairing_code_visible) {
+    return pairing_code_visible || mode == AppMode::chat
+        ? DisplayOrientation::chat
+        : DisplayOrientation::clock;
+}
+
 struct ClockStyle {
     std::uint32_t background_rgb = 0x000000;
     std::uint32_t time_rgb = 0xffffff;

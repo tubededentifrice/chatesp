@@ -440,6 +440,28 @@ void test_clock_configuration_and_digit_masks_are_bounded() {
     TEST_ASSERT_EQUAL_HEX8(0, chatesp::clock_digit_segments(10));
 }
 
+void test_pairing_code_always_uses_chat_orientation() {
+    using chatesp::AppMode;
+    using chatesp::DisplayOrientation;
+
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(DisplayOrientation::chat),
+        static_cast<int>(chatesp::display_orientation_for(
+            AppMode::chat, false)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(DisplayOrientation::clock),
+        static_cast<int>(chatesp::display_orientation_for(
+            AppMode::clock, false)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(DisplayOrientation::chat),
+        static_cast<int>(chatesp::display_orientation_for(
+            AppMode::chat, true)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(DisplayOrientation::chat),
+        static_cast<int>(chatesp::display_orientation_for(
+            AppMode::clock, true)));
+}
+
 void test_clock_return_needs_a_finished_idle_chat_session() {
     using chatesp::AppMode;
     TEST_ASSERT_FALSE(chatesp::clock_return_due(
@@ -486,6 +508,7 @@ int main(int, char **) {
     RUN_TEST(test_mode_button_accepts_only_a_short_complete_press);
     RUN_TEST(test_clock_snake_fills_and_drains_around_the_minute);
     RUN_TEST(test_clock_configuration_and_digit_masks_are_bounded);
+    RUN_TEST(test_pairing_code_always_uses_chat_orientation);
     RUN_TEST(test_clock_return_needs_a_finished_idle_chat_session);
     return UNITY_END();
 }
