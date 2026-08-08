@@ -573,6 +573,25 @@ esp_io_expander_handle_t bsp_io_expander_init(void)
     return io_expander;
 }
 
+esp_err_t bsp_mode_button_init(void)
+{
+    const gpio_config_t config = {
+        .pin_bit_mask = 1ULL << GPIO_NUM_0,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    return gpio_config(&config);
+}
+
+esp_err_t bsp_mode_button_is_pressed(bool *pressed)
+{
+    ESP_RETURN_ON_FALSE(pressed != NULL, ESP_ERR_INVALID_ARG, TAG, "No mode button output");
+    *pressed = gpio_get_level(GPIO_NUM_0) == 0;
+    return ESP_OK;
+}
+
 static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
 {
     bsp_display_config_t disp_config = {0};

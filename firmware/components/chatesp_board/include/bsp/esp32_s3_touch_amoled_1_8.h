@@ -243,6 +243,18 @@ esp_err_t bsp_sdcard_unmount(void);
  */
 esp_io_expander_handle_t bsp_io_expander_init(void);
 
+/**
+ * @brief Initialize the top GPIO0 mode button as an active-low input.
+ */
+esp_err_t bsp_mode_button_init(void);
+
+/**
+ * @brief Read the top GPIO0 mode button.
+ *
+ * @param[out] pressed True while the button is pressed
+ */
+esp_err_t bsp_mode_button_is_pressed(bool *pressed);
+
 
 /**************************************************************************************************
  *

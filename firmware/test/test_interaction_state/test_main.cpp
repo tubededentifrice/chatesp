@@ -3,6 +3,7 @@
 
 #include <unity.h>
 
+#include "chatesp/app_mode.hpp"
 #include "chatesp/button_debouncer.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/power_button_filter.hpp"
@@ -393,6 +394,66 @@ void test_quick_controls_defer_flash_work_until_input_is_idle() {
         chatesp::quick_controls_can_persist(true, true, true));
 }
 
+void test_mode_button_accepts_only_a_short_complete_press() {
+    chatesp::ShortPressGesture button{700};
+    TEST_ASSERT_FALSE(button.release(10));
+    button.press(100);
+    TEST_ASSERT_TRUE(button.release(800));
+    button.press(1'000);
+    TEST_ASSERT_FALSE(button.release(1'701));
+    button.press(std::numeric_limits<std::uint32_t>::max() - 99);
+    TEST_ASSERT_TRUE(button.release(500));
+    button.press(1'000);
+    button.cancel();
+    TEST_ASSERT_FALSE(button.release(1'010));
+}
+
+void test_clock_snake_fills_and_drains_around_the_minute() {
+    chatesp::ClockSnakeSpan span = chatesp::clock_snake_span(2, 0);
+    TEST_ASSERT_EQUAL_UINT8(0, span.first);
+    TEST_ASSERT_EQUAL_UINT8(1, span.count);
+    TEST_ASSERT_TRUE(chatesp::clock_snake_section_visible(0, span));
+    TEST_ASSERT_FALSE(chatesp::clock_snake_section_visible(1, span));
+
+    span = chatesp::clock_snake_span(2, 59);
+    TEST_ASSERT_EQUAL_UINT8(60, span.count);
+    TEST_ASSERT_TRUE(chatesp::clock_snake_section_visible(59, span));
+
+    span = chatesp::clock_snake_span(3, 0);
+    TEST_ASSERT_EQUAL_UINT8(1, span.first);
+    TEST_ASSERT_EQUAL_UINT8(59, span.count);
+    TEST_ASSERT_FALSE(chatesp::clock_snake_section_visible(0, span));
+    TEST_ASSERT_TRUE(chatesp::clock_snake_section_visible(59, span));
+
+    span = chatesp::clock_snake_span(3, 59);
+    TEST_ASSERT_EQUAL_UINT8(60, span.first);
+    TEST_ASSERT_EQUAL_UINT8(0, span.count);
+}
+
+void test_clock_configuration_and_digit_masks_are_bounded() {
+    TEST_ASSERT_TRUE(chatesp::ClockStyle{}.valid());
+    chatesp::ClockStyle invalid;
+    invalid.seconds_width_px = 21;
+    TEST_ASSERT_FALSE(invalid.valid());
+    TEST_ASSERT_EQUAL_HEX8(0x3f, chatesp::clock_digit_segments(0));
+    TEST_ASSERT_EQUAL_HEX8(0x6f, chatesp::clock_digit_segments(9));
+    TEST_ASSERT_EQUAL_HEX8(0, chatesp::clock_digit_segments(10));
+}
+
+void test_clock_return_needs_a_finished_idle_chat_session() {
+    using chatesp::AppMode;
+    TEST_ASSERT_FALSE(chatesp::clock_return_due(
+        AppMode::clock, true, true, 30'000));
+    TEST_ASSERT_FALSE(chatesp::clock_return_due(
+        AppMode::chat, false, true, 30'000));
+    TEST_ASSERT_FALSE(chatesp::clock_return_due(
+        AppMode::chat, true, false, 30'000));
+    TEST_ASSERT_FALSE(chatesp::clock_return_due(
+        AppMode::chat, true, true, 29'999));
+    TEST_ASSERT_TRUE(chatesp::clock_return_due(
+        AppMode::chat, true, true, 30'000));
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_short_press_requests_sleep);
@@ -422,5 +483,9 @@ int main(int, char **) {
     RUN_TEST(test_quick_controls_auto_close_handles_wrap_and_active_touch);
     RUN_TEST(test_quick_controls_snap_to_valid_five_percent_steps);
     RUN_TEST(test_quick_controls_defer_flash_work_until_input_is_idle);
+    RUN_TEST(test_mode_button_accepts_only_a_short_complete_press);
+    RUN_TEST(test_clock_snake_fills_and_drains_around_the_minute);
+    RUN_TEST(test_clock_configuration_and_digit_masks_are_bounded);
+    RUN_TEST(test_clock_return_needs_a_finished_idle_chat_session);
     return UNITY_END();
 }

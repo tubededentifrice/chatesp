@@ -43,8 +43,11 @@ action button:
 The app disables the AXP2101 automatic long-hold shutdown while the PWR button
 is pressed. This lets a recording continue for more than six seconds. It
 restores hardware long-hold shutdown when the button is released. The top BOOT
-button is GPIO0. It has no normal app action and stays available for firmware
-recovery. Firmware uses the EXIO4 level only to detect a held key at start.
+button is active-low GPIO0. After boot, a debounced press of 700 ms or less
+changes between ChatESP and Clock. A longer press has no app action. The button
+is not a sleep wake source. Its boot-strapping function stays available for
+firmware recovery. Firmware uses the EXIO4 level only to detect a held key at
+start.
 During operation, it uses AXP2101 PWRON edge events. On the connected V2 board,
 EXIO4 stayed active after key release during battery operation. Firmware rejects
 an edge sample that also contains a USB power-source event.
@@ -55,6 +58,13 @@ Before sleep, stop audio, radio work, display updates, touch, and unused
 peripherals. Turn the AMOLED off and request AXP2101 system-off. A PWR press
 then causes a cold boot and a new thread. Measure current on battery hardware
 before making a battery-life claim.
+
+Clock keeps the AMOLED and BLE on and stops Wi-Fi when it becomes active. It
+does not request automatic sleep. The bottom PWR button keeps its short-press
+sleep action. A bottom-button press first restores the portrait ChatESP layout,
+and a held press then starts recording at the normal threshold. After 30
+seconds without a follow-up interaction, the runtime returns to Clock and
+clears the thread.
 
 The model can request device status, set display brightness from 5 through 100
 percent, set playback volume from 0 through 100 percent, and request power-off.
@@ -86,10 +96,26 @@ The connected V2 board must pass these checks for this control change:
 - with USB disconnected, a held PWR press starts recording and its release
   submits without a USB reconnection;
 - a short PWR press from idle turns the screen off and requests system-off;
-- 30 seconds without input turns the screen off and requests system-off;
+- 30 seconds without input in a manual production ChatESP session turns the
+  screen off and requests system-off;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
   normal hold threshold;
-- the top BOOT button does not change application state;
+- a short top-button press changes between portrait ChatESP and Clock;
+- a long top-button press and a top-button press during development soft sleep
+  do not change application state;
+- Clock rotates 90 degrees clockwise, has the USB port at the top, and maps the
+  touch control panel to that orientation;
+- Clock shows only large white 24-hour time and a white seconds path on black;
+- the seconds path follows the rounded screen shape, starts at 12 o'clock,
+  fills on even minutes, and drains on odd minutes;
+- Clock shows an unavailable-time face until an authenticated phone context
+  supplies epoch time and the user's UTC offset;
+- Clock stays on for more than each ChatESP idle timeout, while a short bottom
+  PWR press still requests sleep;
+- a bottom PWR press in Clock shows ChatESP without visible delay, and a held
+  press starts `LISTENING` at the normal threshold;
+- 30 seconds after the final voice interaction, Clock returns, Wi-Fi stops,
+  and the prior thread is not available;
 - the footer shows Wi-Fi connection state and a valid battery percentage, or a
   clear unavailable value;
 - model text grows on the display before the complete answer is available;
@@ -189,9 +215,10 @@ visible splash or ready view.
 ## Physical acceptance gates
 
 - Identify the connected board revision.
-- Verify both buttons and the selected wake source.
-- Verify AMOLED black level, rotation, touch mapping, full-screen image, and
-  full-screen Python plot.
+- Verify both buttons, short and long top-button presses, sleeping-state top
+  input, and the selected wake source.
+- Verify AMOLED black level, both mode rotations, rounded Clock rendering,
+  rotated touch mapping, full-screen image, and full-screen Python plot.
 - Record and replay speech through the ES8311 path without clipping.
 - Verify Wi-Fi connection and TLS requests.
 - Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
@@ -199,6 +226,8 @@ visible splash or ready view.
 - Verify encrypted BLE provisioning and acknowledgement with a physical iPhone.
 - Verify that a wake connection sends current iPhone time, UTC offset, and a
   location rounded to 0.1 degree to the model context.
+- Verify that Clock matches the iPhone local time before and after a timezone
+  change and remains correct across a monotonic millisecond wrap simulation.
 - Verify that a denied location permission uses the saved city fallback and
   does not block a request.
 - Verify that one continuous connection does not sync more than once per hour.
@@ -206,7 +235,8 @@ visible splash or ready view.
   reset, and with NVS write failure injection.
 - Verify model power-off confirmation, cancellation, production current, and
   bottom-PWR wake.
-- Measure idle, recording, Wi-Fi, playback, and deep-sleep current.
+- Measure ChatESP idle, continuous Clock, recording, Wi-Fi, playback, and
+  deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,
   stuck state, or unexpected NVS write.
 - Compare the same 20 direct, 10 web, 10 image, and 10 calculation prompts

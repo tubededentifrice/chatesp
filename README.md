@@ -6,8 +6,11 @@ companion for secure BLE configuration.
 
 ## Intended experience
 
-1. Hold the bottom PWR button and speak.
-2. Release it. The display shows the transcript.
+1. Use a short top-button press to change between ChatESP and Clock. Clock
+   rotates the display 90 degrees clockwise, so the USB port is at the top. It
+   shows a large white local time and a rounded seconds path. It stays on.
+2. Hold the bottom PWR button and speak. From Clock, the press first returns
+   the display to ChatESP. Release the button to submit the recording.
 3. The device selects a direct, web, image, or calculation
    route. It then gets a concise answer with tools disabled. Text appears as
    the model sends it. Complete
@@ -20,9 +23,12 @@ companion for secure BLE configuration.
 4. Pull down the small top handle to change brightness or volume on the
    device. The panel follows the finger. Tap or drag either control track to
    set its value. The same controls are also available by voice.
-5. Continue within 30 seconds to use the same thread.
-6. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
-   starts a new thread.
+5. Continue within 30 seconds to use the same thread. After 30 seconds without
+   another interaction, the device clears the thread, stops Wi-Fi, and returns
+   to Clock.
+6. A short PWR-button press, without a recording, requests sleep. Clock does
+   not sleep from inactivity. In ChatESP mode, the normal production or
+   development idle timer still requests sleep.
 
 The interface is black, high-contrast, and similar to a small terminal. The
 bottom line shows Wi-Fi state and battery level. Status motion has a purpose:
@@ -51,7 +57,8 @@ The project is in active development. The firmware implements the black
 terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
 Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
 parallel image download, search, BLE provisioning,
-device status and controls, touch quick controls, and sleep paths. Brightness
+device status and controls, touch quick controls, a travel-clock mode, and
+sleep paths. Brightness
 and volume changes use a small persistent device-preference record. The iOS
 companion can store
 settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
@@ -62,10 +69,11 @@ Automated tests cover pure state, protocol, privacy, and bounded-buffer paths.
 The V2 development device has passed black-screen startup without a white
 frame, bottom-button hold-to-talk, streamed answer text, clear streamed speech,
 button preemption, strong-access-point selection, and modem power saving.
-Full-screen image color and crop, physical iPhone provisioning, battery current,
-production system-off, MicroPython limits and plot display, and long cycle tests
-are still acceptance gates. Do not use this status as a claim that these open
-physical checks passed.
+Full-screen image color and crop, Clock rotation and rounded-corner rendering,
+top-button mode switching, physical iPhone provisioning, Clock current draw,
+production system-off, MicroPython limits and plot display, and long cycle
+tests are still acceptance gates. Do not use this status as a claim that these
+open physical checks passed.
 
 ## Development
 
@@ -91,9 +99,9 @@ uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run -e watch_dev
 ```
 
-Use development mode during normal firmware work. It uses a five-minute
-automatic idle timer and keeps USB flashing available. A short PWR-button press
-still turns off the display at once:
+Use development mode during normal firmware work. ChatESP mode uses a
+five-minute automatic idle timer and keeps USB flashing available. Clock mode
+stays on. A short PWR-button press still turns off the display at once:
 
 ```sh
 uv run --locked python tools/pio.py run -e watch_dev -t upload

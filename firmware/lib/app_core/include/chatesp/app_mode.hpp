@@ -1,0 +1,107 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+
+namespace chatesp {
+
+enum class AppMode : std::uint8_t {
+    chat,
+    clock,
+};
+
+struct ClockStyle {
+    std::uint32_t background_rgb = 0x000000;
+    std::uint32_t time_rgb = 0xffffff;
+    std::uint32_t seconds_rgb = 0xffffff;
+    std::uint16_t corner_radius_px = 48;
+    std::uint8_t edge_inset_px = 10;
+    std::uint8_t seconds_width_px = 12;
+
+    [[nodiscard]] constexpr bool valid() const {
+        return background_rgb <= 0xffffff && time_rgb <= 0xffffff &&
+            seconds_rgb <= 0xffffff && corner_radius_px >= 16 &&
+            corner_radius_px <= 120 && edge_inset_px >= 4 &&
+            edge_inset_px <= 24 && seconds_width_px >= 4 &&
+            seconds_width_px <= 20;
+    }
+};
+
+struct ClockTime {
+    std::uint8_t hour = 0;
+    std::uint8_t minute = 0;
+    std::uint8_t second = 0;
+
+    [[nodiscard]] constexpr bool valid() const {
+        return hour <= 23 && minute <= 59 && second <= 59;
+    }
+};
+
+struct ClockSnakeSpan {
+    std::uint8_t first = 0;
+    std::uint8_t count = 0;
+};
+
+// Use one perimeter section for each second. Even minutes fill clockwise from
+// 12 o'clock. Odd minutes drain in the same direction.
+[[nodiscard]] constexpr ClockSnakeSpan clock_snake_span(
+    std::uint8_t minute, std::uint8_t second) {
+    const std::uint8_t bounded_second = second > 59 ? 59 : second;
+    const std::uint8_t changed = static_cast<std::uint8_t>(bounded_second + 1);
+    return (minute & 1U) == 0U
+        ? ClockSnakeSpan{0, changed}
+        : ClockSnakeSpan{
+              changed, static_cast<std::uint8_t>(60U - changed)};
+}
+
+[[nodiscard]] constexpr bool clock_snake_section_visible(
+    std::uint8_t section, ClockSnakeSpan span) {
+    return section >= span.first &&
+        section < static_cast<std::uint8_t>(span.first + span.count);
+}
+
+// Seven-segment masks use bits A through G from least to most significant.
+[[nodiscard]] constexpr std::uint8_t clock_digit_segments(
+    std::uint8_t digit) {
+    constexpr std::array<std::uint8_t, 10> masks{
+        0x3f, 0x06, 0x5b, 0x4f, 0x66,
+        0x6d, 0x7d, 0x07, 0x7f, 0x6f,
+    };
+    return digit < masks.size() ? masks[digit] : 0;
+}
+
+class ShortPressGesture {
+public:
+    explicit constexpr ShortPressGesture(std::uint32_t maximum_press_ms = 700)
+        : maximum_press_ms_(maximum_press_ms) {}
+
+    void press(std::uint32_t now_ms) {
+        pressed_ = true;
+        pressed_at_ms_ = now_ms;
+    }
+
+    [[nodiscard]] bool release(std::uint32_t now_ms) {
+        if (!pressed_) {
+            return false;
+        }
+        pressed_ = false;
+        return now_ms - pressed_at_ms_ <= maximum_press_ms_;
+    }
+
+    void cancel() { pressed_ = false; }
+
+private:
+    std::uint32_t maximum_press_ms_ = 700;
+    std::uint32_t pressed_at_ms_ = 0;
+    bool pressed_ = false;
+};
+
+[[nodiscard]] constexpr bool clock_return_due(
+    AppMode mode, bool return_pending, bool interaction_idle,
+    std::uint32_t inactivity_ms, std::uint32_t delay_ms = 30'000) {
+    return mode == AppMode::chat && return_pending && interaction_idle &&
+        inactivity_ms >= delay_ms;
+}
+
+}  // namespace chatesp

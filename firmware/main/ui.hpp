@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "chatesp/agent_types.hpp"
+#include "chatesp/app_mode.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "esp_err.h"
 #include "image_frame.hpp"
@@ -47,7 +48,13 @@ void disable_quick_controls();
 void sync_quick_controls(
     std::uint8_t brightness_percent, std::uint8_t volume_percent);
 
-// The caller must own the BSP display lock for all show functions.
+// The caller must own the BSP display lock for the clock and show functions.
+// Clock style is a bounded value type so a later preferences record can supply
+// it without a change to the drawing code.
+[[nodiscard]] bool set_clock_style(const ClockStyle &style);
+void show_app_mode(AppMode mode, InteractionState chat_state);
+void show_clock_time(bool available, ClockTime time = {});
+
 void show_state(InteractionState state);
 void show_recording_level(std::uint8_t percent);
 void show_transcript(std::string_view transcript);
@@ -68,7 +75,8 @@ void hide_fullscreen_visual();
 
 esp_err_t sleep();
 esp_err_t wake(
-    InteractionState state, std::uint8_t brightness_percent);
+    InteractionState state, std::uint8_t brightness_percent,
+    AppMode mode = AppMode::chat);
 esp_err_t reassert_panel(std::uint8_t brightness_percent);
 esp_err_t set_brightness(std::uint8_t brightness_percent);
 

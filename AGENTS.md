@@ -32,9 +32,10 @@ Some files can be absent during initial setup. Read them when they exist.
   without a recording, starts sleep.
 - Transcribe the request on the display. Show progress while the model works.
   Show the short answer and speak it.
-- Keep one chat thread while the device is awake. After 30 seconds without
-  interaction, request AXP2101 system-off and discard the thread. A PWR-button
-  cold start starts a new thread.
+- Keep one chat thread during the 30-second follow-up window. After a voice
+  interaction, return to Clock mode and discard the thread. In ChatESP mode,
+  an idle timeout requests AXP2101 system-off. A PWR-button cold start starts
+  a new thread.
 - Use an all-black terminal-style interface. Use motion only to communicate
   state or progress. Avoid decorative motion.
 - Instruct the chat model to answer in concise, natural speech.
@@ -42,8 +43,8 @@ Some files can be absent during initial setup. Read them when they exist.
   so a provider can change without changes to the chat state machine.
 - Support web search and image search first. A selected image can fill the
   screen. Do not add more tools without a clear product need.
-- Keep the top BOOT button unassigned in the app. Diagnostic firmware can use
-  it when this is clearly documented.
+- Use a short top BOOT-button press to change between ChatESP and Clock modes.
+  Ignore a long press and all presses while the device sleeps.
 
 ## Hardware and security constraints
 

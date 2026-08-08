@@ -324,6 +324,37 @@ void test_utc_clock_rejects_invalid_dates_and_minute_text() {
         "2026-08-08 12:00 UTC+15:00"));
 }
 
+void test_utc_clock_exposes_phone_local_time_with_seconds() {
+    UtcClock clock;
+    LocalTimeOfDay local;
+    constexpr char date[] = "Sat, 08 Aug 2026 23:59:58 GMT";
+    TEST_ASSERT_TRUE(clock.update_from_http_date(
+        date, sizeof(date) - 1, 0xfffffff0U));
+    TEST_ASSERT_FALSE(clock.current_local_time(0xfffffff0U, local));
+    TEST_ASSERT_FALSE(clock.has_local_time());
+
+    TEST_ASSERT_TRUE(clock.update_from_epoch_seconds(
+        1'786'147'200ULL, -300, 1'000));
+    TEST_ASSERT_TRUE(clock.has_local_time());
+    TEST_ASSERT_TRUE(clock.current_local_time(62'999, local));
+    TEST_ASSERT_EQUAL_UINT8(19, local.hour);
+    TEST_ASSERT_EQUAL_UINT8(1, local.minute);
+    TEST_ASSERT_EQUAL_UINT8(1, local.second);
+}
+
+void test_utc_clock_local_seconds_handle_millisecond_wrap() {
+    UtcClock clock;
+    LocalTimeOfDay local;
+    const std::uint32_t observed =
+        std::numeric_limits<std::uint32_t>::max() - 499;
+    TEST_ASSERT_TRUE(clock.update_from_epoch_seconds(
+        1'786'233'598ULL, 0, observed));
+    TEST_ASSERT_TRUE(clock.current_local_time(500, local));
+    TEST_ASSERT_EQUAL_UINT8(23, local.hour);
+    TEST_ASSERT_EQUAL_UINT8(59, local.minute);
+    TEST_ASSERT_EQUAL_UINT8(59, local.second);
+}
+
 void test_history_rejects_empty_and_overlong_text() {
     ConversationHistory history;
     assert_error(Error::invalid_argument,
@@ -1360,6 +1391,8 @@ int main(int, char **) {
     RUN_TEST(test_prompt_is_short_and_voice_focused);
     RUN_TEST(test_utc_clock_formats_minutes_and_handles_rollover);
     RUN_TEST(test_utc_clock_rejects_invalid_dates_and_minute_text);
+    RUN_TEST(test_utc_clock_exposes_phone_local_time_with_seconds);
+    RUN_TEST(test_utc_clock_local_seconds_handle_millisecond_wrap);
     RUN_TEST(test_history_rejects_empty_and_overlong_text);
     RUN_TEST(test_registry_rejects_duplicate_and_unknown_tool);
     RUN_TEST(test_agent_loop_executes_one_tool_and_keeps_history);
