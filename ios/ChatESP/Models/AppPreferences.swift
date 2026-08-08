@@ -8,6 +8,7 @@ struct AppPreferences: Codable, Equatable {
     var chatModel = "deepseek/deepseek-v4-flash"
     var transcriptionModel = "openai/whisper-large-v3-turbo"
     var speechModel = "hexgrad/kokoro-82m"
+    var approximateLocation: String?
     var appliedRevision: UInt32 = 0
     var acknowledgedFingerprintHex: String?
     var pendingRevision: UInt32?

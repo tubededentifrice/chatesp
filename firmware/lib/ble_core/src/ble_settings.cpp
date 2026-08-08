@@ -20,7 +20,9 @@ bool SettingsRecord::assign(const ValidationResult &validation) {
         next.wifi_password.assign(validation.settings.wifi_password) &&
         next.chat_model.assign(validation.settings.chat_model) &&
         next.transcription_model.assign(validation.settings.transcription_model) &&
-        next.speech_model.assign(validation.settings.speech_model);
+        next.speech_model.assign(validation.settings.speech_model) &&
+        next.approximate_location.assign(
+            validation.settings.approximate_location);
     if (!valid) {
         next.clear();
         return false;
@@ -46,6 +48,7 @@ void SettingsRecord::clear() {
     chat_model.clear();
     transcription_model.clear();
     speech_model.clear();
+    approximate_location.clear();
 }
 
 }  // namespace provisioning

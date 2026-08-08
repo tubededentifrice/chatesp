@@ -390,13 +390,21 @@ agent::Error OpenRouterChatProvider::route_turn(
     }
     PsramObject<agent::ChatRequestBody> body;
     PsramObject<agent::OpenRouterSseParser> parser;
+    agent::UtcMinuteText current_utc_minute;
     if (error == agent::Error::none &&
         (body.get() == nullptr || parser.get() == nullptr)) {
         error = agent::Error::model_failed;
     }
     if (error == agent::Error::none) {
+        if (!utc_clock_.current_minute(monotonic_ms(), current_utc_minute)) {
+            error = agent::Error::model_failed;
+        }
+    }
+    if (error == agent::Error::none) {
         error = agent::build_openrouter_route_request(
-            connection_.models, history, tools_, true, *body.get());
+            connection_.models, history, tools_,
+            approximate_location_.data(), approximate_location_.size(),
+            current_utc_minute.c_str(), true, *body.get());
     }
     std::array<char, kAuthorizationBytes> authorization{};
     if (error == agent::Error::none) {
@@ -460,13 +468,21 @@ agent::Error OpenRouterChatProvider::complete_answer_streaming(
     }
     PsramObject<agent::ChatRequestBody> body;
     PsramObject<agent::OpenRouterSseParser> parser;
+    agent::UtcMinuteText current_utc_minute;
     if (error == agent::Error::none &&
         (body.get() == nullptr || parser.get() == nullptr)) {
         error = agent::Error::model_failed;
     }
     if (error == agent::Error::none) {
+        if (!utc_clock_.current_minute(monotonic_ms(), current_utc_minute)) {
+            error = agent::Error::model_failed;
+        }
+    }
+    if (error == agent::Error::none) {
         error = agent::build_openrouter_answer_request(
-            connection_.models, history, true, *body.get());
+            connection_.models, history, approximate_location_.data(),
+            approximate_location_.size(), current_utc_minute.c_str(), true,
+            *body.get());
     }
     std::array<char, kAuthorizationBytes> authorization{};
     if (error == agent::Error::none) {
@@ -534,6 +550,7 @@ agent::Error OpenRouterTranscriptionProvider::transcribe(
         error = agent::Error::malformed_response;
     }
     PsramStorage storage(kTranscriptionResponseBytes);
+    transport::HttpResponseDate response_date;
     if (error == agent::Error::none && !storage.available()) {
         error = agent::Error::model_failed;
     }
@@ -557,6 +574,7 @@ agent::Error OpenRouterTranscriptionProvider::transcribe(
         request.max_request_bytes = transport::max_http_request_bytes;
         request.response = {kJsonTypes, 1, kTranscriptionResponseBytes};
         request.timeouts = agent::transcription_policy();
+        request.response_date = &response_date;
         error = execute_buffered_with_retry(
             transport_, request, response_sink, cancellation);
     }
@@ -564,6 +582,11 @@ agent::Error OpenRouterTranscriptionProvider::transcribe(
     if (error == agent::Error::none) {
         error = agent::parse_openrouter_transcription_response(
             response.data(), response.size(), transcript);
+    }
+    if (error == agent::Error::none && !response_date.value.empty()) {
+        (void)utc_clock_.update_from_http_date(
+            response_date.value.data(), response_date.value.size(),
+            response_date.observed_at_ms);
     }
     return cancellation.cancelled() ? agent::Error::cancelled : error;
 }

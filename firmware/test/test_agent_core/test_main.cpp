@@ -9,6 +9,7 @@
 #include "chatesp/brave_protocol.hpp"
 #include "chatesp/openrouter_protocol.hpp"
 #include "chatesp/system_prompt.hpp"
+#include "chatesp/utc_clock.hpp"
 
 using namespace chatesp::agent;
 
@@ -256,6 +257,42 @@ void test_prompt_is_short_and_voice_focused() {
         std::strstr(system_prompt, "ask one short clarifying question"));
     TEST_ASSERT_NOT_NULL(
         std::strstr(answer_prompt, "ask one short clarifying question"));
+}
+
+void test_utc_clock_formats_minutes_and_handles_rollover() {
+    UtcClock clock;
+    UtcMinuteText minute;
+    TEST_ASSERT_FALSE(clock.current_minute(10, minute));
+    constexpr char date[] = "Sat, 08 Aug 2026 23:59:58 GMT";
+    constexpr std::uint32_t observed = 0xfffffff0U;
+    TEST_ASSERT_TRUE(clock.update_from_http_date(
+        date, sizeof(date) - 1, observed));
+    TEST_ASSERT_TRUE(clock.current_minute(observed, minute));
+    TEST_ASSERT_EQUAL_STRING("2026-08-08 23:59 UTC", minute.c_str());
+    TEST_ASSERT_NULL(std::strstr(minute.c_str(), ":58"));
+
+    TEST_ASSERT_TRUE(clock.current_minute(0x000007c0U, minute));
+    TEST_ASSERT_EQUAL_STRING("2026-08-09 00:00 UTC", minute.c_str());
+
+    TEST_ASSERT_TRUE(clock.update_from_epoch_seconds(
+        1'786'147'200ULL, 240, 1'000));
+    TEST_ASSERT_TRUE(clock.current_minute(61'000, minute));
+    TEST_ASSERT_EQUAL_STRING("2026-08-08 04:01 UTC+04:00", minute.c_str());
+}
+
+void test_utc_clock_rejects_invalid_dates_and_minute_text() {
+    UtcClock clock;
+    constexpr char invalid_date[] = "Sun, 29 Feb 2026 12:00:00 GMT";
+    TEST_ASSERT_FALSE(clock.update_from_http_date(
+        invalid_date, sizeof(invalid_date) - 1, 0));
+    TEST_ASSERT_FALSE(clock.update_from_epoch_seconds(0, 0, 0));
+    TEST_ASSERT_TRUE(UtcClock::valid_minute_text("2028-02-29 12:00 UTC"));
+    TEST_ASSERT_FALSE(UtcClock::valid_minute_text("2026-02-29 12:00 UTC"));
+    TEST_ASSERT_FALSE(UtcClock::valid_minute_text("2026-08-08 12:00:01 UTC"));
+    TEST_ASSERT_TRUE(UtcClock::valid_minute_text(
+        "2026-08-08 12:00 UTC+04:00"));
+    TEST_ASSERT_FALSE(UtcClock::valid_minute_text(
+        "2026-08-08 12:00 UTC+15:00"));
 }
 
 void test_history_rejects_empty_and_overlong_text() {
@@ -775,19 +812,28 @@ void test_openrouter_chat_builder_has_bounded_contract() {
     assert_error(
         Error::none,
         build_openrouter_chat_request(
-            OpenRouterConfig{}, history, registry, true, body));
+            OpenRouterConfig{}, history, registry,
+            "Dubai, United Arab Emirates", 27,
+            "2026-08-08 16:34 UTC+04:00", true, body));
     TEST_ASSERT_NOT_NULL(
         std::strstr(body.c_str(), "deepseek/deepseek-v4-flash"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\\\"watch\\\""));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "search_web"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":160"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"stream\":true"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(body.c_str(), "2026-08-08 16:34 UTC+04:00"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(body.c_str(), "Dubai, United Arab Emirates"));
+    TEST_ASSERT_NULL(std::strstr(body.c_str(), "12:34:00"));
     TEST_ASSERT_NULL(std::strstr(body.c_str(), "Authorization"));
 
     assert_error(
         Error::none,
         build_openrouter_route_request(
-            OpenRouterConfig{}, history, registry, true, body));
+            OpenRouterConfig{}, history, registry,
+            "Dubai, United Arab Emirates", 27,
+            "2026-08-08 12:34 UTC", true, body));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "answer_direct"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "search_web"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"tool_choice\":\"required\""));
@@ -796,7 +842,8 @@ void test_openrouter_chat_builder_has_bounded_contract() {
     assert_error(
         Error::none,
         build_openrouter_answer_request(
-            OpenRouterConfig{}, history, true, body));
+            OpenRouterConfig{}, history, "Dubai, United Arab Emirates", 27,
+            "2026-08-08 12:34 UTC", true, body));
     TEST_ASSERT_NULL(std::strstr(body.c_str(), "search_web"));
     TEST_ASSERT_NULL(std::strstr(body.c_str(), "tool_choice"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":160"));
@@ -806,7 +853,18 @@ void test_openrouter_chat_builder_has_bounded_contract() {
     assert_error(
         Error::invalid_argument,
         build_openrouter_chat_request(
-            invalid, history, registry, true, body));
+            invalid, history, registry, "", 0,
+            "2026-08-08 12:34 UTC", true, body));
+    assert_error(
+        Error::invalid_argument,
+        build_openrouter_answer_request(
+            OpenRouterConfig{}, history, "", 0,
+            "2026-08-08 12:34:56 UTC", true, body));
+    assert_error(
+        Error::invalid_argument,
+        build_openrouter_answer_request(
+            OpenRouterConfig{}, history, "bad\nlocation", 12,
+            "2026-08-08 12:34 UTC", true, body));
 }
 
 void test_openrouter_parses_answer_and_tool_call() {
@@ -1056,6 +1114,8 @@ int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_fixed_text_stops_at_capacity);
     RUN_TEST(test_prompt_is_short_and_voice_focused);
+    RUN_TEST(test_utc_clock_formats_minutes_and_handles_rollover);
+    RUN_TEST(test_utc_clock_rejects_invalid_dates_and_minute_text);
     RUN_TEST(test_history_rejects_empty_and_overlong_text);
     RUN_TEST(test_registry_rejects_duplicate_and_unknown_tool);
     RUN_TEST(test_agent_loop_executes_one_tool_and_keeps_history);

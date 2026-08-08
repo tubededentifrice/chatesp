@@ -8,12 +8,20 @@
 namespace chatesp {
 namespace provisioning {
 
-constexpr std::uint8_t kProtocolVersion = 1;
+constexpr std::uint8_t kProtocolVersion = 2;
+constexpr std::uint8_t kMinimumProtocolVersion = 1;
 constexpr std::uint8_t kSettingsPacketType = 1;
 constexpr std::size_t kHeaderSize = 48;
 constexpr std::size_t kMaximumPacketSize = 1024;
 constexpr std::size_t kFingerprintSize = 32;
-constexpr std::uint8_t kRequiredFieldCount = 8;
+constexpr std::uint8_t kDeviceContextVersion = 1;
+constexpr std::size_t kDeviceContextHeaderSize = 49;
+constexpr std::size_t kMaximumApproximateLocationSize = 96;
+constexpr std::size_t kMaximumDeviceContextSize =
+    kDeviceContextHeaderSize + kMaximumApproximateLocationSize;
+constexpr std::size_t kDeviceContextAcknowledgementSize = 48;
+constexpr std::uint8_t kVersion1FieldCount = 8;
+constexpr std::uint8_t kRequiredFieldCount = 9;
 
 enum class ValidationError : std::uint8_t {
     none,
@@ -37,6 +45,7 @@ enum class ValidationError : std::uint8_t {
     invalid_wifi_ssid,
     invalid_wifi_password,
     invalid_model,
+    invalid_approximate_location,
     stale_revision,
     revision_conflict,
 };
@@ -69,7 +78,12 @@ struct SettingsView {
     std::string_view chat_model;
     std::string_view transcription_model;
     std::string_view speech_model;
+    std::string_view approximate_location;
 };
+
+[[nodiscard]] constexpr bool supported_protocol_version(std::uint8_t version) {
+    return version >= kMinimumProtocolVersion && version <= kProtocolVersion;
+}
 
 struct ValidationResult {
     ValidationError error = ValidationError::none;
@@ -77,6 +91,27 @@ struct ValidationResult {
     std::uint32_t revision = 0;
     std::array<std::uint8_t, kFingerprintSize> fingerprint{};
     SettingsView settings{};
+};
+
+enum class DeviceContextStatus : std::uint8_t {
+    applied = 0x00,
+    authentication_required = 0x10,
+    unsupported_version = 0x11,
+    malformed_packet = 0x12,
+    invalid_location = 0x14,
+    busy = 0x18,
+};
+
+struct DeviceContextResult {
+    DeviceContextStatus status = DeviceContextStatus::malformed_packet;
+    std::uint64_t epoch_seconds = 0;
+    std::int16_t utc_offset_minutes = 0;
+    std::array<std::uint8_t, kFingerprintSize> fingerprint{};
+    std::string_view approximate_location;
+
+    [[nodiscard]] bool valid() const {
+        return status == DeviceContextStatus::applied;
+    }
 };
 
 [[nodiscard]] bool link_is_secure(const LinkSecurity &security);
@@ -94,6 +129,17 @@ compute_content_fingerprint(
     std::size_t packet_size,
     const LinkSecurity &security,
     const StoredVersion &stored);
+
+[[nodiscard]] DeviceContextResult validate_device_context_packet(
+    const std::uint8_t *packet,
+    std::size_t packet_size,
+    const LinkSecurity &security);
+
+[[nodiscard]] std::array<std::uint8_t, kDeviceContextAcknowledgementSize>
+make_device_context_acknowledgement(
+    DeviceContextStatus status,
+    std::uint64_t epoch_seconds = 0,
+    const std::array<std::uint8_t, kFingerprintSize> &fingerprint = {});
 
 }  // namespace provisioning
 }  // namespace chatesp

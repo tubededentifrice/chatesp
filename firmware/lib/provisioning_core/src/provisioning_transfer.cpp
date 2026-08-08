@@ -45,9 +45,10 @@ TransferError TransferAssembler::handle_control(
     if (!std::equal(kControlMagic.begin(), kControlMagic.end(), frame)) {
         return TransferError::bad_magic;
     }
-    if (frame[4] != kProtocolVersion) {
+    if (!supported_protocol_version(frame[4])) {
         return TransferError::unsupported_version;
     }
+    version_ = frame[4];
     if (frame[6] != 0 || frame[7] != 0) {
         return TransferError::bad_flags;
     }
@@ -94,7 +95,7 @@ TransferError TransferAssembler::handle_data(
     if (!std::equal(kDataMagic.begin(), kDataMagic.end(), frame)) {
         return TransferError::bad_magic;
     }
-    if (frame[4] != kProtocolVersion) {
+    if (!supported_protocol_version(frame[4]) || frame[4] != version_) {
         return TransferError::unsupported_version;
     }
     if (frame[5] != 0) {
@@ -131,6 +132,7 @@ void TransferAssembler::reset() {
     expected_size_ = 0;
     received_size_ = 0;
     maximum_frame_data_size_ = 0;
+    version_ = kProtocolVersion;
     active_ = false;
 }
 
@@ -142,17 +144,19 @@ std::uint32_t TransferAssembler::transfer_id() const { return transfer_id_; }
 std::size_t TransferAssembler::received_size() const { return received_size_; }
 std::size_t TransferAssembler::packet_size() const { return expected_size_; }
 const std::uint8_t *TransferAssembler::packet_data() const { return packet_.data(); }
+std::uint8_t TransferAssembler::version() const { return version_; }
 
 std::array<std::uint8_t, kAcknowledgementSize> make_acknowledgement(
     AcknowledgementStatus status,
     std::uint32_t revision,
-    const std::array<std::uint8_t, kFingerprintSize> &fingerprint) {
+    const std::array<std::uint8_t, kFingerprintSize> &fingerprint,
+    std::uint8_t version) {
     std::array<std::uint8_t, kAcknowledgementSize> result{};
     result[0] = 'C';
     result[1] = 'E';
     result[2] = 'S';
     result[3] = 'A';
-    result[4] = kProtocolVersion;
+    result[4] = supported_protocol_version(version) ? version : kProtocolVersion;
     result[5] = static_cast<std::uint8_t>(status);
     write_u32(result.data() + 8, revision);
     std::copy(fingerprint.begin(), fingerprint.end(), result.begin() + 12);

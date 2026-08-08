@@ -11,7 +11,11 @@ companion for secure BLE configuration.
 3. The device selects a direct, web, or image route. It then gets a concise
    answer with tools disabled. Text appears as the model sends it. Complete
    sentences go to speech at once. One playback session joins up to four
-   speech segments in order.
+   speech segments in order. Each model request includes the user's current
+   local date and time at minute precision and an approximate location from the
+   companion.
+   The app refreshes this context when the watch connects and at most once per
+   hour while connected.
 4. Ask for device status, brightness, volume, or power-off when needed.
 5. Continue within 30 seconds to use the same thread.
 6. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake

@@ -28,6 +28,7 @@ Fields valid_fields() {
         {6, "deepseek/deepseek-v4-flash"},
         {7, "openai/whisper-large-v3-turbo"},
         {8, "google/gemini-3.1-flash-tts-preview"},
+        {9, "Dubai, United Arab Emirates"},
     };
 }
 
@@ -51,7 +52,8 @@ std::vector<std::uint8_t> make_packet(std::uint32_t revision = 7) {
         payload.insert(payload.end(), field.second.begin(), field.second.end());
     }
     std::vector<std::uint8_t> packet{
-        'C', 'E', 'S', 'P', 1, 1, 0, 8,
+        'C', 'E', 'S', 'P', provisioning::kProtocolVersion, 1, 0,
+        provisioning::kRequiredFieldCount,
         static_cast<std::uint8_t>(revision >> 24U),
         static_cast<std::uint8_t>(revision >> 16U),
         static_cast<std::uint8_t>(revision >> 8U),
@@ -68,7 +70,8 @@ std::vector<std::uint8_t> make_packet(std::uint32_t revision = 7) {
 
 std::vector<std::uint8_t> make_control(
     std::size_t packet_size, std::uint32_t transfer_id = 0x01020304) {
-    std::vector<std::uint8_t> frame{'C', 'E', 'S', 'B', 1, 1, 0, 0};
+    std::vector<std::uint8_t> frame{
+        'C', 'E', 'S', 'B', provisioning::kProtocolVersion, 1, 0, 0};
     append_u32(frame, transfer_id);
     append_u16(frame, packet_size);
     append_u16(frame, 180);
@@ -80,7 +83,8 @@ std::vector<std::uint8_t> make_data(
     std::size_t offset,
     std::size_t size,
     std::uint32_t transfer_id = 0x01020304) {
-    std::vector<std::uint8_t> frame{'C', 'E', 'S', 'D', 1, 0};
+    std::vector<std::uint8_t> frame{
+        'C', 'E', 'S', 'D', provisioning::kProtocolVersion, 0};
     append_u32(frame, transfer_id);
     append_u16(frame, offset);
     append_u16(frame, size);
@@ -187,7 +191,7 @@ void test_unchanged_packet_does_not_write_storage() {
 void test_transfer_errors_acknowledge_and_clear_the_transfer() {
     provisioning::ProvisioningSession session;
     auto control = make_control(make_packet().size());
-    control[4] = 2;
+    control[4] = 3;
 
     const auto result = session.handle_control(
         control.data(), control.size(), kSecureLink);
@@ -240,6 +244,7 @@ void test_settings_record_owns_and_clears_values() {
     TEST_ASSERT_EQUAL_UINT32(0, settings.revision);
     TEST_ASSERT_TRUE(settings.openrouter_key.view().empty());
     TEST_ASSERT_TRUE(settings.wifi_password.view().empty());
+    TEST_ASSERT_TRUE(settings.approximate_location.view().empty());
 }
 
 void test_valid_transfer_can_follow_a_rejected_packet() {

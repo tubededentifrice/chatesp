@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "chatesp/system_prompt.hpp"
+#include "chatesp/utc_clock.hpp"
 #include "json.hpp"
 
 namespace chatesp {
@@ -84,6 +85,39 @@ bool valid_config_token(const char *text, std::size_t max_size = 128) {
         }
     }
     return index <= max_size;
+}
+
+template <std::size_t Capacity>
+bool append_system_message(
+    FixedText<Capacity> &body, const char *prompt,
+    const char *approximate_location, std::size_t approximate_location_size,
+    const char *current_utc_minute) {
+    FixedText<2'048> content;
+    return UtcClock::valid_minute_text(current_utc_minute) &&
+        content.assign(prompt) &&
+        content.append(" Approximate user location: ") &&
+        (approximate_location_size == 0
+             ? content.append("not provided")
+             : content.append(
+                   approximate_location, approximate_location_size)) &&
+        content.append(
+            ". Use this location only for requests that depend on location.") &&
+        content.append(" Current user date and time: ") &&
+        content.append(current_utc_minute) && content.push_back('.') &&
+        detail::append_json_string(body, content.data(), content.size());
+}
+
+bool valid_approximate_location(const char *value, std::size_t size) {
+    if (size > 96 || (size != 0 && value == nullptr)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < size; ++index) {
+        const auto byte = static_cast<unsigned char>(value[index]);
+        if (byte < 0x20U || byte == 0x7fU) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool parse_function(
@@ -279,13 +313,23 @@ Error parse_chat_json(
 
 Error build_openrouter_chat_request(
     const OpenRouterConfig &config, const ConversationHistory &history,
-    const ToolRegistry &tools, bool stream, ChatRequestBody &body) {
+    const ToolRegistry &tools, const char *approximate_location,
+    std::size_t approximate_location_size, const char *current_utc_minute,
+    bool stream, ChatRequestBody &body) {
     body.clear();
-    if (!valid_config_token(config.chat_model)) return Error::invalid_argument;
+    if (!valid_config_token(config.chat_model) ||
+        !UtcClock::valid_minute_text(current_utc_minute) ||
+        !valid_approximate_location(
+            approximate_location, approximate_location_size)) {
+        return Error::invalid_argument;
+    }
     if (!body.append("{\"model\":") ||
         !detail::append_json_string(body, config.chat_model) ||
         !body.append(",\"messages\":[{\"role\":\"system\",\"content\":") ||
-        !detail::append_json_string(body, system_prompt) || !body.push_back('}')) {
+        !append_system_message(
+            body, system_prompt, approximate_location,
+            approximate_location_size, current_utc_minute) ||
+        !body.push_back('}')) {
         return Error::limit_exceeded;
     }
     for (std::size_t index = 0; index < history.size(); ++index) {
@@ -323,13 +367,22 @@ Error build_openrouter_chat_request(
 
 Error build_openrouter_route_request(
     const OpenRouterConfig &config, const ConversationHistory &history,
-    const ToolRegistry &tools, bool stream, ChatRequestBody &body) {
+    const ToolRegistry &tools, const char *approximate_location,
+    std::size_t approximate_location_size, const char *current_utc_minute,
+    bool stream, ChatRequestBody &body) {
     body.clear();
-    if (!valid_config_token(config.chat_model)) return Error::invalid_argument;
+    if (!valid_config_token(config.chat_model) ||
+        !UtcClock::valid_minute_text(current_utc_minute) ||
+        !valid_approximate_location(
+            approximate_location, approximate_location_size)) {
+        return Error::invalid_argument;
+    }
     if (!body.append("{\"model\":") ||
         !detail::append_json_string(body, config.chat_model) ||
         !body.append(",\"messages\":[{\"role\":\"system\",\"content\":") ||
-        !detail::append_json_string(body, routing_prompt) ||
+        !append_system_message(
+            body, routing_prompt, approximate_location,
+            approximate_location_size, current_utc_minute) ||
         !body.push_back('}')) {
         return Error::limit_exceeded;
     }
@@ -375,13 +428,21 @@ Error build_openrouter_route_request(
 
 Error build_openrouter_answer_request(
     const OpenRouterConfig &config, const ConversationHistory &history,
-    bool stream, ChatRequestBody &body) {
+    const char *approximate_location, std::size_t approximate_location_size,
+    const char *current_utc_minute, bool stream, ChatRequestBody &body) {
     body.clear();
-    if (!valid_config_token(config.chat_model)) return Error::invalid_argument;
+    if (!valid_config_token(config.chat_model) ||
+        !UtcClock::valid_minute_text(current_utc_minute) ||
+        !valid_approximate_location(
+            approximate_location, approximate_location_size)) {
+        return Error::invalid_argument;
+    }
     if (!body.append("{\"model\":") ||
         !detail::append_json_string(body, config.chat_model) ||
         !body.append(",\"messages\":[{\"role\":\"system\",\"content\":") ||
-        !detail::append_json_string(body, answer_prompt) ||
+        !append_system_message(
+            body, answer_prompt, approximate_location,
+            approximate_location_size, current_utc_minute) ||
         !body.push_back('}')) {
         return Error::limit_exceeded;
     }

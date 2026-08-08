@@ -18,14 +18,26 @@ struct HttpHeader {
     const char *value = nullptr;
 };
 
+struct HttpResponseDate {
+    agent::FixedText<64> value;
+    std::uint32_t observed_at_ms = 0;
+
+    void clear() {
+        value.clear();
+        observed_at_ms = 0;
+    }
+};
+
 struct ResponseHeaders {
     agent::FixedText<96> content_type;
     agent::FixedText<max_http_url_bytes> location;
+    HttpResponseDate date;
     bool invalid = false;
 
     void clear() {
         content_type.clear();
         location.clear();
+        date.clear();
         invalid = false;
     }
 };
@@ -60,6 +72,7 @@ struct HttpRequest {
     agent::RequestPolicy timeouts{};
     bool allow_image_redirects = false;
     std::uint8_t max_redirects = 0;
+    HttpResponseDate *response_date = nullptr;
 };
 
 class HttpTransport {

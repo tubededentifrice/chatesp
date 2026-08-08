@@ -9,10 +9,30 @@ struct ConfigurationView: View {
             Form {
                 watchSection
                 connectionSection
+                locationSection
                 modelSection
                 actionSection
             }
             .navigationTitle("ChatESP")
+        }
+    }
+
+    private var locationSection: some View {
+        Section {
+            TextField(
+                "Location fallback (city, country)",
+                text: Binding(
+                    get: { store.preferences.approximateLocation ?? "" },
+                    set: { value in
+                        store.preferences.approximateLocation =
+                            value.isEmpty ? nil : value
+                    }))
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+        } header: {
+            Text("Location")
+        } footer: {
+            Text("After you select a watch, the app sends the current time and a rounded location when the watch connects and once per hour while connected. This optional city is the fallback. The app does not send a precise position.")
         }
     }
 

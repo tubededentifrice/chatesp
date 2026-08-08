@@ -64,6 +64,7 @@ public:
     [[nodiscard]] std::size_t received_size() const;
     [[nodiscard]] std::size_t packet_size() const;
     [[nodiscard]] const std::uint8_t *packet_data() const;
+    [[nodiscard]] std::uint8_t version() const;
 
 private:
     std::array<std::uint8_t, kMaximumPacketSize> packet_{};
@@ -71,6 +72,7 @@ private:
     std::size_t expected_size_ = 0;
     std::size_t received_size_ = 0;
     std::size_t maximum_frame_data_size_ = 0;
+    std::uint8_t version_ = kProtocolVersion;
     bool active_ = false;
 };
 
@@ -78,7 +80,8 @@ private:
 make_acknowledgement(
     AcknowledgementStatus status,
     std::uint32_t revision,
-    const std::array<std::uint8_t, kFingerprintSize> &fingerprint);
+    const std::array<std::uint8_t, kFingerprintSize> &fingerprint,
+    std::uint8_t version = kProtocolVersion);
 
 }  // namespace provisioning
 }  // namespace chatesp

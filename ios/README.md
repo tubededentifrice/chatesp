@@ -1,9 +1,14 @@
 # ChatESP iOS companion
 
 The companion app saves API keys and Wi-Fi details in Keychain. It saves the
-endpoint, model choices, and provisioning revision in one versioned preferences
-record. It sends one atomic settings packet over the authenticated encrypted
-BLE provisioning service.
+endpoint, model choices, optional city-level location, and provisioning
+revision in one versioned preferences record. It sends one atomic settings
+packet over the authenticated encrypted BLE provisioning service. After a
+watch is selected, the app also sends the current time, UTC offset, and a
+position rounded to 0.1 degree when the watch connects and at most once per
+hour while connected. Significant-location monitoring avoids continuous GPS
+use. The live location stays in memory and is not saved in the preferences
+record.
 
 The project has no personal team or signing setting. Build the generic unsigned
 iOS target:
@@ -44,3 +49,7 @@ and integrated device firmware must pass these gates:
 - The app restores secrets from Keychain after restart.
 - The app restores non-secret choices and the revision from one preferences
   record.
+- The app sends time and a rounded location after each watch wake and no more
+  than once per hour during one connection.
+- A denied location permission still sends time and uses the saved city
+  fallback.

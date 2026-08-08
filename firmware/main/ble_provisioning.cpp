@@ -43,9 +43,13 @@ const ble_uuid128_t kDataUuid = BLE_UUID128_INIT(
 const ble_uuid128_t kAcknowledgementUuid = BLE_UUID128_INIT(
     0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
     0x8a, 0x4b, 0x3c, 0x6f, 0x03, 0x10, 0x2e, 0x7b);
+const ble_uuid128_t kDeviceContextUuid = BLE_UUID128_INIT(
+    0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
+    0x8a, 0x4b, 0x3c, 0x6f, 0x04, 0x10, 0x2e, 0x7b);
 
 SettingsStore *s_settings_store = nullptr;
 PasskeyCallback s_passkey_callback = nullptr;
+DeviceContextCallback s_device_context_callback = nullptr;
 void *s_callback_context = nullptr;
 provisioning::ProvisioningSession s_session;
 std::uint16_t s_owner_connection = kNoConnection;
@@ -94,6 +98,17 @@ ble_gatt_chr_def s_characteristics[] = {
             BLE_GATT_CHR_F_NOTIFY_INDICATE_AUTHEN,
         .min_key_size = BLE_SM_PAIR_KEY_SZ_MAX,
         .val_handle = &s_acknowledgement_handle,
+        .cpfd = nullptr,
+    },
+    {
+        .uuid = &kDeviceContextUuid.u,
+        .access_cb = gatt_access,
+        .arg = reinterpret_cast<void *>(3),
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC |
+            BLE_GATT_CHR_F_WRITE_AUTHEN,
+        .min_key_size = BLE_SM_PAIR_KEY_SZ_MAX,
+        .val_handle = nullptr,
         .cpfd = nullptr,
     },
     {},
@@ -163,6 +178,21 @@ void send_acknowledgement(
     }
     ble_gatts_indicate_custom(
         connection_handle, s_acknowledgement_handle, packet);
+}
+
+void send_device_context_acknowledgement(
+    std::uint16_t connection_handle,
+    const std::array<std::uint8_t,
+        provisioning::kDeviceContextAcknowledgementSize> &acknowledgement) {
+    if (s_acknowledgement_handle == 0) {
+        return;
+    }
+    os_mbuf *packet = ble_hs_mbuf_from_flat(
+        acknowledgement.data(), acknowledgement.size());
+    if (packet != nullptr) {
+        ble_gatts_indicate_custom(
+            connection_handle, s_acknowledgement_handle, packet);
+    }
 }
 
 provisioning::SessionResult authentication_acknowledgement() {
@@ -307,8 +337,51 @@ int gatt_access(
         if (s_owner_connection == connection_handle) {
             release_connection(connection_handle);
         }
-        send_acknowledgement(
-            connection_handle, authentication_acknowledgement());
+        if (characteristic == 3) {
+            send_device_context_acknowledgement(
+                connection_handle,
+                provisioning::make_device_context_acknowledgement(
+                    provisioning::DeviceContextStatus::authentication_required));
+        } else {
+            send_acknowledgement(
+                connection_handle, authentication_acknowledgement());
+        }
+        return 0;
+    }
+
+
+    if (characteristic == 3) {
+        if (s_owner_connection != kNoConnection) {
+            send_device_context_acknowledgement(
+                connection_handle,
+                provisioning::make_device_context_acknowledgement(
+                    provisioning::DeviceContextStatus::busy));
+            return 0;
+        }
+        const std::size_t frame_size = OS_MBUF_PKTLEN(context->om);
+        std::array<std::uint8_t, provisioning::kMaximumDeviceContextSize> frame{};
+        std::uint16_t copied_size = 0;
+        provisioning::DeviceContextResult result;
+        if (frame_size <= frame.size() &&
+            ble_hs_mbuf_to_flat(
+                context->om, frame.data(), frame.size(), &copied_size) == 0 &&
+            copied_size == frame_size) {
+            result = provisioning::validate_device_context_packet(
+                frame.data(), copied_size, security);
+        }
+        if (result.valid() && s_device_context_callback != nullptr) {
+            s_device_context_callback(
+                result.epoch_seconds,
+                result.utc_offset_minutes,
+                result.approximate_location.data(),
+                result.approximate_location.size(),
+                s_callback_context);
+        }
+        send_device_context_acknowledgement(
+            connection_handle,
+            provisioning::make_device_context_acknowledgement(
+                result.status, result.epoch_seconds, result.fingerprint));
+        clear_bytes(frame.data(), frame.size());
         return 0;
     }
 
@@ -364,8 +437,10 @@ int gatt_access(
 esp_err_t start(
     SettingsStore *settings_store,
     PasskeyCallback passkey_callback,
+    DeviceContextCallback device_context_callback,
     void *callback_context) {
-    if (settings_store == nullptr || passkey_callback == nullptr) {
+    if (settings_store == nullptr || passkey_callback == nullptr ||
+        device_context_callback == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     if (s_running) {
@@ -384,6 +459,7 @@ esp_err_t start(
 
     s_settings_store = settings_store;
     s_passkey_callback = passkey_callback;
+    s_device_context_callback = device_context_callback;
     s_callback_context = callback_context;
     s_session.disconnect();
     s_owner_connection = kNoConnection;
@@ -392,6 +468,7 @@ esp_err_t start(
     if (init_result != ESP_OK) {
         s_settings_store = nullptr;
         s_passkey_callback = nullptr;
+        s_device_context_callback = nullptr;
         s_callback_context = nullptr;
         return init_result;
     }
@@ -421,6 +498,7 @@ esp_err_t start(
         nimble_port_deinit();
         s_settings_store = nullptr;
         s_passkey_callback = nullptr;
+        s_device_context_callback = nullptr;
         s_callback_context = nullptr;
         return ESP_FAIL;
     }
@@ -443,6 +521,7 @@ esp_err_t stop() {
     hide_all_passkeys();
     s_settings_store = nullptr;
     s_passkey_callback = nullptr;
+    s_device_context_callback = nullptr;
     s_callback_context = nullptr;
     s_running = false;
     return stop_result == 0 ? deinit_result : ESP_FAIL;

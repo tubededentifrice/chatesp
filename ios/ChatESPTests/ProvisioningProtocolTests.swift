@@ -9,7 +9,8 @@ final class ProvisioningProtocolTests: XCTestCase {
             chatEndpoint: "https://openrouter.ai/api/v1",
             chatModel: "deepseek/deepseek-v4-flash",
             transcriptionModel: "openai/whisper-large-v3-turbo",
-            speechModel: "google/gemini-3.1-flash-tts-preview")
+            speechModel: "google/gemini-3.1-flash-tts-preview",
+            approximateLocation: "Dubai, United Arab Emirates")
         let secrets = ProvisioningSecrets(
             openRouterKey: "OPENROUTER_TOKEN_PLACEHOLDER",
             braveKey: "BRAVE_TOKEN_PLACEHOLDER",
@@ -20,13 +21,13 @@ final class ProvisioningProtocolTests: XCTestCase {
 
     func testGoldenPacketMatchesFirmwareVector() throws {
         let packet = try goldenSettings().packet(revision: 7)
-        XCTAssertEqual(packet.data.count, 273)
+        XCTAssertEqual(packet.data.count, 303)
         XCTAssertEqual(
             packet.fingerprint.hexString,
-            "44e81bdf41e1c3fb02167d61c16aee5dadcd54d70bc088499965bdb4a349c494")
+            "09fe4fdf6757295ba4960dccbf729df3a2efe5a3acfe2eca61a5335594d27ba0")
         XCTAssertEqual(packet.data.prefix(4), Data("CESP".utf8))
-        XCTAssertEqual(packet.data[4], 1)
-        XCTAssertEqual(packet.data[7], 8)
+        XCTAssertEqual(packet.data[4], 2)
+        XCTAssertEqual(packet.data[7], 9)
         XCTAssertEqual(packet.data.readBigEndianUInt32(at: 8), 7)
     }
 
@@ -38,7 +39,7 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(transfer.beginFrame.readBigEndianUInt32(at: 8), 0x01020304)
         XCTAssertEqual(transfer.dataFrames.count, 2)
         XCTAssertEqual(transfer.dataFrames[0].count, 194)
-        XCTAssertEqual(transfer.dataFrames[1].count, 107)
+        XCTAssertEqual(transfer.dataFrames[1].count, 137)
         XCTAssertEqual(transfer.dataFrames[0].readBigEndianUInt32(at: 6), 0x01020304)
         XCTAssertEqual(UInt16(transfer.dataFrames[0][10]) << 8 | UInt16(transfer.dataFrames[0][11]), 0)
         XCTAssertEqual(UInt16(transfer.dataFrames[1][10]) << 8 | UInt16(transfer.dataFrames[1][11]), 180)
@@ -47,7 +48,7 @@ final class ProvisioningProtocolTests: XCTestCase {
     func testAcknowledgementRequiresExactEnvelope() throws {
         let packet = try goldenSettings().packet(revision: 7)
         var bytes = Data("CESA".utf8)
-        bytes.append(1)
+        bytes.append(ProvisioningProtocolV2.version)
         bytes.append(0)
         bytes.appendBigEndian(UInt16(0))
         bytes.appendBigEndian(UInt32(7))
@@ -66,6 +67,40 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertThrowsError(try ProvisioningAcknowledgement(data: unknownStatus))
     }
 
+    func testDeviceContextHasAuthenticatedBoundedLayout() throws {
+        let date = Date(timeIntervalSince1970: 1_786_147_200)
+        let packet = try DeviceContextPacket(
+            date: date,
+            timeZone: TimeZone(secondsFromGMT: 14_400)!,
+            approximateLocation: "latitude 25.2, longitude 55.3")
+        XCTAssertEqual(packet.data.count, 78)
+        XCTAssertEqual(packet.data.prefix(4), Data("CESC".utf8))
+        XCTAssertEqual(packet.data[4], 1)
+        XCTAssertEqual(packet.data.readBigEndianUInt64(at: 6), 1_786_147_200)
+        XCTAssertEqual(packet.utcOffsetMinutes, 240)
+        XCTAssertEqual(
+            packet.fingerprint.hexString,
+            "d3a73c211aa2d932725513317cabdccd55494cd56614c9232c175acce58ccdb8")
+
+        var bytes = Data("CESR".utf8)
+        bytes.append(DeviceContextPacket.version)
+        bytes.append(ProvisioningStatus.applied.rawValue)
+        bytes.appendBigEndian(UInt16(0))
+        bytes.appendBigEndian(packet.epochSeconds)
+        bytes.append(packet.fingerprint)
+        let acknowledgement = try DeviceContextAcknowledgement(data: bytes)
+        XCTAssertEqual(acknowledgement.status, .applied)
+        XCTAssertEqual(acknowledgement.epochSeconds, packet.epochSeconds)
+        XCTAssertEqual(acknowledgement.fingerprint, packet.fingerprint)
+
+        XCTAssertThrowsError(try DeviceContextPacket(
+            date: date, timeZone: TimeZone(secondsFromGMT: 14_400)!,
+            approximateLocation: String(repeating: "L", count: 97)))
+        XCTAssertThrowsError(try DeviceContextPacket(
+            date: date, timeZone: TimeZone(secondsFromGMT: 14_400)!,
+            approximateLocation: "latitude 25.2\nlongitude 55.3"))
+    }
+
     func testInvalidFieldsAreRejectedBeforeTransfer() throws {
         var preferences = AppPreferences()
         let validSecrets = ProvisioningSecrets(
@@ -80,6 +115,16 @@ final class ProvisioningProtocolTests: XCTestCase {
 
         preferences = AppPreferences()
         preferences.chatModel = "model with spaces"
+        XCTAssertThrowsError(
+            try ProvisioningSettings(preferences: preferences, secrets: validSecrets).packet(revision: 1))
+
+        preferences = AppPreferences()
+        preferences.approximateLocation = String(repeating: "L", count: 97)
+        XCTAssertThrowsError(
+            try ProvisioningSettings(preferences: preferences, secrets: validSecrets).packet(revision: 1))
+
+        preferences = AppPreferences()
+        preferences.approximateLocation = "Dubai\nUnited Arab Emirates"
         XCTAssertThrowsError(
             try ProvisioningSettings(preferences: preferences, secrets: validSecrets).packet(revision: 1))
 

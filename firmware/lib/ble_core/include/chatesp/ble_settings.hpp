@@ -57,6 +57,7 @@ struct SettingsRecord {
     BoundedSetting<96> chat_model;
     BoundedSetting<96> transcription_model;
     BoundedSetting<96> speech_model;
+    BoundedSetting<96> approximate_location;
 
     [[nodiscard]] bool assign(const ValidationResult &validation);
     void clear();

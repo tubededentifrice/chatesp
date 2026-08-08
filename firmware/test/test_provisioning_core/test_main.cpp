@@ -28,6 +28,7 @@ Fields valid_fields() {
         {6, "deepseek/deepseek-v4-flash"},
         {7, "openai/whisper-large-v3-turbo"},
         {8, "google/gemini-3.1-flash-tts-preview"},
+        {9, "Dubai, United Arab Emirates"},
     };
 }
 
@@ -43,9 +44,35 @@ void append_u32(std::vector<std::uint8_t> &output, std::uint32_t value) {
     output.push_back(static_cast<std::uint8_t>(value));
 }
 
+void append_u64(std::vector<std::uint8_t> &output, std::uint64_t value) {
+    for (std::size_t index = 0; index < 8; ++index) {
+        output.push_back(static_cast<std::uint8_t>(value >> ((7U - index) * 8U)));
+    }
+}
+
+std::vector<std::uint8_t> make_device_context_packet() {
+    constexpr std::uint64_t epoch_seconds = 1'786'147'200ULL;
+    constexpr char location[] = "latitude 25.2, longitude 55.3";
+    constexpr std::array<std::uint8_t, 32> fingerprint{{
+        0xd3, 0xa7, 0x3c, 0x21, 0x1a, 0xa2, 0xd9, 0x32,
+        0x72, 0x55, 0x13, 0x31, 0x7c, 0xab, 0xdc, 0xcd,
+        0x55, 0x49, 0x4c, 0xd5, 0x66, 0x14, 0xc9, 0x23,
+        0x2c, 0x17, 0x5a, 0xcc, 0xe5, 0x8c, 0xcd, 0xb8,
+    }};
+    std::vector<std::uint8_t> packet{
+        'C', 'E', 'S', 'C', provisioning::kDeviceContextVersion, 0};
+    append_u64(packet, epoch_seconds);
+    append_u16(packet, 240);
+    packet.insert(packet.end(), fingerprint.begin(), fingerprint.end());
+    packet.push_back(sizeof(location) - 1);
+    packet.insert(packet.end(), location, location + sizeof(location) - 1);
+    return packet;
+}
+
 std::vector<std::uint8_t> make_packet(
     const Fields &fields = valid_fields(),
-    std::uint32_t revision = 7) {
+    std::uint32_t revision = 7,
+    std::uint8_t version = provisioning::kProtocolVersion) {
     std::vector<std::uint8_t> payload;
     for (const auto &field : fields) {
         payload.push_back(field.first);
@@ -54,7 +81,7 @@ std::vector<std::uint8_t> make_packet(
     }
 
     std::vector<std::uint8_t> packet{
-        'C', 'E', 'S', 'P', provisioning::kProtocolVersion,
+        'C', 'E', 'S', 'P', version,
         provisioning::kSettingsPacketType, 0, static_cast<std::uint8_t>(fields.size()),
         static_cast<std::uint8_t>(revision >> 24U),
         static_cast<std::uint8_t>(revision >> 16U),
@@ -73,8 +100,10 @@ std::vector<std::uint8_t> make_packet(
 std::vector<std::uint8_t> make_control(
     std::size_t packet_size,
     std::uint16_t frame_data_size = 180,
-    std::uint32_t transfer_id = 0x01020304) {
-    std::vector<std::uint8_t> frame{'C', 'E', 'S', 'B', 1, 1, 0, 0};
+    std::uint32_t transfer_id = 0x01020304,
+    std::uint8_t version = provisioning::kProtocolVersion) {
+    std::vector<std::uint8_t> frame{
+        'C', 'E', 'S', 'B', version, 1, 0, 0};
     append_u32(frame, transfer_id);
     append_u16(frame, packet_size);
     append_u16(frame, frame_data_size);
@@ -85,8 +114,10 @@ std::vector<std::uint8_t> make_data_frame(
     const std::vector<std::uint8_t> &packet,
     std::size_t offset,
     std::size_t count,
-    std::uint32_t transfer_id = 0x01020304) {
-    std::vector<std::uint8_t> frame{'C', 'E', 'S', 'D', 1, 0};
+    std::uint32_t transfer_id = 0x01020304,
+    std::uint8_t version = provisioning::kProtocolVersion) {
+    std::vector<std::uint8_t> frame{
+        'C', 'E', 'S', 'D', version, 0};
     append_u32(frame, transfer_id);
     append_u16(frame, offset);
     append_u16(frame, count);
@@ -136,12 +167,15 @@ void test_valid_golden_packet_is_accepted() {
         static_cast<int>(result.decision));
     TEST_ASSERT_EQUAL_UINT32(7, result.revision);
     TEST_ASSERT_EQUAL_STRING("Test Network", std::string(result.settings.wifi_ssid).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "Dubai, United Arab Emirates",
+        std::string(result.settings.approximate_location).c_str());
 
     constexpr std::array<std::uint8_t, 32> expected{{
-        0x44, 0xe8, 0x1b, 0xdf, 0x41, 0xe1, 0xc3, 0xfb,
-        0x02, 0x16, 0x7d, 0x61, 0xc1, 0x6a, 0xee, 0x5d,
-        0xad, 0xcd, 0x54, 0xd7, 0x0b, 0xc0, 0x88, 0x49,
-        0x99, 0x65, 0xbd, 0xb4, 0xa3, 0x49, 0xc4, 0x94,
+        0x09, 0xfe, 0x4f, 0xdf, 0x67, 0x57, 0x29, 0x5b,
+        0xa4, 0x96, 0x0d, 0xcc, 0xbf, 0x72, 0x9d, 0xf3,
+        0xa2, 0xef, 0xe5, 0xa3, 0xac, 0xfe, 0x2e, 0xca,
+        0x61, 0xa5, 0x33, 0x55, 0x94, 0xd2, 0x7b, 0xa0,
     }};
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected.data(), result.fingerprint.data(), expected.size());
 }
@@ -174,7 +208,7 @@ void test_packet_envelope_is_strict() {
     changed[0] = 'X';
     assert_error(changed, provisioning::ValidationError::bad_magic);
     changed = packet;
-    changed[4] = 2;
+    changed[4] = 3;
     assert_error(changed, provisioning::ValidationError::unsupported_version);
     changed = packet;
     changed[5] = 2;
@@ -183,7 +217,7 @@ void test_packet_envelope_is_strict() {
     changed[6] = 1;
     assert_error(changed, provisioning::ValidationError::bad_flags);
     changed = packet;
-    changed[7] = 7;
+    changed[7] = provisioning::kVersion1FieldCount;
     assert_error(changed, provisioning::ValidationError::bad_field_count);
     changed = packet;
     changed[15] ^= 1;
@@ -218,6 +252,37 @@ void test_transfer_assembles_ordered_bounded_frames() {
     TEST_ASSERT_EQUAL_UINT8_ARRAY(packet.data(), assembler.packet_data(), packet.size());
 }
 
+void test_version_one_packet_and_transfer_remain_supported() {
+    auto fields = valid_fields();
+    fields.pop_back();
+    const auto packet = make_packet(fields, 7, 1);
+    const auto validation = validate(packet);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::ValidationError::none),
+        static_cast<int>(validation.error));
+    TEST_ASSERT_TRUE(validation.settings.approximate_location.empty());
+
+    provisioning::TransferAssembler assembler;
+    const auto control = make_control(packet.size(), 180, 0x01020304, 1);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::TransferError::none),
+        static_cast<int>(assembler.handle_control(
+            control.data(), control.size(), kSecureLink)));
+    const auto first = make_data_frame(packet, 0, 180, 0x01020304, 1);
+    const auto second = make_data_frame(
+        packet, 180, packet.size() - 180, 0x01020304, 1);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::TransferError::none),
+        static_cast<int>(assembler.handle_data(
+            first.data(), first.size(), kSecureLink)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::TransferError::none),
+        static_cast<int>(assembler.handle_data(
+            second.data(), second.size(), kSecureLink)));
+    TEST_ASSERT_TRUE(assembler.complete());
+    TEST_ASSERT_EQUAL_UINT8(1, assembler.version());
+}
+
 void test_transfer_rejects_insecure_and_malformed_frames() {
     const auto packet = make_packet();
     provisioning::TransferAssembler assembler;
@@ -233,7 +298,7 @@ void test_transfer_rejects_insecure_and_malformed_frames() {
         static_cast<int>(provisioning::TransferError::bad_magic),
         static_cast<int>(assembler.handle_control(changed.data(), changed.size(), kSecureLink)));
     changed = control;
-    changed[4] = 2;
+    changed[4] = 3;
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(provisioning::TransferError::unsupported_version),
         static_cast<int>(assembler.handle_control(changed.data(), changed.size(), kSecureLink)));
@@ -286,11 +351,45 @@ void test_acknowledgement_has_exact_binary_layout() {
         validation.revision,
         validation.fingerprint);
     TEST_ASSERT_EQUAL_UINT8_ARRAY("CESA", acknowledgement.data(), 4);
-    TEST_ASSERT_EQUAL_UINT8(1, acknowledgement[4]);
+    TEST_ASSERT_EQUAL_UINT8(provisioning::kProtocolVersion, acknowledgement[4]);
     TEST_ASSERT_EQUAL_UINT8(0, acknowledgement[5]);
     TEST_ASSERT_EQUAL_UINT8(7, acknowledgement[11]);
     TEST_ASSERT_EQUAL_UINT8_ARRAY(
         validation.fingerprint.data(), acknowledgement.data() + 12, validation.fingerprint.size());
+}
+
+void test_device_context_has_bounded_authenticated_layout() {
+    auto packet = make_device_context_packet();
+    const auto result = provisioning::validate_device_context_packet(
+        packet.data(), packet.size(), kSecureLink);
+    TEST_ASSERT_TRUE(result.valid());
+    TEST_ASSERT_EQUAL_UINT64(1'786'147'200ULL, result.epoch_seconds);
+    TEST_ASSERT_EQUAL_INT16(240, result.utc_offset_minutes);
+    TEST_ASSERT_EQUAL_STRING(
+        "latitude 25.2, longitude 55.3",
+        std::string(result.approximate_location).c_str());
+
+    const auto acknowledgement =
+        provisioning::make_device_context_acknowledgement(
+            result.status, result.epoch_seconds, result.fingerprint);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY("CESR", acknowledgement.data(), 4);
+    TEST_ASSERT_EQUAL_UINT8(1, acknowledgement[4]);
+    TEST_ASSERT_EQUAL_UINT8(0, acknowledgement[5]);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(
+        result.fingerprint.data(), acknowledgement.data() + 16,
+        result.fingerprint.size());
+
+    const provisioning::LinkSecurity insecure{true, false, true, true};
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::DeviceContextStatus::authentication_required),
+        static_cast<int>(provisioning::validate_device_context_packet(
+            packet.data(), packet.size(), insecure).status));
+
+    packet.back() = '\n';
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::DeviceContextStatus::invalid_location),
+        static_cast<int>(provisioning::validate_device_context_packet(
+            packet.data(), packet.size(), kSecureLink).status));
 }
 
 void test_fields_are_complete_ordered_and_unique() {
@@ -350,6 +449,18 @@ void test_each_field_has_a_fixed_limit_and_format() {
     fields = valid_fields();
     replace_field(fields, 6, "model with space");
     assert_error(make_packet(fields), provisioning::ValidationError::invalid_model);
+
+    fields = valid_fields();
+    replace_field(fields, 9, std::string(97, 'L'));
+    assert_error(
+        make_packet(fields),
+        provisioning::ValidationError::invalid_approximate_location);
+
+    fields = valid_fields();
+    replace_field(fields, 9, "Dubai\nUnited Arab Emirates");
+    assert_error(
+        make_packet(fields),
+        provisioning::ValidationError::invalid_approximate_location);
 }
 
 void test_revision_rules_reject_stale_and_conflicting_packets() {
@@ -389,7 +500,9 @@ int main(int, char **) {
     RUN_TEST(test_each_field_has_a_fixed_limit_and_format);
     RUN_TEST(test_revision_rules_reject_stale_and_conflicting_packets);
     RUN_TEST(test_transfer_assembles_ordered_bounded_frames);
+    RUN_TEST(test_version_one_packet_and_transfer_remain_supported);
     RUN_TEST(test_transfer_rejects_insecure_and_malformed_frames);
     RUN_TEST(test_acknowledgement_has_exact_binary_layout);
+    RUN_TEST(test_device_context_has_bounded_authenticated_layout);
     return UNITY_END();
 }

@@ -146,6 +146,11 @@ visible splash or ready view.
 - Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
   the station connects.
 - Verify encrypted BLE provisioning and acknowledgement with a physical iPhone.
+- Verify that a wake connection sends current iPhone time, UTC offset, and a
+  location rounded to 0.1 degree to the model context.
+- Verify that a denied location permission uses the saved city fallback and
+  does not block a request.
+- Verify that one continuous connection does not sync more than once per hour.
 - Verify model device controls at each brightness and volume limit, after a
   reset, and with NVS write failure injection.
 - Verify model power-off confirmation, cancellation, production current, and

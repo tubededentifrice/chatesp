@@ -216,7 +216,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings securely to your watch.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your watch.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "ChatESP uses an approximate position to help the watch answer local questions such as weather.";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.chatesp.companion;
@@ -235,7 +236,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings securely to your watch.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your watch.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "ChatESP uses an approximate position to help the watch answer local questions such as weather.";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.chatesp.companion;

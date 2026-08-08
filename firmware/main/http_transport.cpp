@@ -146,6 +146,12 @@ esp_err_t HttpTransport::capture_header(esp_http_client_event_t *event) {
         if (!headers.location.assign(event->header_value)) {
             headers.invalid = true;
         }
+    } else if (text_equal_fold(event->header_key, "Date")) {
+        if (headers.date.value.assign(event->header_value)) {
+            headers.date.observed_at_ms = monotonic_ms();
+        } else {
+            headers.date.clear();
+        }
     }
     return ESP_OK;
 }
@@ -249,6 +255,9 @@ agent::Error HttpTransport::execute(
     const HttpRequest &request, ResponseSink &sink,
     agent::CancellationToken &cancellation) {
     std::lock_guard<std::mutex> request_lock(request_mutex_);
+    if (request.response_date != nullptr) {
+        request.response_date->clear();
+    }
     agent::Error result = validate_request(request);
     if (result != agent::Error::none) {
         return result;
@@ -428,6 +437,9 @@ agent::Error HttpTransport::execute(
             "HTTPS byte counts: request=%u response=%u",
             static_cast<unsigned>(body_size),
             static_cast<unsigned>(response_bytes));
+        if (result == agent::Error::none && request.response_date != nullptr) {
+            *request.response_date = response_headers_.date;
+        }
         return cancellation.cancelled() ? agent::Error::cancelled : result;
     }
 }

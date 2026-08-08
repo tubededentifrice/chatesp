@@ -1,9 +1,11 @@
 #include "voice_runtime.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <new>
 #include <optional>
 #include <string_view>
@@ -221,6 +223,7 @@ struct RuntimeSettings {
         chat_model.clear();
         transcription_model.clear();
         speech_model.clear();
+        approximate_location.clear();
         configured = false;
     }
 
@@ -238,7 +241,8 @@ struct RuntimeSettings {
             assign_setting(wifi_password, local.wifi_password) &&
             chat_model.assign("deepseek/deepseek-v4-flash") &&
             transcription_model.assign("openai/whisper-large-v3-turbo") &&
-            speech_model.assign("hexgrad/kokoro-82m");
+            speech_model.assign("hexgrad/kokoro-82m") &&
+            approximate_location.assign("");
         if (!configured) {
             clear();
         }
@@ -257,7 +261,9 @@ struct RuntimeSettings {
             next.chat_model.assign(record.chat_model.view()) &&
             next.transcription_model.assign(
                 record.transcription_model.view()) &&
-            next.speech_model.assign(record.speech_model.view());
+            next.speech_model.assign(record.speech_model.view()) &&
+            next.approximate_location.assign(
+                record.approximate_location.view());
         if (!next.configured) {
             next.clear();
             return false;
@@ -296,6 +302,10 @@ struct RuntimeSettings {
             ssid.data(), ssid.size(), password.data(), password.size()};
     }
 
+    std::string_view location() const {
+        return approximate_location.view();
+    }
+
     provisioning::BoundedSetting<192> endpoint;
     provisioning::BoundedSetting<256> openrouter_key;
     provisioning::BoundedSetting<128> brave_key;
@@ -304,6 +314,7 @@ struct RuntimeSettings {
     provisioning::BoundedSetting<96> chat_model;
     provisioning::BoundedSetting<96> transcription_model;
     provisioning::BoundedSetting<96> speech_model;
+    provisioning::BoundedSetting<96> approximate_location;
     bool configured = false;
 };
 
@@ -324,6 +335,14 @@ struct Command {
 struct PasskeyEvent {
     std::uint32_t passkey = 0;
     bool visible = false;
+};
+
+struct DeviceContextEvent {
+    std::uint64_t epoch_seconds = 0;
+    std::int16_t utc_offset_minutes = 0;
+    std::uint32_t observed_at_ms = 0;
+    std::uint8_t approximate_location_size = 0;
+    std::array<char, provisioning::kMaximumApproximateLocationSize + 1> approximate_location{};
 };
 
 const char *error_message(agent::Error error) {
@@ -373,9 +392,10 @@ public:
           power_off_tool_(device_control_),
           chat_provider_(
               openrouter_control_transport_, network_, openrouter_connection_,
-              tools_),
+              tools_, utc_clock_, settings_.location()),
           transcription_provider_(
-              openrouter_control_transport_, network_, openrouter_connection_),
+              openrouter_control_transport_, network_, openrouter_connection_,
+              utc_clock_),
           speech_provider_(
               openrouter_audio_transport_, network_, openrouter_connection_),
           pcm_sink_(playback_, device_control_),
@@ -447,9 +467,10 @@ public:
         }
         command_queue_ = xQueueCreate(16, sizeof(Command));
         passkey_queue_ = xQueueCreate(1, sizeof(PasskeyEvent));
+        device_context_queue_ = xQueueCreate(1, sizeof(DeviceContextEvent));
         speech_events_ = xEventGroupCreate();
         if (command_queue_ == nullptr || passkey_queue_ == nullptr ||
-            speech_events_ == nullptr) {
+            device_context_queue_ == nullptr || speech_events_ == nullptr) {
             if (command_queue_ != nullptr) {
                 vQueueDelete(command_queue_);
                 command_queue_ = nullptr;
@@ -457,6 +478,10 @@ public:
             if (passkey_queue_ != nullptr) {
                 vQueueDelete(passkey_queue_);
                 passkey_queue_ = nullptr;
+            }
+            if (device_context_queue_ != nullptr) {
+                vQueueDelete(device_context_queue_);
+                device_context_queue_ = nullptr;
             }
             if (speech_events_ != nullptr) {
                 vEventGroupDelete(speech_events_);
@@ -475,8 +500,10 @@ public:
         if (passkey_task_result != pdPASS) {
             vQueueDelete(command_queue_);
             vQueueDelete(passkey_queue_);
+            vQueueDelete(device_context_queue_);
             command_queue_ = nullptr;
             passkey_queue_ = nullptr;
+            device_context_queue_ = nullptr;
             vEventGroupDelete(speech_events_);
             speech_events_ = nullptr;
             return ESP_ERR_NO_MEM;
@@ -502,8 +529,10 @@ public:
             passkey_task_ = nullptr;
             vQueueDelete(command_queue_);
             vQueueDelete(passkey_queue_);
+            vQueueDelete(device_context_queue_);
             command_queue_ = nullptr;
             passkey_queue_ = nullptr;
+            device_context_queue_ = nullptr;
             vEventGroupDelete(speech_events_);
             speech_events_ = nullptr;
             return ESP_ERR_NO_MEM;
@@ -832,6 +861,32 @@ private:
         }
     }
 
+    static void device_context_callback(
+        std::uint64_t epoch_seconds,
+        std::int16_t utc_offset_minutes,
+        const char *approximate_location,
+        std::size_t approximate_location_size,
+        void *context) {
+        auto *self = static_cast<Impl *>(context);
+        if (self == nullptr || self->device_context_queue_ == nullptr ||
+            approximate_location_size > provisioning::kMaximumApproximateLocationSize ||
+            (approximate_location == nullptr && approximate_location_size != 0)) {
+            return;
+        }
+        DeviceContextEvent event;
+        event.epoch_seconds = epoch_seconds;
+        event.utc_offset_minutes = utc_offset_minutes;
+        event.observed_at_ms = monotonic_ms();
+        event.approximate_location_size =
+            static_cast<std::uint8_t>(approximate_location_size);
+        if (approximate_location_size != 0) {
+            std::memcpy(
+                event.approximate_location.data(), approximate_location,
+                approximate_location_size);
+        }
+        xQueueOverwrite(self->device_context_queue_, &event);
+    }
+
     template <typename Callback>
     bool with_display(Callback callback) {
         if (bsp_display_lock(100)) {
@@ -976,6 +1031,12 @@ private:
                 process_command(command);
             }
 
+            DeviceContextEvent device_context;
+            if (xQueueReceive(
+                    device_context_queue_, &device_context, 0) == pdTRUE) {
+                apply_device_context(device_context);
+            }
+
             const std::uint32_t now_ms = monotonic_ms();
             const network::NetworkState network_state = network_.state();
             if (network_state != last_network_state_) {
@@ -1055,6 +1116,21 @@ private:
                 voice_priority_.store(false, std::memory_order_release);
             }
         }
+    }
+
+    void apply_device_context(const DeviceContextEvent &context) {
+        if (!utc_clock_.update_from_epoch_seconds(
+                context.epoch_seconds, context.utc_offset_minutes,
+                context.observed_at_ms) ||
+            !live_approximate_location_.assign(
+                std::string_view{
+                    context.approximate_location.data(),
+                    context.approximate_location_size})) {
+            return;
+        }
+        const std::string_view location = live_approximate_location_.view();
+        chat_provider_.set_approximate_location(
+            location.empty() ? settings_.location() : location);
     }
 
     void start_network_early(bool force) {
@@ -1509,6 +1585,9 @@ private:
         openrouter_connection_ = settings_.openrouter();
         brave_key_ = settings_.brave();
         chat_provider_.set_connection(openrouter_connection_);
+        const std::string_view live_location = live_approximate_location_.view();
+        chat_provider_.set_approximate_location(
+            live_location.empty() ? settings_.location() : live_location);
         transcription_provider_.set_connection(openrouter_connection_);
         speech_provider_.set_connection(openrouter_connection_);
         web_provider_.set_api_key(brave_key_);
@@ -1604,7 +1683,7 @@ private:
         }
         ble_start_attempted_ = true;
         const esp_err_t result = ble_provisioning::start(
-            &settings_store_, passkey_callback, this);
+            &settings_store_, passkey_callback, device_context_callback, this);
         ble_started_ = result == ESP_OK;
         if (!ble_started_) {
             ESP_LOGE(kTag, "BLE provisioning restart failed");
@@ -1636,6 +1715,9 @@ private:
     AudioPlayback playback_;
     AtomicCancellation cancellation_;
     agent::ToolRegistry tools_;
+    agent::UtcClock utc_clock_;
+    provisioning::BoundedSetting<provisioning::kMaximumApproximateLocationSize>
+        live_approximate_location_;
     cloud::OpenRouterConnectionView openrouter_connection_;
     provider::SecretView brave_key_;
     cloud::BraveWebSearchProvider web_provider_;
@@ -1663,6 +1745,7 @@ private:
         network::NetworkState::off;
     QueueHandle_t command_queue_ = nullptr;
     QueueHandle_t passkey_queue_ = nullptr;
+    QueueHandle_t device_context_queue_ = nullptr;
     TaskHandle_t task_ = nullptr;
     TaskHandle_t passkey_task_ = nullptr;
     TaskHandle_t speech_task_ = nullptr;

@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include <string_view>
 
 #include "chatesp/agent_interfaces.hpp"
 #include "chatesp/brave_protocol.hpp"
 #include "chatesp/openrouter_protocol.hpp"
 #include "chatesp/provider_helpers.hpp"
 #include "chatesp/tool_registry.hpp"
+#include "chatesp/utc_clock.hpp"
 #include "http_transport.hpp"
 #include "network_manager.hpp"
 
@@ -29,9 +31,11 @@ public:
         transport::HttpTransport &transport,
         network::NetworkManager &network,
         const OpenRouterConnectionView &connection,
-        const agent::ToolRegistry &tools)
+        const agent::ToolRegistry &tools, agent::UtcClock &utc_clock,
+        std::string_view approximate_location)
         : transport_(transport), network_(network), connection_(connection),
-          tools_(tools) {}
+          tools_(tools), utc_clock_(utc_clock),
+          approximate_location_(approximate_location) {}
 
     agent::Error complete(
         const agent::ConversationHistory &history, agent::ChatTurn &turn,
@@ -50,6 +54,9 @@ public:
     void set_connection(const OpenRouterConnectionView &connection) {
         connection_ = connection;
     }
+    void set_approximate_location(std::string_view value) {
+        approximate_location_ = value;
+    }
     void cancel_active();
 
 private:
@@ -57,6 +64,8 @@ private:
     network::NetworkManager &network_;
     OpenRouterConnectionView connection_;
     const agent::ToolRegistry &tools_;
+    agent::UtcClock &utc_clock_;
+    std::string_view approximate_location_;
 };
 
 class OpenRouterTranscriptionProvider final
@@ -65,8 +74,9 @@ public:
     OpenRouterTranscriptionProvider(
         transport::HttpTransport &transport,
         network::NetworkManager &network,
-        const OpenRouterConnectionView &connection)
-        : transport_(transport), network_(network), connection_(connection) {}
+        const OpenRouterConnectionView &connection, agent::UtcClock &utc_clock)
+        : transport_(transport), network_(network), connection_(connection),
+          utc_clock_(utc_clock) {}
 
     agent::Error transcribe(
         const agent::AudioView &audio,
@@ -81,6 +91,7 @@ private:
     transport::HttpTransport &transport_;
     network::NetworkManager &network_;
     OpenRouterConnectionView connection_;
+    agent::UtcClock &utc_clock_;
 };
 
 class OpenRouterSpeechProvider final : public agent::SpeechProvider {

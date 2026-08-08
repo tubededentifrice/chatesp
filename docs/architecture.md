@@ -57,6 +57,14 @@ web search, image search, or one registered device tool. Image search still
 needs a separate model-selected result ID. A relative brightness or volume
 request gets device status before it changes the value. After routing and tool
 work, the final model request has no tools.
+The iOS companion sends its clock and current UTC offset when the watch connects
+and at most once per hour while the connection stays active. The firmware
+advances the accepted value with monotonic time. The successful transcription
+response also supplies a standard HTTP `Date` header as a UTC network fallback.
+Each route and final-answer prompt gets the user's local minute, such as
+`YYYY-MM-DD HH:MM UTC+04:00`. The prompt does not contain seconds, so requests
+in the same minute use the same time value. A missing or invalid time stops the
+turn instead of giving the model a false time.
 OpenRouter sends that answer as an event stream. The UI receives bounded copies
 of the complete answer so far. It limits display updates to keep the button and
 network paths responsive. Tool-call data cannot enter the answer or speech
@@ -128,6 +136,14 @@ The system prompt tells the model to:
 - avoid Markdown unless it materially helps the display;
 - use a tool only when current or visual information is necessary;
 - never expose tool protocol or hidden reasoning.
+
+The route and answer system messages also contain the approximate user location
+and the current user-local date and time at minute precision. After a watch is
+selected, the companion sends a location rounded to 0.1 degree when the watch
+connects and at most once per hour while connected. A saved city and country is
+the fallback. The live value stays in RAM and is not written to flash. It must
+not contain a precise position or a street address. The changing time suffix
+follows the stable instruction text.
 
 The firmware also sets a short output limit. The display can scroll, but the
 normal answer must fit a spoken interaction.

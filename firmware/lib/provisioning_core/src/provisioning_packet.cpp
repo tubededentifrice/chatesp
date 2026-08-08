@@ -9,8 +9,12 @@ namespace provisioning {
 namespace {
 
 constexpr std::array<std::uint8_t, 4> kMagic{'C', 'E', 'S', 'P'};
-constexpr std::array<std::uint8_t, 15> kFingerprintDomain{
+constexpr std::array<std::uint8_t, 15> kFingerprintDomainV1{
     'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '1'};
+constexpr std::array<std::uint8_t, 15> kFingerprintDomainV2{
+    'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '2'};
+constexpr std::array<std::uint8_t, 15> kDeviceContextFingerprintDomain{
+    'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'X', 'T', '-', 'V', '1'};
 
 constexpr std::uint32_t kShaInitial[8] = {
     0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
@@ -158,6 +162,20 @@ std::uint32_t read_u32(const std::uint8_t *data) {
         static_cast<std::uint32_t>(data[3]);
 }
 
+std::uint64_t read_u64(const std::uint8_t *data) {
+    std::uint64_t value = 0;
+    for (std::size_t index = 0; index < 8; ++index) {
+        value = (value << 8U) | data[index];
+    }
+    return value;
+}
+
+void write_u64(std::uint8_t *data, std::uint64_t value) {
+    for (std::size_t index = 0; index < 8; ++index) {
+        data[7U - index] = static_cast<std::uint8_t>(value >> (index * 8U));
+    }
+}
+
 bool fingerprints_equal(
     const std::array<std::uint8_t, kFingerprintSize> &left,
     const std::array<std::uint8_t, kFingerprintSize> &right) {
@@ -168,7 +186,7 @@ bool fingerprints_equal(
     return difference == 0;
 }
 
-bool valid_utf8(std::string_view value) {
+bool valid_utf8(std::string_view value, bool reject_controls = false) {
     std::size_t index = 0;
     while (index < value.size()) {
         const auto first = static_cast<std::uint8_t>(value[index]);
@@ -205,6 +223,11 @@ bool valid_utf8(std::string_view value) {
             (continuation == 3 && code_point < 0x10000U) ||
             code_point > 0x10ffffU || (code_point >= 0xd800U && code_point <= 0xdfffU) ||
             code_point == 0) {
+            return false;
+        }
+        if (reject_controls &&
+            (code_point <= 0x1fU ||
+             (code_point >= 0x7fU && code_point <= 0x9fU))) {
             return false;
         }
         index += continuation + 1;
@@ -267,6 +290,11 @@ ValidationError validate_field(std::uint8_t id, std::string_view value) {
         case 7:
         case 8:
             return valid_model(value) ? ValidationError::none : ValidationError::invalid_model;
+        case 9:
+            return value.size() <= kMaximumApproximateLocationSize &&
+                    valid_utf8(value, true)
+                ? ValidationError::none
+                : ValidationError::invalid_approximate_location;
         default:
             return ValidationError::bad_field_order;
     }
@@ -282,8 +310,30 @@ void assign_field(SettingsView &settings, std::uint8_t id, std::string_view valu
         case 6: settings.chat_model = value; break;
         case 7: settings.transcription_model = value; break;
         case 8: settings.speech_model = value; break;
+        case 9: settings.approximate_location = value; break;
         default: break;
     }
+}
+
+std::array<std::uint8_t, kFingerprintSize> device_context_fingerprint(
+    std::uint64_t epoch_seconds,
+    std::int16_t utc_offset_minutes,
+    std::string_view approximate_location) {
+    std::array<std::uint8_t, 12> metadata{};
+    metadata[0] = kDeviceContextVersion;
+    write_u64(metadata.data() + 1, epoch_seconds);
+    const std::uint16_t offset_bits =
+        static_cast<std::uint16_t>(utc_offset_minutes);
+    metadata[9] = static_cast<std::uint8_t>(offset_bits >> 8U);
+    metadata[10] = static_cast<std::uint8_t>(offset_bits);
+    metadata[11] = static_cast<std::uint8_t>(approximate_location.size());
+    Sha256 sha;
+    sha.update(kDeviceContextFingerprintDomain.data(), kDeviceContextFingerprintDomain.size());
+    sha.update(metadata.data(), metadata.size());
+    sha.update(
+        reinterpret_cast<const std::uint8_t *>(approximate_location.data()),
+        approximate_location.size());
+    return sha.finish();
 }
 
 }  // namespace
@@ -299,7 +349,9 @@ std::array<std::uint8_t, kFingerprintSize> compute_content_fingerprint(
     const std::uint8_t *payload,
     std::size_t payload_size) {
     Sha256 sha;
-    sha.update(kFingerprintDomain.data(), kFingerprintDomain.size());
+    const auto &domain = version == 1 ? kFingerprintDomainV1
+                                      : kFingerprintDomainV2;
+    sha.update(domain.data(), domain.size());
     const std::array<std::uint8_t, 3> metadata{version, packet_type, field_count};
     sha.update(metadata.data(), metadata.size());
     sha.update(payload, payload_size);
@@ -328,7 +380,7 @@ ValidationResult validate_settings_packet(
         result.error = ValidationError::bad_magic;
         return result;
     }
-    if (packet[4] != kProtocolVersion) {
+    if (!supported_protocol_version(packet[4])) {
         result.error = ValidationError::unsupported_version;
         return result;
     }
@@ -336,7 +388,9 @@ ValidationResult validate_settings_packet(
         result.error = ValidationError::bad_type;
         return result;
     }
-    if (packet[6] != 0 || packet[7] != kRequiredFieldCount) {
+    const std::uint8_t required_field_count =
+        packet[4] == 1 ? kVersion1FieldCount : kRequiredFieldCount;
+    if (packet[6] != 0 || packet[7] != required_field_count) {
         result.error = packet[6] != 0 ? ValidationError::bad_flags : ValidationError::bad_field_count;
         return result;
     }
@@ -393,7 +447,7 @@ ValidationResult validate_settings_packet(
         offset += length;
         ++expected_id;
     }
-    if (expected_id != kRequiredFieldCount + 1) {
+    if (expected_id != required_field_count + 1) {
         result.error = ValidationError::missing_field;
         return result;
     }
@@ -413,6 +467,74 @@ ValidationResult validate_settings_packet(
         }
     }
     result.decision = ApplyDecision::apply;
+    return result;
+}
+
+DeviceContextResult validate_device_context_packet(
+    const std::uint8_t *packet,
+    std::size_t packet_size,
+    const LinkSecurity &security) {
+    DeviceContextResult result;
+    if (!link_is_secure(security)) {
+        result.status = DeviceContextStatus::authentication_required;
+        return result;
+    }
+    if (packet == nullptr || packet_size < kDeviceContextHeaderSize ||
+        packet_size > kMaximumDeviceContextSize ||
+        std::memcmp(packet, "CESC", 4) != 0) {
+        return result;
+    }
+    if (packet[4] != kDeviceContextVersion) {
+        result.status = DeviceContextStatus::unsupported_version;
+        return result;
+    }
+    const std::size_t location_size = packet[48];
+    if (packet[5] != 0 ||
+        packet_size != kDeviceContextHeaderSize + location_size) {
+        return result;
+    }
+    const std::string_view location{
+        reinterpret_cast<const char *>(packet + kDeviceContextHeaderSize),
+        location_size};
+    if (location.size() > kMaximumApproximateLocationSize ||
+        !valid_utf8(location, true)) {
+        result.status = DeviceContextStatus::invalid_location;
+        return result;
+    }
+    result.epoch_seconds = read_u64(packet + 6);
+    result.utc_offset_minutes = static_cast<std::int16_t>(read_u16(packet + 14));
+    // Accept 2020-01-01 through 9999-12-31.
+    if (result.epoch_seconds < 1'577'836'800ULL ||
+        result.epoch_seconds > 253'402'300'799ULL ||
+        result.utc_offset_minutes < -840 || result.utc_offset_minutes > 840) {
+        return result;
+    }
+    std::copy(packet + 16, packet + 48, result.fingerprint.begin());
+    if (!fingerprints_equal(
+            result.fingerprint,
+            device_context_fingerprint(
+                result.epoch_seconds, result.utc_offset_minutes, location))) {
+        return result;
+    }
+    result.approximate_location = location;
+    result.status = DeviceContextStatus::applied;
+    return result;
+}
+
+std::array<std::uint8_t, kDeviceContextAcknowledgementSize>
+make_device_context_acknowledgement(
+    DeviceContextStatus status,
+    std::uint64_t epoch_seconds,
+    const std::array<std::uint8_t, kFingerprintSize> &fingerprint) {
+    std::array<std::uint8_t, kDeviceContextAcknowledgementSize> result{};
+    result[0] = 'C';
+    result[1] = 'E';
+    result[2] = 'S';
+    result[3] = 'R';
+    result[4] = kDeviceContextVersion;
+    result[5] = static_cast<std::uint8_t>(status);
+    write_u64(result.data() + 8, epoch_seconds);
+    std::copy(fingerprint.begin(), fingerprint.end(), result.begin() + 16);
     return result;
 }
 

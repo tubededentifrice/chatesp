@@ -7,8 +7,9 @@ namespace {
 SessionResult acknowledgement(
     AcknowledgementStatus status,
     std::uint32_t revision = 0,
-    const std::array<std::uint8_t, kFingerprintSize> &fingerprint = {}) {
-    return {true, make_acknowledgement(status, revision, fingerprint)};
+    const std::array<std::uint8_t, kFingerprintSize> &fingerprint = {},
+    std::uint8_t version = kProtocolVersion) {
+    return {true, make_acknowledgement(status, revision, fingerprint, version)};
 }
 
 AcknowledgementStatus validation_status(ValidationError error) {
@@ -25,6 +26,7 @@ AcknowledgementStatus validation_status(ValidationError error) {
         case ValidationError::invalid_wifi_ssid:
         case ValidationError::invalid_wifi_password:
         case ValidationError::invalid_model:
+        case ValidationError::invalid_approximate_location:
         case ValidationError::invalid_utf8:
             return AcknowledgementStatus::invalid_field;
         case ValidationError::stale_revision:
@@ -79,13 +81,15 @@ SessionResult ProvisioningSession::handle_data(
     }
 
     const SessionResult result = acknowledgement(
-        status, validation.revision, validation.fingerprint);
+        status, validation.revision, validation.fingerprint,
+        assembler_.version());
     assembler_.reset();
     return result;
 }
 
 SessionResult ProvisioningSession::busy_acknowledgement() const {
-    return acknowledgement(AcknowledgementStatus::busy);
+    return acknowledgement(
+        AcknowledgementStatus::busy, 0, {}, assembler_.version());
 }
 
 void ProvisioningSession::disconnect() { assembler_.reset(); }
@@ -93,6 +97,7 @@ void ProvisioningSession::disconnect() { assembler_.reset(); }
 bool ProvisioningSession::active() const { return assembler_.active(); }
 
 SessionResult ProvisioningSession::transfer_error(TransferError error) {
+    const std::uint8_t version = assembler_.version();
     const AcknowledgementStatus status =
         error == TransferError::authentication_required
             ? AcknowledgementStatus::authentication_required
@@ -100,7 +105,7 @@ SessionResult ProvisioningSession::transfer_error(TransferError error) {
                   ? AcknowledgementStatus::unsupported_version
                   : AcknowledgementStatus::malformed_transfer;
     assembler_.reset();
-    return acknowledgement(status);
+    return acknowledgement(status, 0, {}, version);
 }
 
 }  // namespace provisioning
