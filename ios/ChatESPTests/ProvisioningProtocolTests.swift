@@ -7,7 +7,7 @@ final class ProvisioningProtocolTests: XCTestCase {
     private func goldenSettings() -> ProvisioningSettings {
         let preferences = AppPreferences(
             chatEndpoint: "https://openrouter.ai/api/v1",
-            chatModel: "deepseek/deepseek-v4-flash",
+            chatModel: "~deepseek/deepseek-v4-flash-latest",
             transcriptionModel: "openai/whisper-large-v3-turbo",
             speechModel: "google/gemini-3.1-flash-tts-preview",
             approximateLocation: "Dubai, United Arab Emirates")
@@ -36,10 +36,10 @@ final class ProvisioningProtocolTests: XCTestCase {
 
     func testGoldenPacketMatchesFirmwareVector() throws {
         let packet = try goldenSettings().packet(revision: 7)
-        XCTAssertEqual(packet.data.count, 303)
+        XCTAssertEqual(packet.data.count, 311)
         XCTAssertEqual(
             packet.fingerprint.hexString,
-            "09fe4fdf6757295ba4960dccbf729df3a2efe5a3acfe2eca61a5335594d27ba0")
+            "3dd4441effe5f36c424310634670e91ea4dd936e958b38c21db1449a5fda98ce")
         XCTAssertEqual(packet.data.prefix(4), Data("CESP".utf8))
         XCTAssertEqual(packet.data[4], 2)
         XCTAssertEqual(packet.data[7], 9)
@@ -54,7 +54,7 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertEqual(transfer.beginFrame.readBigEndianUInt32(at: 8), 0x01020304)
         XCTAssertEqual(transfer.dataFrames.count, 2)
         XCTAssertEqual(transfer.dataFrames[0].count, 194)
-        XCTAssertEqual(transfer.dataFrames[1].count, 137)
+        XCTAssertEqual(transfer.dataFrames[1].count, 145)
         XCTAssertEqual(transfer.dataFrames[0].readBigEndianUInt32(at: 6), 0x01020304)
         XCTAssertEqual(UInt16(transfer.dataFrames[0][10]) << 8 | UInt16(transfer.dataFrames[0][11]), 0)
         XCTAssertEqual(UInt16(transfer.dataFrames[1][10]) << 8 | UInt16(transfer.dataFrames[1][11]), 180)

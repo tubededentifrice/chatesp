@@ -246,7 +246,7 @@ struct RuntimeSettings {
             assign_setting(brave_key, local.brave_api_key) &&
             assign_setting(wifi_ssid, local.wifi_ssid) &&
             assign_setting(wifi_password, local.wifi_password) &&
-            chat_model.assign("deepseek/deepseek-v4-flash") &&
+            chat_model.assign("~deepseek/deepseek-v4-flash-latest") &&
             transcription_model.assign("openai/whisper-large-v3-turbo") &&
             speech_model.assign("hexgrad/kokoro-82m") &&
             approximate_location.assign("");

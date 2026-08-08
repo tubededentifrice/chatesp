@@ -192,7 +192,8 @@ struct ProvisioningSettings: Equatable {
         case .model:
             isValid = (1...96).contains(bytes.count) && bytes.allSatisfy { byte in
                 (0x30...0x39).contains(byte) || (0x41...0x5a).contains(byte) ||
-                    (0x61...0x7a).contains(byte) || [0x2d, 0x2e, 0x2f, 0x3a, 0x5f].contains(byte)
+                    (0x61...0x7a).contains(byte) ||
+                    [0x2d, 0x2e, 0x2f, 0x3a, 0x5f, 0x7e].contains(byte)
             }
         case .approximateLocation:
             isValid = bytes.count <= 96 && text.unicodeScalars.allSatisfy {

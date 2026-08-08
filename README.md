@@ -43,7 +43,7 @@ in-session display wake does not show the splash.
 
 ## Cloud defaults
 
-- Chat: `deepseek/deepseek-v4-flash` through OpenRouter.
+- Chat: `~deepseek/deepseek-v4-flash-latest` through OpenRouter.
 - Speech recognition: `openai/whisper-large-v3-turbo` through OpenRouter.
 - Speech synthesis: `hexgrad/kokoro-82m` through OpenRouter. It uses
   `af_heart` for English and `ff_siwis` for French. It returns streaming

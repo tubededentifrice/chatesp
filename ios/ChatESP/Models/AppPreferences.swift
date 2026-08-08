@@ -5,7 +5,7 @@ struct AppPreferences: Codable, Equatable {
 
     var formatVersion = currentFormatVersion
     var chatEndpoint = "https://openrouter.ai/api/v1"
-    var chatModel = "deepseek/deepseek-v4-flash"
+    var chatModel = "~deepseek/deepseek-v4-flash-latest"
     var transcriptionModel = "openai/whisper-large-v3-turbo"
     var speechModel = "hexgrad/kokoro-82m"
     var approximateLocation: String?

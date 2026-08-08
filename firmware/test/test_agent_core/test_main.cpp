@@ -1377,7 +1377,8 @@ void test_openrouter_chat_builder_has_bounded_contract() {
             "Dubai, United Arab Emirates", 27,
             "2026-08-08 16:34 UTC+04:00", true, body));
     TEST_ASSERT_NOT_NULL(
-        std::strstr(body.c_str(), "deepseek/deepseek-v4-flash"));
+        std::strstr(
+            body.c_str(), "~deepseek/deepseek-v4-flash-latest"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\\\"watch\\\""));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "search_web"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":160"));

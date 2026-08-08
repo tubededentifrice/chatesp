@@ -8,7 +8,7 @@ namespace chatesp {
 namespace agent {
 
 struct OpenRouterConfig {
-    const char *chat_model = "deepseek/deepseek-v4-flash";
+    const char *chat_model = "~deepseek/deepseek-v4-flash-latest";
     const char *transcription_model = "openai/whisper-large-v3-turbo";
     const char *speech_model = "hexgrad/kokoro-82m";
     const char *speech_voice = "af_heart";

@@ -25,7 +25,7 @@ Fields valid_fields() {
         {3, "BRAVE_TOKEN_PLACEHOLDER"},
         {4, "Test Network"},
         {5, "PASSWORD_PLACEHOLDER"},
-        {6, "deepseek/deepseek-v4-flash"},
+        {6, "~deepseek/deepseek-v4-flash-latest"},
         {7, "openai/whisper-large-v3-turbo"},
         {8, "google/gemini-3.1-flash-tts-preview"},
         {9, "Dubai, United Arab Emirates"},

@@ -105,7 +105,7 @@ missing, repeated, or out-of-order fields are errors.
 | 3 | Brave key | Empty, or 1 through 128 visible ASCII bytes | iOS Keychain and plaintext device NVS |
 | 4 | Wi-Fi SSID | 1 through 32 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
 | 5 | Wi-Fi password | 8 through 63 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
-| 6 | Chat model | 1 through 96 ASCII letters, digits, `.`, `_`, `-`, `/`, or `:` | iOS preferences and plaintext device NVS |
+| 6 | Chat model | 1 through 96 ASCII letters, digits, `.`, `_`, `-`, `/`, `:`, or `~` | iOS preferences and plaintext device NVS |
 | 7 | Transcription model | Same model rule | iOS preferences and plaintext device NVS |
 | 8 | Speech model | Same model rule | iOS preferences and plaintext device NVS |
 | 9 | Approximate location | Empty, or up to 96 valid UTF-8 bytes without control characters; use a city and country, not coordinates or a street address | iOS preferences and plaintext device NVS |
@@ -369,12 +369,12 @@ Firmware and Swift tests use this non-secret vector:
 - Brave key: `BRAVE_TOKEN_PLACEHOLDER`
 - Wi-Fi SSID: `Test Network`
 - Wi-Fi password: `PASSWORD_PLACEHOLDER`
-- chat model: `deepseek/deepseek-v4-flash`
+- chat model: `~deepseek/deepseek-v4-flash-latest`
 - transcription model: `openai/whisper-large-v3-turbo`
 - speech model: `google/gemini-3.1-flash-tts-preview`
 - approximate location: `Dubai, United Arab Emirates`
-- complete packet length: `303`
-- fingerprint: `09fe4fdf6757295ba4960dccbf729df3a2efe5a3acfe2eca61a5335594d27ba0`
+- complete packet length: `311`
+- fingerprint: `3dd4441effe5f36c424310634670e91ea4dd936e958b38c21db1449a5fda98ce`
 
 Tests also cover insecure links, truncated and excess packets, bad magic,
 unknown versions, flags, lengths, fingerprints, UTF-8, field limits, field

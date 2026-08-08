@@ -266,7 +266,7 @@ bool valid_model(std::string_view value) {
     return std::all_of(value.begin(), value.end(), [](char item) {
         return (item >= 'a' && item <= 'z') || (item >= 'A' && item <= 'Z') ||
             (item >= '0' && item <= '9') || item == '-' || item == '_' ||
-            item == '.' || item == '/' || item == ':';
+            item == '.' || item == '/' || item == ':' || item == '~';
     });
 }
 
