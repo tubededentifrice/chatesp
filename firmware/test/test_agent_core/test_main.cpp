@@ -241,7 +241,10 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "Write for speech"));
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "select one current"));
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "Never select a URL"));
-    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "Reply in English"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(system_prompt, "same language as the user's question"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(answer_prompt, "same language as the user's question"));
     TEST_ASSERT_NOT_NULL(
         std::strstr(system_prompt, "Never claim that search is unsupported"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt, "get_device_status"));

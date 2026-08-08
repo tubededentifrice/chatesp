@@ -123,6 +123,7 @@ The system prompt tells the model to:
 - answer for speech, with a natural tone;
 - give the answer first;
 - use one to three short sentences by default;
+- reply in the language of the current user question;
 - ask one short clarifying question when needed;
 - avoid Markdown unless it materially helps the display;
 - use a tool only when current or visual information is necessary;
