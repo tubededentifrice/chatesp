@@ -78,7 +78,11 @@ int capture_volatile_store_entry(
 }
 
 bool capture_volatile_store() {
-    VolatileStoreCapture capture;
+    // The BLE stop task has a small internal-RAM stack. Capture directly into
+    // bounded static storage so a complete bond store cannot overflow it.
+    s_volatile_store.count = 0;
+    s_volatile_store.overflow = false;
+    s_volatile_store_valid = false;
     constexpr std::array<int, 5> kObjectTypes{
         BLE_STORE_OBJ_TYPE_OUR_SEC,
         BLE_STORE_OBJ_TYPE_PEER_SEC,
@@ -88,14 +92,14 @@ bool capture_volatile_store() {
     };
     for (const int object_type : kObjectTypes) {
         if (ble_store_iterate(
-                object_type, capture_volatile_store_entry, &capture) != 0 ||
-            capture.overflow) {
-            s_volatile_store = {};
-            s_volatile_store_valid = false;
+                object_type, capture_volatile_store_entry,
+                &s_volatile_store) != 0 ||
+            s_volatile_store.overflow) {
+            s_volatile_store.count = 0;
+            s_volatile_store.overflow = false;
             return false;
         }
     }
-    s_volatile_store = capture;
     s_volatile_store_valid = true;
     return true;
 }
