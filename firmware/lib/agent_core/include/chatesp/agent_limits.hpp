@@ -20,14 +20,23 @@ struct Limits {
     static constexpr std::size_t max_chat_request_bytes = 32'768;
     static constexpr std::size_t max_chat_response_bytes = 128'000;
     static constexpr std::size_t max_sse_line_bytes = 16'384;
-    static constexpr std::size_t max_tool_count = 6;
+    static constexpr std::size_t max_tool_count = 7;
     static constexpr std::size_t max_tool_rounds = 3;
     static constexpr std::size_t max_tool_name_bytes = 32;
     static constexpr std::size_t max_tool_description_bytes = 192;
     static constexpr std::size_t max_tool_schema_bytes = 768;
     static constexpr std::size_t max_tool_call_id_bytes = 96;
-    static constexpr std::size_t max_tool_arguments_bytes = 512;
+    static constexpr std::size_t max_python_source_bytes = 1'024;
+    static constexpr std::size_t max_tool_arguments_bytes =
+        max_python_source_bytes * 6 + 32;
     static constexpr std::size_t max_tool_result_bytes = 4'096;
+    static constexpr std::size_t max_python_output_bytes = 2'048;
+    static constexpr std::size_t max_plot_points = 128;
+    static constexpr std::size_t max_plot_title_bytes = 48;
+    static constexpr std::size_t python_heap_bytes = 256 * 1'024;
+    static constexpr std::size_t python_stack_limit_bytes = 12 * 1'024;
+    static constexpr std::uint32_t python_maximum_duration_ms = 1'000;
+    static constexpr std::uint32_t python_maximum_vm_hooks = 250'000;
     static constexpr std::size_t max_search_query_bytes = 200;
     static constexpr std::size_t max_web_response_bytes = 64'000;
     static constexpr std::size_t max_image_search_response_bytes = 96'000;

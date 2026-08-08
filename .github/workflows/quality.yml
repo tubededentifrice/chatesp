@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: true
       - name: Check dependency pins and age
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cmath>
 #include <cstdio>
 #include <string_view>
 #include <utility>
@@ -36,6 +37,12 @@ lv_obj_t *activity_spinner = nullptr;
 lv_obj_t *wifi_status_label = nullptr;
 lv_obj_t *battery_status_label = nullptr;
 lv_obj_t *image_overlay = nullptr;
+lv_obj_t *plot_overlay = nullptr;
+lv_obj_t *plot_chart = nullptr;
+lv_obj_t *plot_title_label = nullptr;
+lv_obj_t *plot_x_range_label = nullptr;
+lv_obj_t *plot_y_range_label = nullptr;
+lv_chart_series_t *plot_series = nullptr;
 lv_obj_t *passkey_overlay = nullptr;
 lv_obj_t *passkey_label = nullptr;
 lv_obj_t *controls_edge_target = nullptr;
@@ -71,6 +78,29 @@ bool controls_sync_active = false;
 bool controls_close_animation_active = false;
 bool controls_slider_active = false;
 bool passkey_visible = false;
+std::array<char, agent::Limits::max_plot_title_bytes + 1> plot_title_buffer{};
+std::array<char, 48> plot_x_range_buffer{};
+std::array<char, 48> plot_y_range_buffer{};
+std::array<std::int32_t, agent::Limits::max_plot_points> plot_x_values{};
+std::array<std::int32_t, agent::Limits::max_plot_points> plot_y_values{};
+
+void set_static_text(lv_obj_t *label, const char *text);
+
+void hide_fullscreen_plot() {
+    if (plot_overlay == nullptr) {
+        return;
+    }
+    lv_obj_add_flag(plot_overlay, LV_OBJ_FLAG_HIDDEN);
+    plot_x_values.fill(0);
+    plot_y_values.fill(0);
+    plot_title_buffer.fill('\0');
+    plot_x_range_buffer.fill('\0');
+    plot_y_range_buffer.fill('\0');
+    set_static_text(plot_title_label, plot_title_buffer.data());
+    set_static_text(plot_x_range_label, plot_x_range_buffer.data());
+    set_static_text(plot_y_range_label, plot_y_range_buffer.data());
+    lv_obj_invalidate(plot_overlay);
+}
 
 lv_obj_t *active_screen() {
 #if LVGL_VERSION_MAJOR >= 9
@@ -91,7 +121,7 @@ const char *hint(InteractionState state) {
         case InteractionState::thinking:
             return "MODEL IS WORKING";
         case InteractionState::tool_work:
-            return "GETTING CURRENT DATA";
+            return "RUNNING A TOOL";
         case InteractionState::speaking:
             return "PLAYING ANSWER";
         case InteractionState::error:
@@ -465,7 +495,7 @@ void hide_passkey() {
 }
 
 void prepare_voice_view() {
-    hide_fullscreen_image();
+    hide_fullscreen_visual();
     hide_passkey();
     if (level_bar != nullptr) {
         lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
@@ -723,6 +753,74 @@ void create_screen() {
     lv_obj_center(image_overlay);
     lv_obj_add_flag(image_overlay, LV_OBJ_FLAG_HIDDEN);
 
+    plot_overlay = lv_obj_create(screen);
+    lv_obj_remove_style_all(plot_overlay);
+    lv_obj_set_size(plot_overlay, 368, 448);
+    lv_obj_set_style_bg_color(
+        plot_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(plot_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(plot_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(plot_overlay);
+
+    plot_title_label = lv_label_create(plot_overlay);
+    lv_obj_set_width(plot_title_label, 328);
+    lv_label_set_long_mode(plot_title_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_color(
+        plot_title_label, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        plot_title_label, &chatesp_font_18, LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        plot_title_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(plot_title_label, LV_ALIGN_TOP_MID, 0, 22);
+
+    plot_chart = lv_chart_create(plot_overlay);
+    lv_obj_set_size(plot_chart, 302, 300);
+    lv_obj_align(plot_chart, LV_ALIGN_TOP_MID, 0, 68);
+    lv_chart_set_type(plot_chart, LV_CHART_TYPE_SCATTER);
+    lv_chart_set_axis_range(
+        plot_chart, LV_CHART_AXIS_PRIMARY_X, 0, 1'000);
+    lv_chart_set_axis_range(
+        plot_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 1'000);
+    lv_chart_set_div_line_count(plot_chart, 5, 5);
+    lv_obj_set_style_bg_color(
+        plot_chart, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(plot_chart, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(
+        plot_chart, lv_color_hex(0x777777), LV_PART_MAIN);
+    lv_obj_set_style_border_width(plot_chart, 1, LV_PART_MAIN);
+    lv_obj_set_style_line_color(
+        plot_chart, lv_color_hex(0x202020), LV_PART_MAIN);
+    lv_obj_set_style_line_width(plot_chart, 1, LV_PART_MAIN);
+    lv_obj_set_style_line_width(plot_chart, 2, LV_PART_ITEMS);
+    lv_obj_set_style_size(plot_chart, 0, 0, LV_PART_INDICATOR);
+    plot_series = lv_chart_add_series(
+        plot_chart, lv_color_hex(0xffffff), LV_CHART_AXIS_PRIMARY_Y);
+    lv_chart_set_series_ext_x_array(
+        plot_chart, plot_series, plot_x_values.data());
+    lv_chart_set_series_ext_y_array(
+        plot_chart, plot_series, plot_y_values.data());
+
+    plot_x_range_label = lv_label_create(plot_overlay);
+    lv_obj_set_width(plot_x_range_label, 320);
+    lv_obj_set_style_text_color(
+        plot_x_range_label, lv_color_hex(0x777777), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        plot_x_range_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        plot_x_range_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(plot_x_range_label, LV_ALIGN_BOTTOM_MID, 0, -46);
+
+    plot_y_range_label = lv_label_create(plot_overlay);
+    lv_obj_set_width(plot_y_range_label, 320);
+    lv_obj_set_style_text_color(
+        plot_y_range_label, lv_color_hex(0x777777), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        plot_y_range_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        plot_y_range_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(plot_y_range_label, LV_ALIGN_BOTTOM_MID, 0, -22);
+    hide_fullscreen_plot();
+
     create_quick_controls(screen);
 
     passkey_overlay = lv_obj_create(screen);
@@ -842,7 +940,7 @@ void show_state(InteractionState state) {
         hide_passkey();
     }
     if (state != InteractionState::idle) {
-        hide_fullscreen_image();
+        hide_fullscreen_visual();
     }
     set_controls_state_allowed(controls_allowed_for_state(state));
     if (state == InteractionState::booting ||
@@ -1012,7 +1110,7 @@ bool show_fullscreen_image(image::Rgb565Frame &&frame) {
         return false;
     }
 
-    hide_fullscreen_image();
+    hide_fullscreen_visual();
     image_frame = std::move(frame);
     image_descriptor = {};
     image_descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -1044,6 +1142,77 @@ bool show_fullscreen_image(image::Rgb565Frame &&frame) {
     return true;
 }
 
+bool show_fullscreen_plot(const agent::PlotData &plot) {
+    if (plot_overlay == nullptr || plot_chart == nullptr ||
+        plot_series == nullptr || !plot.ready()) {
+        return false;
+    }
+    double minimum_x = plot.x[0];
+    double maximum_x = plot.x[0];
+    double minimum_y = plot.y[0];
+    double maximum_y = plot.y[0];
+    for (std::size_t index = 0; index < plot.count; ++index) {
+        if (!std::isfinite(plot.x[index]) || !std::isfinite(plot.y[index])) {
+            return false;
+        }
+        minimum_x = std::min(minimum_x, plot.x[index]);
+        maximum_x = std::max(maximum_x, plot.x[index]);
+        minimum_y = std::min(minimum_y, plot.y[index]);
+        maximum_y = std::max(maximum_y, plot.y[index]);
+    }
+
+    hide_fullscreen_visual();
+    const long double range_x =
+        static_cast<long double>(maximum_x) - minimum_x;
+    const long double range_y =
+        static_cast<long double>(maximum_y) - minimum_y;
+    for (std::size_t index = 0; index < plot.count; ++index) {
+        const long double normalized_x = range_x == 0.0L
+            ? static_cast<long double>(index) /
+                static_cast<long double>(plot.count - 1)
+            : (static_cast<long double>(plot.x[index]) - minimum_x) / range_x;
+        const long double normalized_y = range_y == 0.0L
+            ? 0.5L
+            : (static_cast<long double>(plot.y[index]) - minimum_y) / range_y;
+        plot_x_values[index] = static_cast<std::int32_t>(
+            std::clamp(normalized_x, 0.0L, 1.0L) * 1'000.0L);
+        plot_y_values[index] = static_cast<std::int32_t>(
+            std::clamp(normalized_y, 0.0L, 1.0L) * 1'000.0L);
+    }
+    copy_bounded(
+        plot.title.empty() ? std::string_view{"PYTHON PLOT"}
+                           : std::string_view{plot.title.data(), plot.title.size()},
+        plot_title_buffer.data(), plot_title_buffer.size(),
+        agent::Limits::max_plot_title_bytes);
+    std::snprintf(
+        plot_x_range_buffer.data(), plot_x_range_buffer.size(),
+        "X  %.5g  TO  %.5g", minimum_x, maximum_x);
+    std::snprintf(
+        plot_y_range_buffer.data(), plot_y_range_buffer.size(),
+        "Y  %.5g  TO  %.5g", minimum_y, maximum_y);
+    set_static_text(plot_title_label, plot_title_buffer.data());
+    set_static_text(plot_x_range_label, plot_x_range_buffer.data());
+    set_static_text(plot_y_range_label, plot_y_range_buffer.data());
+    lv_chart_set_point_count(plot_chart, plot.count);
+    lv_chart_refresh(plot_chart);
+    lv_obj_clear_flag(plot_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(plot_overlay);
+    update_controls_handle();
+    if (controls_gesture.open()) {
+        lv_obj_move_foreground(controls_backdrop);
+        lv_obj_move_foreground(controls_panel);
+    } else if (controls_edge_target != nullptr &&
+        !lv_obj_has_flag(controls_edge_target, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(controls_edge_target);
+    }
+    if (passkey_overlay != nullptr &&
+        !lv_obj_has_flag(passkey_overlay, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(passkey_overlay);
+    }
+    lv_obj_invalidate(plot_overlay);
+    return true;
+}
+
 void hide_fullscreen_image() {
     if (image_overlay == nullptr || !image_frame.available()) {
         return;
@@ -1054,6 +1223,11 @@ void hide_fullscreen_image() {
     lv_refr_now(nullptr);
     image_descriptor = {};
     image_frame.reset();
+}
+
+void hide_fullscreen_visual() {
+    hide_fullscreen_image();
+    hide_fullscreen_plot();
 }
 
 esp_err_t sleep() {
@@ -1077,7 +1251,7 @@ esp_err_t wake(
     if (!bsp_display_lock(25)) {
         return ESP_ERR_TIMEOUT;
     }
-    hide_fullscreen_image();
+    hide_fullscreen_visual();
     set_content({}, kMaximumAnswerBytes);
     show_state(state);
     lv_refr_now(nullptr);

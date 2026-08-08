@@ -8,8 +8,9 @@ companion for secure BLE configuration.
 
 1. Hold the bottom PWR button and speak.
 2. Release it. The display shows the transcript.
-3. The device selects a direct, web, or image route. It then gets a concise
-   answer with tools disabled. Text appears as the model sends it. Complete
+3. The device selects a direct, web, image, or calculation
+   route. It then gets a concise answer with tools disabled. Text appears as
+   the model sends it. Complete
    sentences go to speech at once. One playback session joins up to four
    speech segments in order. Each model request includes the user's current
    local date and time at minute precision and an approximate location from the
@@ -53,15 +54,17 @@ device status and controls, touch quick controls, and sleep paths. Brightness
 and volume changes use a small persistent device-preference record. The iOS
 companion can store
 settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
-can appear full-screen after the spoken answer.
+can appear full-screen after the spoken answer. A restricted MicroPython tool
+can do short calculations and show a bounded line plot on the full screen.
 
 Automated tests cover pure state, protocol, privacy, and bounded-buffer paths.
 The V2 development device has passed black-screen startup without a white
 frame, bottom-button hold-to-talk, streamed answer text, clear streamed speech,
 button preemption, strong-access-point selection, and modem power saving.
 Full-screen image color and crop, physical iPhone provisioning, battery current,
-production system-off, and long cycle tests are still acceptance gates. Do not
-use this status as a claim that these open physical checks passed.
+production system-off, MicroPython limits and plot display, and long cycle tests
+are still acceptance gates. Do not use this status as a claim that these open
+physical checks passed.
 
 ## Development
 

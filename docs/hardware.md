@@ -137,6 +137,21 @@ The full-screen image path must pass these checks on the V2 AMOLED:
 - an unsupported or large image leaves the text answer available;
 - repeated image requests do not cause a reset or a PSRAM leak.
 
+The restricted Python path must pass these checks on the V2 AMOLED:
+
+- a short calculation returns the correct printed value and spoken answer;
+- an infinite loop stops within the bounded execution interval and the next
+  voice request works;
+- a large allocation stops at the fixed Python heap limit without a reset;
+- a held PWR press cancels Python work and starts `LISTENING` without a long
+  delay;
+- `plot.line` shows 2 through 128 finite points on a black full-screen chart
+  after speech ends;
+- the plot title and axis ranges are readable with the correct board rotation;
+- a new PWR action and sleep remove the plot;
+- repeated calculations, limit failures, and plots do not cause a reset or a
+  PSRAM leak.
+
 The current USB-power checks do not verify battery sleep current.
 
 ## Permanent-write policy
@@ -167,7 +182,8 @@ visible splash or ready view.
 
 - Identify the connected board revision.
 - Verify both buttons and the selected wake source.
-- Verify AMOLED black level, rotation, touch mapping, and full-screen image.
+- Verify AMOLED black level, rotation, touch mapping, full-screen image, and
+  full-screen Python plot.
 - Record and replay speech through the ES8311 path without clipping.
 - Verify Wi-Fi connection and TLS requests.
 - Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
@@ -185,8 +201,9 @@ visible splash or ready view.
 - Measure idle, recording, Wi-Fi, playback, and deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,
   stuck state, or unexpected NVS write.
-- Compare the same 20 direct, 10 web, and 10 image prompts before and after the
-  change on 2.4 GHz Wi-Fi at -65 dBm or better. Test warm and held-cold starts.
+- Compare the same 20 direct, 10 web, 10 image, and 10 calculation prompts
+  before and after the change on 2.4 GHz Wi-Fi at -65 dBm or better. Test warm
+  and held-cold starts.
 - Require at least 30 percent lower p50 release-to-first-audio time for direct
   questions. Warm direct p50 must be at most 4 seconds and p90 at most 7
   seconds. Held-cold p90 must be at most 10 seconds. Web p90 must be at most 12

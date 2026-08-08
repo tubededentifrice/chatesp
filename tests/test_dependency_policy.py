@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from tools.check_dependency_age import (
     check_component_registry_reference,
     check_github_actions,
     check_github_release,
+    check_git_submodules,
     check_hashed_requirements,
     check_idf_lock,
     check_idf_manifests,
@@ -93,6 +95,54 @@ class DependencyPolicyTests(unittest.TestCase):
             )
             with self.assertRaises(PolicyError):
                 check_github_actions(root)
+
+    def test_accepts_pinned_initialized_git_submodule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "firmware" / "third_party" / "runtime"
+            checkout.mkdir(parents=True)
+            commit = "0123456789abcdef0123456789abcdef01234567"
+            (root / ".gitmodules").write_text(
+                '[submodule "runtime"]\n'
+                "\tpath = firmware/third_party/runtime\n"
+                "\turl = https://github.com/vendor/runtime.git\n"
+                f"\tcommit = {commit}\n"
+            )
+            completed = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=f"{commit}\n", stderr=""
+            )
+            with patch("tools.check_dependency_age.subprocess.run", return_value=completed):
+                self.assertEqual(
+                    {("vendor", "runtime", commit)}, check_git_submodules(root)
+                )
+
+    def test_rejects_mutable_or_mismatched_git_submodule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "runtime"
+            checkout.mkdir()
+            (root / ".gitmodules").write_text(
+                '[submodule "runtime"]\n'
+                "\tpath = runtime\n"
+                "\turl = https://github.com/vendor/runtime.git\n"
+                "\tcommit = main\n"
+            )
+            with self.assertRaises(PolicyError):
+                check_git_submodules(root)
+
+            commit = "0123456789abcdef0123456789abcdef01234567"
+            (root / ".gitmodules").write_text(
+                '[submodule "runtime"]\n'
+                "\tpath = runtime\n"
+                "\turl = https://github.com/vendor/runtime.git\n"
+                f"\tcommit = {commit}\n"
+            )
+            completed = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=f"{'f' * 40}\n", stderr=""
+            )
+            with patch("tools.check_dependency_age.subprocess.run", return_value=completed):
+                with self.assertRaises(PolicyError):
+                    check_git_submodules(root)
 
     def test_requires_hash_lock_for_firmware_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -181,6 +231,24 @@ class DependencyPolicyTests(unittest.TestCase):
             managed = root / "firmware" / "managed_components" / "vendor__driver"
             managed.mkdir(parents=True)
             (managed / "idf_component.yml").write_text(
+                "dependencies:\n  vendor/helper:\n    version: ^1\n"
+            )
+            references, expected = check_idf_manifests(root)
+            self.assertEqual(set(), references)
+            self.assertEqual({}, expected)
+
+    def test_ignores_idf_manifests_inside_a_pinned_submodule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            submodule = root / "firmware" / "third_party" / "runtime"
+            submodule.mkdir(parents=True)
+            (root / ".gitmodules").write_text(
+                '[submodule "runtime"]\n'
+                "\tpath = firmware/third_party/runtime\n"
+                "\turl = https://github.com/vendor/runtime.git\n"
+                f"\tcommit = {'0' * 40}\n"
+            )
+            (submodule / "idf_component.yml").write_text(
                 "dependencies:\n  vendor/helper:\n    version: ^1\n"
             )
             references, expected = check_idf_manifests(root)

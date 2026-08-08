@@ -63,6 +63,7 @@ SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".s"}
 def dependency_policy_digest(root: Path) -> str:
     """Return a digest of each file that controls dependency policy."""
     candidates = [
+        root / ".gitmodules",
         root / "pyproject.toml",
         root / "uv.lock",
         root / "firmware" / "platformio.ini",

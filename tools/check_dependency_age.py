@@ -7,6 +7,7 @@ import configparser
 import json
 import os
 import re
+import subprocess
 import sys
 import tomllib
 import urllib.error
@@ -253,6 +254,80 @@ def check_platformio(
     return registry_references, git_references
 
 
+def check_git_submodules(root: Path) -> set[tuple[str, str, str]]:
+    path = root / ".gitmodules"
+    if not path.exists():
+        return set()
+
+    config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str
+    try:
+        config.read(path)
+    except configparser.Error as error:
+        raise PolicyError(f"cannot read {path}: {error}") from error
+
+    references: set[tuple[str, str, str]] = set()
+    for section in config.sections():
+        if not section.startswith('submodule "'):
+            raise PolicyError(f"invalid Git submodule section: {section}")
+        relative_path = config.get(section, "path", fallback="")
+        url = config.get(section, "url", fallback="")
+        commit = config.get(section, "commit", fallback="")
+        path_parts = Path(relative_path).parts
+        url_match = GITHUB_URL_RE.fullmatch(url)
+        if (
+            not relative_path
+            or Path(relative_path).is_absolute()
+            or ".." in path_parts
+            or not url_match
+            or not GIT_COMMIT_RE.fullmatch(commit)
+        ):
+            raise PolicyError(
+                f"Git submodule must use a safe path, GitHub HTTPS URL, "
+                f"and full commit: {section}"
+            )
+        checkout = root / relative_path
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise PolicyError(
+                f"Git submodule is not initialized: {relative_path}"
+            ) from error
+        checked_out_commit = completed.stdout.strip()
+        if checked_out_commit != commit:
+            raise PolicyError(
+                f"Git submodule checkout differs from its pin: "
+                f"{relative_path} {checked_out_commit}"
+            )
+        references.add(
+            (
+                url_match.group("owner"),
+                url_match.group("repo").removesuffix(".git"),
+                commit,
+            )
+        )
+    return references
+
+
+def git_submodule_paths(root: Path) -> set[Path]:
+    path = root / ".gitmodules"
+    if not path.exists():
+        return set()
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(path)
+    return {
+        root / config.get(section, "path")
+        for section in config.sections()
+        if config.has_option(section, "path")
+    }
+
+
 def yaml_scalar(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
@@ -265,10 +340,13 @@ def check_idf_manifests(
 ) -> tuple[set[tuple[str, str, str]], dict[str, tuple[str, str]]]:
     git_references: set[tuple[str, str, str]] = set()
     expected: dict[str, tuple[str, str]] = {}
+    submodule_roots = git_submodule_paths(root)
     manifests = sorted(
         path
         for path in (root / "firmware").glob("**/idf_component.yml")
-        if "managed_components" not in path.parts and ".pio" not in path.parts
+        if "managed_components" not in path.parts
+        and ".pio" not in path.parts
+        and not any(path.is_relative_to(item) for item in submodule_roots)
     )
     for path in manifests:
         lines = path.read_text().splitlines()
@@ -587,6 +665,7 @@ def main() -> int:
         git_references, expected_packages = check_pyproject(root)
         git_references.update(check_uv_lock(root, cutoff, expected_packages))
         git_references.update(check_github_actions(root))
+        git_references.update(check_git_submodules(root))
         hashed_requirement_count = check_hashed_requirements(root, cutoff)
         platformio_references, platformio_git_references = check_platformio(root)
         git_references.update(platformio_git_references)
