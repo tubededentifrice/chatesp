@@ -338,9 +338,9 @@ void apply_display_orientation() {
     if (display_orientation_for(mode, passkey_visible) ==
         DisplayOrientation::clock) {
 #if LVGL_VERSION_MAJOR >= 9
-        bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_90);
+        bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_270);
 #else
-        bsp_display_rotate(display_handle, LV_DISP_ROT_90);
+        bsp_display_rotate(display_handle, LV_DISP_ROT_270);
 #endif
         layout_overlays(kClockWidth, kClockHeight);
         return;

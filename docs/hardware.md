@@ -113,8 +113,8 @@ The connected V2 board must pass these checks for this control change:
 - a short top-button press changes between portrait ChatESP and Clock;
 - a long top-button press and a top-button press during development soft sleep
   do not change application state;
-- Clock rotates 90 degrees clockwise, has the USB port at the top, and maps the
-  touch control panel to that orientation;
+- Clock rotates 90 degrees counterclockwise, has the USB port at the bottom,
+  and maps the touch control panel to that orientation;
 - a BLE pairing code uses the portrait ChatESP orientation with the buttons on
   the right, and Clock returns to its prior orientation when the code closes;
 - Clock shows only large white 24-hour time and a white seconds path on black;

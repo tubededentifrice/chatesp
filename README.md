@@ -7,8 +7,9 @@ companion for secure BLE configuration.
 ## Intended experience
 
 1. Use a short top-button press to change between ChatESP and Clock. Clock
-   rotates the display 90 degrees clockwise, so the USB port is at the top. It
-   shows a large white local time and a rounded seconds path. It stays on.
+   rotates the display 90 degrees counterclockwise, so the USB port is at the
+   bottom. It shows a large white local time and a rounded seconds path. It
+   stays on.
 2. Hold the bottom PWR button and speak. From Clock, the press first returns
    the display to ChatESP. Release the button to submit the recording.
 3. The device selects a direct, web, image, device-control, calculation, or

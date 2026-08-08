@@ -45,9 +45,9 @@ effect during soft sleep, and GPIO0 is not a production wake source. A switch
 to Clock cancels active voice work, clears the in-memory thread, and stops
 Wi-Fi. The board adapter owns the GPIO0 pin value.
 
-Clock uses LVGL software rotation to turn the UI 90 degrees clockwise. The
-448-by-368 layout puts the USB port at the top. Four large seven-segment digits
-show 24-hour local time. A rounded white path follows an inset rounded
+Clock uses LVGL software rotation to turn the UI 90 degrees counterclockwise.
+The 448-by-368 layout puts the USB port at the bottom. Four large seven-segment
+digits show 24-hour local time. A rounded white path follows an inset rounded
 rectangle. Its 60 bounded sections fill clockwise on even minutes and drain
 clockwise on odd minutes. The path starts at 12 o'clock. The clock style is one
 validated value with background, time, seconds, radius, inset, and path-width
