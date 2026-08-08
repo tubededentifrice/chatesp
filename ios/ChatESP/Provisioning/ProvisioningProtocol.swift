@@ -106,14 +106,19 @@ struct ProvisioningSettings: Equatable {
         configuration: ChatESPConfiguration,
         secrets: ProvisioningSecretValues
     ) {
-        chatEndpoint = configuration.chatEndpoint
+        let defaults = ChatESPConfiguration()
+        chatEndpoint = configuration.chatEndpoint.isEmpty
+            ? defaults.chatEndpoint : configuration.chatEndpoint
         openRouterKey = secrets.openRouterKey
         braveKey = secrets.braveKey
         wifiSSID = secrets.wifiSSID
         wifiPassword = secrets.wifiPassword
-        chatModel = configuration.chatModel
-        transcriptionModel = configuration.transcriptionModel
-        speechModel = configuration.speechModel
+        chatModel = configuration.chatModel.isEmpty
+            ? defaults.chatModel : configuration.chatModel
+        transcriptionModel = configuration.transcriptionModel.isEmpty
+            ? defaults.transcriptionModel : configuration.transcriptionModel
+        speechModel = configuration.speechModel.isEmpty
+            ? defaults.speechModel : configuration.speechModel
         approximateLocation = configuration.approximateLocation
     }
 
@@ -204,13 +209,16 @@ struct ProvisioningSettings: Equatable {
         case .endpoint:
             isValid = Self.validEndpoint(text, byteCount: bytes.count)
         case .openRouterKey:
-            isValid = (8...256).contains(bytes.count) && Self.visibleASCII(bytes)
+            isValid = bytes.isEmpty ||
+                ((8...256).contains(bytes.count) && Self.visibleASCII(bytes))
         case .braveKey:
             isValid = bytes.count <= 128 && (bytes.isEmpty || Self.visibleASCII(bytes))
         case .wifiSSID:
-            isValid = (1...32).contains(bytes.count) && !bytes.contains(0)
+            isValid = bytes.isEmpty ||
+                ((1...32).contains(bytes.count) && !bytes.contains(0))
         case .wifiPassword:
-            isValid = (8...63).contains(bytes.count) && !bytes.contains(0)
+            isValid = bytes.isEmpty ||
+                ((8...63).contains(bytes.count) && !bytes.contains(0))
         case .model:
             isValid = (1...96).contains(bytes.count) && bytes.allSatisfy { byte in
                 (0x30...0x39).contains(byte) || (0x41...0x5a).contains(byte) ||
@@ -263,10 +271,10 @@ struct ConfigurationValidationIssue: Identifiable, Equatable {
     var message: String {
         switch fieldID {
         case 1: return "Enter a valid HTTPS chat endpoint."
-        case 2: return "Enter an OpenRouter key with at least 8 characters."
+        case 2: return "The OpenRouter key must be empty or contain 8 through 256 visible characters."
         case 3: return "The optional Brave key must contain visible characters."
-        case 4: return "Enter a Wi-Fi network name of 1 through 32 bytes."
-        case 5: return "Enter a Wi-Fi password of 8 through 63 bytes."
+        case 4: return "The Wi-Fi network name must be empty or contain 1 through 32 UTF-8 bytes."
+        case 5: return "The Wi-Fi password must be empty or contain 8 through 63 UTF-8 bytes."
         case 6: return "Select a chat and tool model."
         case 7: return "Select a speech-to-text model."
         case 8: return "Select a text-to-speech model."
@@ -669,7 +677,7 @@ extension ProvisioningError: LocalizedError {
         case .disconnected:
             return "The ChatESP device disconnected."
         case .missingService, .missingCharacteristic:
-            return "The ChatESP device does not support this provisioning version."
+            return "The ChatESP device does not support this settings version."
         case .writeFailed:
             return "The ChatESP device did not accept a transfer frame."
         case .timeout:

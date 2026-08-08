@@ -4,6 +4,8 @@ struct ConfigurationView: View {
     @EnvironmentObject private var store: ConfigurationStore
     @EnvironmentObject private var provisioner: BLEProvisioner
     @StateObject private var modelCatalog = ModelCatalog()
+    @State private var showingDiscovery = false
+    @State private var lastAutomaticSync: AutomaticSettingsSyncTarget?
 
     var body: some View {
         NavigationStack {
@@ -43,32 +45,9 @@ struct ConfigurationView: View {
                     }
 
                     Button("Find a ChatESP Device", systemImage: "plus.circle") {
-                        provisioner.scan()
+                        showingDiscovery = true
                     }
                     .disabled(provisioner.isProvisioning)
-                }
-
-                if !provisioner.discoveredDevices.isEmpty {
-                    Section("Nearby ChatESP Devices") {
-                        ForEach(provisioner.discoveredDevices) { device in
-                            Button {
-                                store.addDevice(
-                                    id: device.id,
-                                    suggestedName: device.name)
-                                provisioner.select(device)
-                            } label: {
-                                HStack {
-                                    Text(device.name)
-                                    Spacer()
-                                    if store.devices.contains(where: { $0.id == device.id }) {
-                                        Text("Added")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
 
                 Section {
@@ -80,6 +59,9 @@ struct ConfigurationView: View {
                 }
             }
             .navigationTitle("ChatESP")
+            .sheet(isPresented: $showingDiscovery) {
+                DeviceDiscoveryView()
+            }
             .onAppear {
                 provisioner.onSelectedDeviceChanged = { identifier in
                     store.setActiveDevice(identifier)
@@ -87,12 +69,144 @@ struct ConfigurationView: View {
                 provisioner.restoreSelectedDevice(
                     identifier: store.activeDeviceIdentifier)
             }
+            .task(id: automaticSyncTrigger) {
+                await synchronizeSettingsIfNeeded(automaticSyncTrigger)
+            }
+        }
+    }
+
+    private var automaticSyncTrigger: AutomaticSettingsSyncTrigger {
+        AutomaticSettingsSyncTrigger(
+            target: store.activeDeviceIdentifier.flatMap { deviceID in
+                store.settings(for: deviceID).flatMap {
+                    AutomaticSettingsSyncPolicy.target(
+                        deviceID: deviceID,
+                        settings: $0)
+                }
+            },
+            selectedDeviceID: provisioner.selectedID,
+            connected: provisioner.isDeviceConnected,
+            provisioning: provisioner.isProvisioning)
+    }
+
+    private func synchronizeSettingsIfNeeded(
+        _ trigger: AutomaticSettingsSyncTrigger
+    ) async {
+        guard AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: trigger,
+            lastAttempt: lastAutomaticSync
+        ) else {
+            if !trigger.connected {
+                lastAutomaticSync = nil
+            }
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(350))
+        guard !Task.isCancelled,
+              trigger == automaticSyncTrigger,
+              let target = trigger.target else {
+            return
+        }
+        lastAutomaticSync = target
+        synchronizeSettings(for: target.deviceID)
+    }
+
+    private func synchronizeSettings(for deviceID: UUID) {
+        do {
+            send(
+                try store.makePacket(for: deviceID),
+                deviceID: deviceID,
+                canRecoverRevision: true)
+        } catch {
+            store.show(error)
+        }
+    }
+
+    private func send(
+        _ packet: ProvisioningPacket,
+        deviceID: UUID,
+        canRecoverRevision: Bool
+    ) {
+        provisioner.provision(packet: packet) { result in
+            switch result {
+            case .success(let acknowledgement):
+                do {
+                    if acknowledgement.isRevisionRecovery {
+                        guard canRecoverRevision else {
+                            throw ProvisioningError.acknowledgementMismatch
+                        }
+                        let recoveryPacket = try store.recoverRevision(
+                            from: acknowledgement,
+                            for: deviceID)
+                        send(
+                            recoveryPacket,
+                            deviceID: deviceID,
+                            canRecoverRevision: false)
+                    } else {
+                        try store.accept(acknowledgement, for: deviceID)
+                    }
+                } catch {
+                    store.show(error)
+                }
+            case .failure(let error):
+                store.show(error)
+            }
         }
     }
 
     private func deviceStatus(_ id: UUID) -> String {
         guard provisioner.selectedID == id else { return "Not connected" }
         return provisioner.isDeviceConnected ? "Connected" : "Connecting"
+    }
+}
+
+private struct DeviceDiscoveryView: View {
+    @EnvironmentObject private var store: ConfigurationStore
+    @EnvironmentObject private var provisioner: BLEProvisioner
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if provisioner.discoveredDevices.isEmpty {
+                    HStack {
+                        if provisioner.phase == .scanning {
+                            ProgressView()
+                        }
+                        Text(
+                            provisioner.phase == .scanning
+                                ? "Looking for ChatESP devices"
+                                : "No ChatESP devices found")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(provisioner.discoveredDevices) { device in
+                    Button {
+                        store.addDevice(id: device.id, suggestedName: device.name)
+                        provisioner.select(device)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(device.name)
+                            Spacer()
+                            if store.devices.contains(where: { $0.id == device.id }) {
+                                Text("Added")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add a ChatESP Device")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .onAppear { provisioner.scan() }
+        }
     }
 }
 
@@ -155,13 +269,13 @@ private struct DeviceSettingsView: View {
             DeviceModelOverrides(
                 deviceID: deviceID,
                 modelCatalog: modelCatalog)
-            readinessSection
             memorySection
             Section {
                 Button("Remove ChatESP Device", role: .destructive) {
                     confirmRemove = true
                 }
             }
+            statusSection
         }
         .navigationTitle(device?.name ?? "ChatESP Device")
         .navigationBarTitleDisplayMode(.inline)
@@ -212,42 +326,66 @@ private struct DeviceSettingsView: View {
         }
     }
 
-    private var readinessSection: some View {
+    private var statusSection: some View {
         let issues = store.validationIssues(for: deviceID)
-        return Section {
-            if issues.isEmpty {
-                Button("Send Settings to ChatESP") {
-                    send()
-                }
-                .disabled(
-                    provisioner.selectedID != deviceID ||
-                        !provisioner.isDeviceConnected ||
-                        provisioner.isProvisioning)
-            } else {
+        let secrets = store.secretValues(for: deviceID)
+        let configuration = store.configuration(for: deviceID)
+        return Section("Status") {
+            Text(deviceStatusText)
+                .foregroundStyle(.secondary)
+            if !issues.isEmpty {
                 ForEach(issues) { issue in
                     Label(issue.message, systemImage: "exclamationmark.circle")
                         .foregroundStyle(.orange)
                 }
             }
-            Text(provisioner.phase.text)
-                .foregroundStyle(.secondary)
+            if secrets.wifiSSID.isEmpty {
+                Text("Wi-Fi is not configured. ChatESP will show an error when a voice request needs it.")
+                    .foregroundStyle(.secondary)
+            }
+            if secrets.openRouterKey.isEmpty {
+                Text("The OpenRouter key is not configured. ChatESP will show an error when a cloud request needs it.")
+                    .foregroundStyle(.secondary)
+            }
+            if secrets.braveKey.isEmpty {
+                Text("Web and image search are off because the optional Brave key is empty.")
+                    .foregroundStyle(.secondary)
+            }
+            if configuration.map({
+                $0.chatEndpoint.isEmpty || $0.chatModel.isEmpty ||
+                    $0.transcriptionModel.isEmpty || $0.speechModel.isEmpty
+            }) == true {
+                Text("Empty endpoint or model values use the built-in defaults.")
+                    .foregroundStyle(.secondary)
+            }
             if let error = store.errorText {
                 Text(error).foregroundStyle(.red)
             }
-        } header: {
-            Text("Provisioning")
-        } footer: {
-            Text("Changes are saved in the app as soon as you make them. The app sends one complete settings packet only when all effective values are ready.")
+        }
+    }
+
+    private var deviceStatusText: String {
+        guard provisioner.selectedID == deviceID else {
+            return "This ChatESP device is not connected. Changes are saved and will sync after connection."
+        }
+        guard provisioner.isDeviceConnected else {
+            return provisioner.phase.text
+        }
+        switch provisioner.phase {
+        case .idle:
+            return "Connected. Settings sync automatically."
+        default:
+            return provisioner.phase.text
         }
     }
 
     private var memorySection: some View {
         Section {
             if provisioner.selectedID != deviceID || !provisioner.isDeviceConnected {
-                Text("Connect this ChatESP device to view memories.")
+                Text(provisioner.memoryMessage)
                     .foregroundStyle(.secondary)
             } else if !provisioner.memoryAvailable {
-                Text("Update the ChatESP device firmware to manage memories.")
+                Text(provisioner.memoryMessage)
                     .foregroundStyle(.secondary)
             } else {
                 HStack {
@@ -279,9 +417,9 @@ private struct DeviceSettingsView: View {
                     }
                     .disabled(provisioner.memories.isEmpty)
                 }
+                Text(provisioner.memoryMessage)
+                    .foregroundStyle(.secondary)
             }
-            Text(provisioner.memoryMessage)
-                .foregroundStyle(.secondary)
         } header: {
             Text("Memories")
         } footer: {
@@ -289,42 +427,6 @@ private struct DeviceSettingsView: View {
         }
     }
 
-    private func send() {
-        do {
-            let packet = try store.makePacket(for: deviceID)
-            send(packet, canRecoverRevision: true)
-        } catch {
-            store.show(error)
-        }
-    }
-
-    private func send(
-        _ packet: ProvisioningPacket,
-        canRecoverRevision: Bool
-    ) {
-        provisioner.provision(packet: packet) { result in
-            switch result {
-            case .success(let acknowledgement):
-                do {
-                    if acknowledgement.isRevisionRecovery {
-                        guard canRecoverRevision else {
-                            throw ProvisioningError.acknowledgementMismatch
-                        }
-                        let recoveryPacket = try store.recoverRevision(
-                            from: acknowledgement,
-                            for: deviceID)
-                        send(recoveryPacket, canRecoverRevision: false)
-                    } else {
-                        try store.accept(acknowledgement, for: deviceID)
-                    }
-                } catch {
-                    store.show(error)
-                }
-            case .failure(let error):
-                store.show(error)
-            }
-        }
-    }
 }
 
 private struct ConnectionSettings: View {

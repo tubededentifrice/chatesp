@@ -180,6 +180,26 @@ void test_valid_golden_packet_is_accepted() {
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected.data(), result.fingerprint.data(), expected.size());
 }
 
+void test_optional_credentials_can_be_empty() {
+    auto fields = valid_fields();
+    replace_field(fields, 2, "");
+    replace_field(fields, 3, "");
+    replace_field(fields, 4, "");
+    replace_field(fields, 5, "");
+
+    const auto result = validate(make_packet(fields));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::ValidationError::none),
+        static_cast<int>(result.error));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::ApplyDecision::apply),
+        static_cast<int>(result.decision));
+    TEST_ASSERT_TRUE(result.settings.openrouter_key.empty());
+    TEST_ASSERT_TRUE(result.settings.brave_key.empty());
+    TEST_ASSERT_TRUE(result.settings.wifi_ssid.empty());
+    TEST_ASSERT_TRUE(result.settings.wifi_password.empty());
+}
+
 void test_link_must_have_all_security_properties() {
     const auto packet = make_packet();
     const std::array<provisioning::LinkSecurity, 4> insecure{{
@@ -505,6 +525,7 @@ void test_revision_rules_reject_stale_and_conflicting_packets() {
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_valid_golden_packet_is_accepted);
+    RUN_TEST(test_optional_credentials_can_be_empty);
     RUN_TEST(test_link_must_have_all_security_properties);
     RUN_TEST(test_packet_envelope_is_strict);
     RUN_TEST(test_fields_are_complete_ordered_and_unique);

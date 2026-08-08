@@ -324,17 +324,81 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertTrue(decoded.deviceOverrides.isEmpty)
     }
 
-    func testValidationReportsEachIncompleteValue() {
+    func testEmptyCredentialsCanBeSent() throws {
         let settings = ProvisioningSettings(
             configuration: ChatESPConfiguration(),
             secrets: ProvisioningSecretValues())
-        XCTAssertEqual(
-            settings.validationIssues.map(\.fieldID),
-            [2, 4, 5])
-        XCTAssertFalse(
-            settings.validationIssues.map(\.message).contains {
-                $0.contains("One setting")
-            })
+        XCTAssertTrue(settings.validationIssues.isEmpty)
+        XCTAssertNoThrow(try settings.packet(revision: 1))
+    }
+
+    func testEmptyEndpointAndModelsUseSafeDefaults() throws {
+        var configuration = ChatESPConfiguration()
+        configuration.chatEndpoint = ""
+        configuration.chatModel = ""
+        configuration.transcriptionModel = ""
+        configuration.speechModel = ""
+
+        let settings = ProvisioningSettings(
+            configuration: configuration,
+            secrets: ProvisioningSecretValues())
+        let defaults = ChatESPConfiguration()
+        XCTAssertEqual(settings.chatEndpoint, defaults.chatEndpoint)
+        XCTAssertEqual(settings.chatModel, defaults.chatModel)
+        XCTAssertEqual(settings.transcriptionModel, defaults.transcriptionModel)
+        XCTAssertEqual(settings.speechModel, defaults.speechModel)
+        XCTAssertNoThrow(try settings.packet(revision: 1))
+    }
+
+    func testAutomaticSyncRequiresAReadyMatchingConnection() {
+        let deviceID = UUID()
+        let target = AutomaticSettingsSyncPolicy.target(
+            deviceID: deviceID,
+            settings: ProvisioningSettings(
+                configuration: ChatESPConfiguration(),
+                secrets: ProvisioningSecretValues()))
+        XCTAssertNotNil(target)
+
+        let ready = AutomaticSettingsSyncTrigger(
+            target: target,
+            selectedDeviceID: deviceID,
+            connected: true,
+            provisioning: false)
+        XCTAssertTrue(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: ready,
+            lastAttempt: nil))
+        XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: ready,
+            lastAttempt: target))
+        XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: AutomaticSettingsSyncTrigger(
+                target: target,
+                selectedDeviceID: UUID(),
+                connected: true,
+                provisioning: false),
+            lastAttempt: nil))
+        XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: AutomaticSettingsSyncTrigger(
+                target: target,
+                selectedDeviceID: deviceID,
+                connected: false,
+                provisioning: false),
+            lastAttempt: nil))
+        XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: AutomaticSettingsSyncTrigger(
+                target: target,
+                selectedDeviceID: deviceID,
+                connected: true,
+                provisioning: true),
+            lastAttempt: nil))
+
+        var invalidConfiguration = ChatESPConfiguration()
+        invalidConfiguration.chatEndpoint = "h"
+        XCTAssertNil(AutomaticSettingsSyncPolicy.target(
+            deviceID: deviceID,
+            settings: ProvisioningSettings(
+                configuration: invalidConfiguration,
+                secrets: ProvisioningSecretValues())))
     }
 
     func testModelCatalogFiltersRequiredCapabilities() throws {

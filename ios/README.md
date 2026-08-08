@@ -21,9 +21,20 @@ English and French voices that the firmware uses. The catalog request has
 fixed time and response-size limits. An invalid partial key does not block the
 public model catalog.
 
-The app sends one atomic, complete settings packet over the authenticated and
-encrypted BLE provisioning service. If the app lost its local revision record, current
-firmware can return the active revision and fingerprint in a flagged error.
+The app opens device discovery in a separate Add page. It does not keep a
+second nearby-device section on the main page. A device page contains settings,
+memories, and one status section. It has no manual provisioning controls.
+
+The app automatically sends one atomic settings packet over the authenticated
+and encrypted BLE service after connection or a settings change. Empty Wi-Fi,
+OpenRouter, and Brave values are valid. The firmware reports a clear runtime
+error if a feature needs missing Wi-Fi or OpenRouter credentials. An empty
+Brave key turns search off. Empty endpoint or model edits use the built-in
+defaults when the app sends settings. Invalid nonempty values remain local and
+the status section identifies the field that needs attention.
+
+If the app lost its local revision record, current firmware can return the
+active revision and fingerprint in a flagged error.
 The app saves that metadata and makes one bounded recovery transfer. It does
 not use an unflagged error as recovery metadata.
 
@@ -116,9 +127,9 @@ and integrated device firmware must pass these gates:
 - The app restores secrets from Keychain after restart.
 - The app restores global values, device overrides, the active device, and
   per-device revisions from one preferences record.
-- Each field edit is saved at once, including when other required fields are
-  empty or invalid. Provisioning stays unavailable until the effective device
-  settings are complete and valid.
+- Each field edit is saved at once. Empty credentials can sync. Empty endpoint
+  and model values use built-in defaults. An invalid nonempty value does not
+  block later edits, and the app syncs when the effective values are valid.
 - The model browser can search the OpenRouter catalog. Each list contains only
   models that declare the capabilities required for that model role.
 - The installed app starts at the full native screen size and does not use a

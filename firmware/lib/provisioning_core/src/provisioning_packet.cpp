@@ -275,16 +275,19 @@ ValidationError validate_field(std::uint8_t id, std::string_view value) {
         case 1:
             return valid_endpoint(value) ? ValidationError::none : ValidationError::invalid_endpoint;
         case 2:
-            return value.size() >= 8 && value.size() <= 256 && valid_visible_ascii(value, false)
+            return value.empty() ||
+                    (value.size() >= 8 && value.size() <= 256 &&
+                     valid_visible_ascii(value, false))
                 ? ValidationError::none : ValidationError::invalid_openrouter_key;
         case 3:
             return value.size() <= 128 && valid_visible_ascii(value, true)
                 ? ValidationError::none : ValidationError::invalid_brave_key;
         case 4:
-            return !value.empty() && value.size() <= 32 && valid_utf8(value)
+            return (value.empty() || value.size() <= 32) && valid_utf8(value)
                 ? ValidationError::none : ValidationError::invalid_wifi_ssid;
         case 5:
-            return value.size() >= 8 && value.size() <= 63 && valid_utf8(value)
+            return value.empty() ||
+                    (value.size() >= 8 && value.size() <= 63 && valid_utf8(value))
                 ? ValidationError::none : ValidationError::invalid_wifi_password;
         case 6:
         case 7:

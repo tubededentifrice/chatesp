@@ -1,5 +1,42 @@
 import Foundation
 
+struct AutomaticSettingsSyncTarget: Equatable {
+    let deviceID: UUID
+    let fingerprintHex: String
+}
+
+struct AutomaticSettingsSyncTrigger: Equatable {
+    let target: AutomaticSettingsSyncTarget?
+    let selectedDeviceID: UUID?
+    let connected: Bool
+    let provisioning: Bool
+}
+
+enum AutomaticSettingsSyncPolicy {
+    static func target(
+        deviceID: UUID,
+        settings: ProvisioningSettings
+    ) -> AutomaticSettingsSyncTarget? {
+        guard settings.validationIssues.isEmpty,
+              let fingerprint = try? settings.contentFingerprint() else {
+            return nil
+        }
+        return AutomaticSettingsSyncTarget(
+            deviceID: deviceID,
+            fingerprintHex: fingerprint.hexString)
+    }
+
+    static func shouldStart(
+        trigger: AutomaticSettingsSyncTrigger,
+        lastAttempt: AutomaticSettingsSyncTarget?
+    ) -> Bool {
+        guard let target = trigger.target else { return false }
+        return trigger.selectedDeviceID == target.deviceID &&
+            trigger.connected && !trigger.provisioning &&
+            lastAttempt != target
+    }
+}
+
 @MainActor
 final class ConfigurationStore: ObservableObject {
     @Published private(set) var preferences: AppPreferences
@@ -210,7 +247,7 @@ final class ConfigurationStore: ObservableObject {
            let description = error.errorDescription {
             errorText = description
         } else {
-            errorText = "Provisioning did not complete."
+            errorText = "The settings transfer did not complete."
         }
     }
 

@@ -111,18 +111,20 @@ missing, repeated, or out-of-order fields are errors.
 | ID | Setting | Limit and validation | Storage |
 | ---: | --- | --- | --- |
 | 1 | Chat endpoint | 12 through 192 visible ASCII bytes; HTTPS URL with a dotted host; no user information, query, or fragment | iOS preferences and plaintext device NVS |
-| 2 | OpenRouter key | 8 through 256 visible ASCII bytes | iOS Keychain and plaintext device NVS |
+| 2 | OpenRouter key | Empty, or 8 through 256 visible ASCII bytes | iOS Keychain and plaintext device NVS |
 | 3 | Brave key | Empty, or 1 through 128 visible ASCII bytes | iOS Keychain and plaintext device NVS |
-| 4 | Wi-Fi SSID | 1 through 32 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
-| 5 | Wi-Fi password | 8 through 63 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
+| 4 | Wi-Fi SSID | Empty, or 1 through 32 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
+| 5 | Wi-Fi password | Empty, or 8 through 63 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
 | 6 | Chat model | 1 through 96 ASCII letters, digits, `.`, `_`, `-`, `/`, `:`, or `~` | iOS preferences and plaintext device NVS |
 | 7 | Transcription model | Same model rule | iOS preferences and plaintext device NVS |
 | 8 | Speech model | Same model rule | iOS preferences and plaintext device NVS |
 | 9 | Approximate location | Empty, or up to 96 valid UTF-8 bytes without control characters; use a city and country, not coordinates or a street address | iOS preferences and plaintext device NVS |
 
-An empty Brave key disables search. Empty values are not valid for other
-fields. UTF-8 must use the shortest form and must not contain a null, surrogate,
-or value above `U+10FFFF`.
+An empty Brave key disables search. Empty OpenRouter and Wi-Fi credentials are
+valid stored states. Cloud voice reports a runtime error until Wi-Fi and the
+OpenRouter key are available. Empty endpoint and model edits in the iOS app use
+the documented built-in defaults in the transmitted packet. UTF-8 must use the
+shortest form and must not contain a null, surrogate, or value above `U+10FFFF`.
 
 The content fingerprint is:
 
@@ -175,9 +177,10 @@ optional secret overrides for each device.
 
 The app saves each field edit to its local store at once. It does not validate
 the complete settings packet before it saves another field. The app combines
-the current global values and device overrides before provisioning. It lists
-each incomplete or invalid effective field and does not start a transfer until
-the complete effective packet is valid.
+the current global values and device overrides, applies endpoint and model
+defaults to empty values, and starts an automatic transfer when each nonempty
+value is valid. An invalid nonempty value stays local. The device-page status
+identifies it. The app sends saved changes after the selected device connects.
 
 The firmware validates the complete packet before a persistent write. It then
 writes the changed settings and metadata to plaintext NVS as one logical

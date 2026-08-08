@@ -239,7 +239,25 @@ final class BLEProvisioner: NSObject, ObservableObject {
             restoredPeripherals = [:]
             return
         }
-        if selectedID == identifier { return }
+        if selectedID == identifier, let selected {
+            selected.delegate = self
+            if selected.state == .connected {
+                isDeviceConnected = true
+                if controlCharacteristic == nil ||
+                    dataCharacteristic == nil ||
+                    acknowledgementCharacteristic == nil {
+                    prepareCharacteristics(on: selected)
+                } else if phase == .connecting {
+                    phase = .idle
+                }
+            } else {
+                isDeviceConnected = false
+                if reconnectWork == nil {
+                    connectSelected()
+                }
+            }
+            return
+        }
         if let peripheral = restoredPeripherals[identifier] ??
             central.retrievePeripherals(withIdentifiers: [identifier]).first {
             select(peripheral, notifySelectionChange: false)

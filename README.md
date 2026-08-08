@@ -73,8 +73,11 @@ facts before it saves the pending fact. The iOS companion supports any number
 of ChatESP devices. It saves global settings, per-device overrides, and each
 edit as soon as it changes. Secrets stay in Keychain. A searchable model
 browser filters OpenRouter models for the required chat, transcription, or
-speech capabilities. The app sends one complete effective configuration over
-encrypted BLE. A selected, bounded JPEG can appear full-screen after the
+speech capabilities. The app automatically sends each valid effective
+configuration over encrypted BLE after a connection or a settings change.
+Empty Wi-Fi and OpenRouter credentials are valid stored states. Cloud features
+report a clear runtime error until the user configures the needed value. A
+selected, bounded JPEG can appear full-screen after the
 spoken answer. A restricted MicroPython tool can do short calculations and
 show a bounded line plot on the full screen.
 

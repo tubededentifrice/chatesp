@@ -247,10 +247,13 @@ global credentials and optional credential overrides for each device. The app
 combines these two inheritance layers only when it builds a settings packet.
 
 Each UI edit writes only its local non-secret or Keychain store at once. An
-empty required value does not block another edit. The app reports exact
-incomplete fields and does not start BLE provisioning until the effective
-device configuration is complete. The firmware still receives one validated,
-atomic settings packet.
+empty credential does not block another edit or an automatic BLE transfer.
+Empty endpoint and model values use built-in defaults in the effective packet.
+An invalid nonempty value stays local, and the device-page status identifies
+the field. The app sends each valid effective configuration automatically after
+connection or a settings change. The firmware receives one validated, atomic
+settings packet. It reports a runtime error when a cloud action needs missing
+Wi-Fi or OpenRouter credentials. An empty Brave key disables search.
 
 The model browser gets a bounded OpenRouter catalog response. It filters chat
 models for text input, text output, and tool calling. It filters transcription
