@@ -23,6 +23,12 @@ public:
         std::uint8_t percent, bool &persisted) override;
     agent::Error schedule_power_off(agent::PowerOffMode &mode) override;
 
+    // Apply touch-control previews without a flash write. Persist once after
+    // the user releases the active control.
+    agent::Error preview_brightness(std::uint8_t percent);
+    agent::Error preview_volume(std::uint8_t percent);
+    bool persist_preferences();
+
     [[nodiscard]] std::uint8_t brightness_percent() const {
         return brightness_percent_.load(std::memory_order_acquire);
     }

@@ -58,6 +58,10 @@ before making a battery-life claim.
 
 The model can request device status, set display brightness from 5 through 100
 percent, set playback volume from 0 through 100 percent, and request power-off.
+The user can also open a top touch panel and change brightness or volume in
+five-percent steps. Brightness changes during a drag. Volume changes during
+active playback. Firmware saves the final pair after release and does not
+write NVS for each drag position.
 Brightness and volume persist across a restart when NVS is available. A model
 power-off first completes a short spoken confirmation. Production then uses the
 same system-off cleanup as the PWR button and inactivity timer. One bottom PWR
@@ -102,6 +106,15 @@ The connected V2 board must pass these checks for this control change:
   range;
 - volume commands mute at 0 percent, apply at 100 percent, and reject values
   outside the range;
+- a tap on the top handle and a downward top-edge swipe open the control panel;
+- a swipe that starts below the top edge or moves mainly sideways does not open
+  the control panel;
+- the panel closes after an upward swipe, a tap outside, five seconds without
+  touch, a recording start, a passkey display, or sleep;
+- the panel opens above a full-screen image and does not cover a BLE passkey;
+- brightness changes during a drag, active speech volume changes without a
+  restart, and one release causes at most one preference write;
+- a PWR-button action keeps priority while the control panel is open;
 - changed brightness and volume values return after a reset;
 - an explicit model power-off gives one short confirmation and then sleeps;
 - a farewell, a hypothetical statement, or an uncertain transcript does not

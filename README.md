@@ -16,7 +16,8 @@ companion for secure BLE configuration.
    companion.
    The app refreshes this context when the watch connects and at most once per
    hour while connected.
-4. Ask for device status, brightness, volume, or power-off when needed.
+4. Swipe down from the small top handle to change brightness or volume on the
+   device. The same controls are also available by voice.
 5. Continue within 30 seconds to use the same thread.
 6. Wait 30 seconds, or use a short PWR-button press, to sleep. The next wake
    starts a new thread.
@@ -48,8 +49,9 @@ The project is in active development. The firmware implements the black
 terminal interface, bottom-PWR hold-to-talk, bounded microphone capture,
 Wi-Fi, persistent HTTPS sessions, streamed model text, sentence speech,
 parallel image download, search, BLE provisioning,
-device status and controls, and sleep paths. Brightness and volume changes use
-a small persistent device-preference record. The iOS companion can store
+device status and controls, touch quick controls, and sleep paths. Brightness
+and volume changes use a small persistent device-preference record. The iOS
+companion can store
 settings in Keychain and send them over encrypted BLE. A selected, bounded JPEG
 can appear full-screen after the spoken answer.
 

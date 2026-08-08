@@ -20,6 +20,7 @@
 #include "chatesp/audio_level.hpp"
 #include "chatesp/ble_settings.hpp"
 #include "chatesp/interaction_state.hpp"
+#include "chatesp/quick_controls.hpp"
 #include "chatesp/runtime_control.hpp"
 #include "chatesp/speech_segmenter.hpp"
 #include "chatesp/turn_timing.hpp"
@@ -432,6 +433,11 @@ public:
         cancel_transports();
         capture_.cancel();
         pcm_sink_.cancel();
+        if (quick_controls_enabled_ && bsp_display_lock(100)) {
+            ui::disable_quick_controls();
+            bsp_display_unlock();
+            quick_controls_enabled_ = false;
+        }
         if (speech_events_ != nullptr) {
             vEventGroupDelete(speech_events_);
             speech_events_ = nullptr;
@@ -543,6 +549,18 @@ public:
             return ESP_ERR_NO_MEM;
         }
 
+        if (bsp_display_lock(100)) {
+            quick_controls_enabled_ = ui::enable_quick_controls(
+                device_control_.brightness_percent(),
+                device_control_.volume_percent(),
+                quick_controls_callback,
+                this);
+            lv_refr_now(nullptr);
+            bsp_display_unlock();
+        }
+        if (!quick_controls_enabled_) {
+            ESP_LOGW(kTag, "Touch controls are not available");
+        }
         started_.store(true, std::memory_order_release);
         return ESP_OK;
     }
@@ -860,6 +878,32 @@ private:
         return speech_result_.load(std::memory_order_acquire);
     }
 
+    static void quick_controls_callback(
+        const ui::QuickControlsUpdate &update, void *context) {
+        auto *self = static_cast<Impl *>(context);
+        const runtime::DevicePreferences preferences{
+            update.brightness_percent, update.volume_percent};
+        if (self == nullptr || !preferences.valid()) {
+            return;
+        }
+        (void)self->device_control_.preview_brightness(
+            update.brightness_percent);
+        if (self->device_control_.preview_volume(update.volume_percent) ==
+            agent::Error::none) {
+            (void)self->playback_.set_volume(update.volume_percent);
+        }
+        self->pending_brightness_percent_.store(
+            update.brightness_percent, std::memory_order_release);
+        self->pending_volume_percent_.store(
+            update.volume_percent, std::memory_order_release);
+        if (update.commit) {
+            self->quick_controls_commit_pending_.store(
+                true, std::memory_order_release);
+        }
+        self->quick_controls_update_pending_.store(
+            true, std::memory_order_release);
+    }
+
     static void passkey_callback(
         std::uint32_t passkey, bool visible, void *context) {
         auto *self = static_cast<Impl *>(context);
@@ -913,7 +957,12 @@ private:
     }
 
     void show_state(InteractionState state) {
-        with_display([state]() { ui::show_state(state); });
+        with_display([this, state]() {
+            ui::sync_quick_controls(
+                device_control_.brightness_percent(),
+                device_control_.volume_percent());
+            ui::show_state(state);
+        });
     }
 
     void show_error(const char *message) {
@@ -1015,6 +1064,58 @@ private:
         }
     }
 
+    void process_quick_controls(std::uint32_t now_ms) {
+        const bool update = quick_controls_update_pending_.exchange(
+            false, std::memory_order_acq_rel);
+        const bool commit_requested =
+            quick_controls_commit_pending_.load(std::memory_order_acquire);
+        if (!update && !commit_requested) {
+            return;
+        }
+        const bool can_commit = quick_controls_can_persist(
+            voice_priority_.load(std::memory_order_acquire),
+            button_pressed_.load(std::memory_order_acquire),
+            interaction_.state() == InteractionState::sleep_pending);
+        if (!update && !can_commit) {
+            return;
+        }
+
+        const std::uint8_t brightness =
+            pending_brightness_percent_.load(std::memory_order_acquire);
+        const std::uint8_t volume =
+            pending_volume_percent_.load(std::memory_order_acquire);
+        const runtime::DevicePreferences requested{brightness, volume};
+        bool values_match = requested.valid();
+        if (values_match &&
+            device_control_.preview_brightness(brightness) !=
+                agent::Error::none) {
+            values_match = false;
+        }
+        if (values_match &&
+            device_control_.preview_volume(volume) != agent::Error::none) {
+            values_match = false;
+        }
+        if (values_match && playback_.set_volume(volume) != ESP_OK) {
+            values_match = false;
+        }
+        if (update) {
+            interaction_.note_idle_activity(now_ms);
+        }
+
+        if (!values_match) {
+            with_display([this]() {
+                ui::sync_quick_controls(
+                    device_control_.brightness_percent(),
+                    device_control_.volume_percent());
+            });
+        }
+        if (commit_requested && values_match && can_commit &&
+            quick_controls_commit_pending_.exchange(
+                false, std::memory_order_acq_rel)) {
+            (void)device_control_.persist_preferences();
+        }
+    }
+
     void run() {
         // Replace the full-boot splash when this task can accept input. Do not
         // add a splash timer because it would delay hold-to-talk.
@@ -1052,6 +1153,7 @@ private:
             }
 
             const std::uint32_t now_ms = monotonic_ms();
+            process_quick_controls(now_ms);
             const network::NetworkState network_state = network_.state();
             if (network_state != last_network_state_) {
                 if (last_network_state_ ==
@@ -1648,6 +1750,10 @@ private:
         }
         display_sleep_pending_ = display_sleep_result != ESP_OK;
         display_sleep_attempted_at_ms_ = monotonic_ms();
+        if (quick_controls_commit_pending_.exchange(
+                false, std::memory_order_acq_rel)) {
+            (void)device_control_.persist_preferences();
+        }
         cancellation_.cancel();
         speech_channel_.cancel();
         cancel_transports();
@@ -1780,6 +1886,12 @@ private:
     std::atomic<bool> display_available_{true};
     std::atomic<bool> button_pressed_{false};
     std::atomic<bool> started_{false};
+    std::atomic<std::uint8_t> pending_brightness_percent_{
+        runtime::DevicePreferences::default_brightness_percent};
+    std::atomic<std::uint8_t> pending_volume_percent_{
+        runtime::DevicePreferences::default_volume_percent};
+    std::atomic<bool> quick_controls_update_pending_{false};
+    std::atomic<bool> quick_controls_commit_pending_{false};
     runtime::PoweroffGate poweroff_gate_;
     std::uint32_t level_refreshed_at_ms_ = 0;
     std::uint32_t settings_checked_at_ms_ = 0;
@@ -1800,6 +1912,7 @@ private:
     bool footer_shown_ = false;
     bool stream_text_shown_ = false;
     bool request_active_ = false;
+    bool quick_controls_enabled_ = false;
     ui::WifiIndicator shown_wifi_ = ui::WifiIndicator::off;
     std::optional<std::uint8_t> battery_percent_;
     std::optional<std::uint8_t> shown_battery_percent_;

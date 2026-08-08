@@ -37,6 +37,20 @@ The button poll runs separately from cloud work. A button press cancels active
 audio and HTTPS work. A separate bounded task shows BLE passkeys, but a voice
 button press always hides the passkey view.
 
+The top edge of the touch display has a small control handle. A tap or a
+48-pixel downward swipe from the top 32 pixels opens a black control panel.
+The panel has large five-percent brightness and volume controls. An upward
+swipe, a tap outside the panel, or five seconds without touch closes it. The
+panel is not available during start, recording, sleep, or BLE passkey display.
+A PWR-button action keeps priority. Opening the panel or changing a control
+resets the idle timer only when the runtime is idle.
+
+Slider movement applies brightness at once and sends live volume changes to
+the playback task through bounded atomic state. The LVGL callback does not
+write flash or wait for audio. The runtime saves the final preference pair
+after release. It defers that write while voice work or a PWR-button action has
+priority. It does not write NVS for each slider position.
+
 When settings are available, the Wi-Fi station starts an asynchronous
 connection as soon as the runtime starts. This does not block the button or
 microphone path. A request waits for that connection or starts a bounded retry
@@ -127,7 +141,8 @@ creates a new thread.
 - `conversation`: system prompt, short in-memory history, tool loop, and thread
   lifetime.
 - `ui`: terminal layout, streamed text, Wi-Fi and battery footer, and
-  state-specific motion.
+  state-specific motion. It also owns the bounded top control panel and touch
+  gesture presentation.
 - `provisioning`: versioned BLE packets, authenticated encrypted transfer,
   acknowledgement, and NVS persistence.
 - `device preferences`: a small versioned brightness and volume record. It is

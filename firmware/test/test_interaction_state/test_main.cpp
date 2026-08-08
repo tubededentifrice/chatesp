@@ -6,6 +6,7 @@
 #include "chatesp/button_debouncer.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/power_button_filter.hpp"
+#include "chatesp/quick_controls.hpp"
 
 using chatesp::InteractionConfig;
 using chatesp::InteractionState;
@@ -293,6 +294,77 @@ void test_held_wake_press_records_until_release() {
         static_cast<int>(machine.state()));
 }
 
+void test_quick_controls_open_only_from_the_top_edge() {
+    chatesp::QuickControlsGesture controls;
+    controls.set_allowed(true);
+
+    controls.press(180, 80, 100);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::QuickControlsAction::none),
+        static_cast<int>(controls.release(180, 180, 200)));
+
+    controls.press(180, 20, 300);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::QuickControlsAction::open),
+        static_cast<int>(controls.release(180, 68, 400)));
+}
+
+void test_quick_controls_reject_a_sideways_drag() {
+    chatesp::QuickControlsGesture controls;
+    controls.set_allowed(true);
+    controls.press(40, 20, 100);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::QuickControlsAction::none),
+        static_cast<int>(controls.release(140, 100, 200)));
+}
+
+void test_quick_controls_close_with_an_upward_swipe() {
+    chatesp::QuickControlsGesture controls;
+    controls.set_allowed(true);
+    controls.set_open(true, 100);
+    controls.press(180, 220, 200);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::QuickControlsAction::close),
+        static_cast<int>(controls.release(180, 172, 300)));
+}
+
+void test_quick_controls_auto_close_handles_wrap_and_active_touch() {
+    chatesp::QuickControlsGesture controls;
+    controls.set_allowed(true);
+    const std::uint32_t start =
+        std::numeric_limits<std::uint32_t>::max() - 2'000;
+    controls.set_open(true, start);
+    TEST_ASSERT_FALSE(controls.automatic_close_due(2'998));
+    controls.press(180, 100, 2'999);
+    TEST_ASSERT_FALSE(controls.automatic_close_due(20'000));
+    controls.release(180, 100, 3'000);
+    TEST_ASSERT_TRUE(controls.automatic_close_due(8'000));
+}
+
+void test_quick_controls_snap_to_valid_five_percent_steps() {
+    TEST_ASSERT_EQUAL_UINT8(
+        5, chatesp::QuickControlsGesture::snap_percent(0, 5));
+    TEST_ASSERT_EQUAL_UINT8(
+        65, chatesp::QuickControlsGesture::snap_percent(63, 5));
+    TEST_ASSERT_EQUAL_UINT8(
+        0, chatesp::QuickControlsGesture::snap_percent(1, 0));
+    TEST_ASSERT_EQUAL_UINT8(
+        100, chatesp::QuickControlsGesture::snap_percent(104, 0));
+}
+
+void test_quick_controls_defer_flash_work_until_input_is_idle() {
+    TEST_ASSERT_TRUE(
+        chatesp::quick_controls_can_persist(false, false, false));
+    TEST_ASSERT_FALSE(
+        chatesp::quick_controls_can_persist(true, false, false));
+    TEST_ASSERT_FALSE(
+        chatesp::quick_controls_can_persist(false, true, false));
+    TEST_ASSERT_FALSE(
+        chatesp::quick_controls_can_persist(false, false, true));
+    TEST_ASSERT_FALSE(
+        chatesp::quick_controls_can_persist(true, true, true));
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_short_press_requests_sleep);
@@ -315,5 +387,11 @@ int main(int, char **) {
     RUN_TEST(test_power_button_filter_ignores_two_key_edges_in_one_poll);
     RUN_TEST(test_short_wake_press_returns_to_idle);
     RUN_TEST(test_held_wake_press_records_until_release);
+    RUN_TEST(test_quick_controls_open_only_from_the_top_edge);
+    RUN_TEST(test_quick_controls_reject_a_sideways_drag);
+    RUN_TEST(test_quick_controls_close_with_an_upward_swipe);
+    RUN_TEST(test_quick_controls_auto_close_handles_wrap_and_active_touch);
+    RUN_TEST(test_quick_controls_snap_to_valid_five_percent_steps);
+    RUN_TEST(test_quick_controls_defer_flash_work_until_input_is_idle);
     return UNITY_END();
 }
