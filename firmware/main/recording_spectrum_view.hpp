@@ -12,7 +12,7 @@ namespace chatesp::ui::recording_spectrum {
 namespace {
 
 constexpr std::int32_t kWidth = 336;
-constexpr std::int32_t kHeight = 238;
+constexpr std::int32_t kHeight = 198;
 constexpr std::int32_t kPlotHeight = 190;
 constexpr std::int32_t kBarWidth = 12;
 constexpr std::int32_t kBarGap = 6;
@@ -94,19 +94,6 @@ void draw(lv_event_t *event) {
         kPlotHeight + 7, kBarsWidth, 1);
 }
 
-lv_obj_t *create_frequency_label(
-    const char *text, lv_align_t alignment, std::int32_t x) {
-    lv_obj_t *label = lv_label_create(root);
-    lv_label_set_text_static(label, text);
-    lv_obj_set_style_text_color(
-        label, lv_color_hex(0x777777), LV_PART_MAIN);
-    lv_obj_set_style_text_font(
-        label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(label, 1, LV_PART_MAIN);
-    lv_obj_align(label, alignment, x, 0);
-    return label;
-}
-
 }  // namespace
 
 inline void reset() {
@@ -124,8 +111,6 @@ inline void create(lv_obj_t *screen) {
     lv_obj_align(root, LV_ALIGN_TOP_LEFT, 16, 132);
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(root, draw, LV_EVENT_DRAW_MAIN, nullptr);
-    (void)create_frequency_label("125 HZ", LV_ALIGN_BOTTOM_LEFT, 9);
-    (void)create_frequency_label("8 KHZ", LV_ALIGN_BOTTOM_RIGHT, -9);
     reset();
     lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN);
 }
