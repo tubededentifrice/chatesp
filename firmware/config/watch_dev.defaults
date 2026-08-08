@@ -1,2 +1,5 @@
+# Do not enable features that can burn eFuses on first start.
 CONFIG_NVS_ENCRYPTION=n
+CONFIG_SECURE_BOOT=n
+CONFIG_SECURE_FLASH_ENC_ENABLED=n
 CONFIG_BT_NIMBLE_NVS_PERSIST=n

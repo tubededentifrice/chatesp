@@ -41,7 +41,13 @@ documentation contracts consistent.
 - Keep optional network, search, image, touch, IMU, RTC, and iOS failures from
   blocking sleep or a later voice interaction.
 - Keep the top BOOT button unassigned outside clearly labeled diagnostics.
-- Use authenticated encrypted BLE, Keychain, and encrypted NVS for secrets.
+- Use authenticated encrypted BLE and Keychain for secrets. Production uses
+  plaintext NVS because the project forbids the eFuse write that encrypted NVS
+  can need. Do not describe device storage as encrypted.
+- Never enable an eFuse burn, secure boot, flash encryption, encrypted NVS, or
+  another irreversible device write. Keep the explicit zero build flag and
+  compile-time checks in place for all device profiles. There is no approval
+  bypass for this policy.
 - Keep packet encoding, limits, UUIDs, revision rules, fingerprint rules, and
   acknowledgements authoritative in `docs/provisioning-protocol.md`. Store
   non-secret iOS choices in one versioned preferences record.

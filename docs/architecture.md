@@ -109,8 +109,8 @@ creates a new thread.
   lifetime.
 - `ui`: terminal layout, streamed text, Wi-Fi and battery footer, and
   state-specific motion.
-- `provisioning`: versioned BLE packets, encrypted settings, acknowledgement,
-  and NVS persistence.
+- `provisioning`: versioned BLE packets, authenticated encrypted transfer,
+  acknowledgement, and NVS persistence.
 - `device preferences`: a small versioned brightness and volume record. It is
   separate from BLE settings and contains no secret data.
 - `power`: inactivity, PWR-button input, peripheral shutdown, AXP2101
@@ -180,10 +180,12 @@ details.
 Development secrets use an ignored local file. The iOS app stores secrets in
 Keychain. BLE provisioning requires an authenticated encrypted link. The
 firmware validates a full settings packet, writes only changed values, and
-reports the applied revision and fingerprint. Device settings use encrypted
-NVS. The production profile uses the ESP32-S3 HMAC NVS security provider. Its
-first start can create the HMAC key in the configured eFuse key block. The
-development profile keeps BLE settings in memory and does not make this eFuse
-change. Logs show only redacted error categories. Turn timing records contain
+reports the applied revision and fingerprint. Production stores the packet and
+BLE bonds in plaintext NVS. This keeps settings after a restart, but a person
+with physical flash access can read the credentials. Development keeps BLE
+settings and bonds in memory. ChatESP never enables eFuse-backed NVS
+encryption, flash encryption, secure boot, or another irreversible device
+write. Each device build has an explicit zero policy flag and compile-time
+checks. Logs show only redacted error categories. Turn timing records contain
 phase durations and bounded counters only. They do not contain text, audio,
 URLs, credentials, stable identifiers, or precise location.

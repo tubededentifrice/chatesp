@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import venv
+from configparser import ConfigParser
 from pathlib import Path
 
 
@@ -18,7 +19,12 @@ IDF_ENV_VERSION = "1.0.0"
 IDF_FRAMEWORK_VERSION = "5.5.3"
 DEPENDENCY_CHECK_CACHE_SECONDS = 60 * 60
 WATCH_ENVIRONMENTS = {"watch_dev", "watch_prod"}
-PRODUCTION_EFUSE_APPROVAL = "CHATESP_ALLOW_PRODUCTION_EFUSE_PROVISION"
+REVERSIBLE_SDKCONFIG_VALUES = {
+    "CONFIG_NVS_ENCRYPTION": "n",
+    "CONFIG_SECURE_BOOT": "n",
+    "CONFIG_SECURE_FLASH_ENC_ENABLED": "n",
+}
+IRREVERSIBLE_WRITE_FLAG = "-DCHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0"
 
 
 def dependency_policy_digest(root: Path) -> str:
@@ -109,17 +115,6 @@ def requires_idf_python(arguments: list[str]) -> bool:
     return not selected or bool(selected & WATCH_ENVIRONMENTS)
 
 
-def selected_targets(arguments: list[str]) -> set[str]:
-    """Return each PlatformIO target from the command line."""
-    selected: set[str] = set()
-    for index, argument in enumerate(arguments):
-        if argument in ("-t", "--target") and index + 1 < len(arguments):
-            selected.add(arguments[index + 1])
-        elif argument.startswith("--target="):
-            selected.add(argument.split("=", 1)[1])
-    return selected
-
-
 def requested_watch_environments(arguments: list[str]) -> set[str]:
     """Return selected watch profiles, including the PlatformIO default."""
     selected = selected_environments(arguments)
@@ -128,17 +123,32 @@ def requested_watch_environments(arguments: list[str]) -> set[str]:
     return selected & WATCH_ENVIRONMENTS
 
 
-def production_upload_is_allowed(
-    arguments: list[str], environment: dict[str, str]
-) -> bool:
-    """Require explicit consent before an upload can create an eFuse key."""
-    is_production_upload = (
-        "watch_prod" in requested_watch_environments(arguments)
-        and "upload" in selected_targets(arguments)
-    )
-    return not is_production_upload or environment.get(
-        PRODUCTION_EFUSE_APPROVAL
-    ) == "1"
+def device_write_policy_errors(project: Path) -> list[str]:
+    """Report a device profile that can permit an irreversible write."""
+    errors: list[str] = []
+    parser = ConfigParser(interpolation=None)
+    parser.read(project / "platformio.ini", encoding="utf-8")
+    for profile in sorted(WATCH_ENVIRONMENTS):
+        section = f"env:{profile}"
+        flags = parser.get(section, "build_flags", fallback="").split()
+        if IRREVERSIBLE_WRITE_FLAG not in flags:
+            errors.append(f"{profile} lacks the zero irreversible-write flag")
+
+        values: dict[str, str] = {}
+        profile_path = project / "config" / f"{profile}.defaults"
+        try:
+            lines = profile_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            errors.append(f"{profile} has no SDK configuration overlay")
+            continue
+        for line in lines:
+            if line.startswith("CONFIG_") and "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        for key, expected in REVERSIBLE_SDKCONFIG_VALUES.items():
+            if values.get(key) != expected:
+                errors.append(f"{profile} must set {key}={expected}")
+    return errors
 
 
 def profile_sdkconfig_text(project: Path, profile: str) -> str:
@@ -229,20 +239,21 @@ def main() -> int:
         print("The firmware directory does not exist.", file=sys.stderr)
         return 1
 
+    policy_errors = device_write_policy_errors(project)
+    if policy_errors:
+        print(
+            "The irreversible device-write policy failed: "
+            + "; ".join(policy_errors),
+            file=sys.stderr,
+        )
+        return 2
+
     pio = shutil.which("pio")
     if not pio:
         print("PlatformIO is not in the locked uv environment.", file=sys.stderr)
         return 1
 
     environment = os.environ.copy()
-    if not production_upload_is_allowed(sys.argv[1:], environment):
-        print(
-            "Production upload is blocked because its first start can write "
-            "an irreversible HMAC key to eFuse. Set "
-            f"{PRODUCTION_EFUSE_APPROVAL}=1 only after explicit approval.",
-            file=sys.stderr,
-        )
-        return 2
     environment.setdefault("PLATFORMIO_CORE_DIR", str(root / ".platformio"))
     environment.setdefault("ESP_IDF_VERSION", IDF_FRAMEWORK_VERSION)
     core_dir = Path(environment["PLATFORMIO_CORE_DIR"])

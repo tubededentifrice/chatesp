@@ -82,7 +82,7 @@ only to the current session and the tool result reports this state.
 The `watch_prod` profile defines `CHATESP_DEVELOPMENT_MODE=0`. It is the release
 profile. A sleep request stops active work, turns off the display, and requests
 AXP2101 system-off. USB can disconnect after system-off. This profile enables
-HMAC-protected NVS and persistent BLE bonds.
+persistent settings and persistent BLE bonds in plaintext NVS.
 
 A model `power_off` request gives a short confirmation and then uses this same
 system-off path. One bottom PWR-button press starts the board again. A held wake
@@ -94,18 +94,21 @@ Build production mode without a device change:
 uv run --locked python tools/pio.py run -e watch_prod
 ```
 
-On the first production start, ESP-IDF can create a random NVS HMAC key in the
-configured eFuse key block. An eFuse write cannot be reversed. Inspect the
-device eFuse use and get explicit user approval before this operation. The
-wrapper blocks the production upload unless the approval variable is set for
-that command:
+Production and development both set
+`CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. Source checks reject a missing or
+nonzero flag. They also reject NVS encryption, flash encryption, and secure
+boot. These ESP-IDF features can burn eFuses. Never add an approval bypass.
+
+Production stores provisioned credentials and BLE bonds in plaintext flash.
+This is less secure than HMAC-protected NVS. A person with physical flash
+access can read the values. The BLE provisioning link stays authenticated and
+encrypted, and the iOS app keeps its copy of secrets in Keychain.
+
+Upload production with the normal command:
 
 ```sh
-CHATESP_ALLOW_PRODUCTION_EFUSE_PROVISION=1 uv run --locked python tools/pio.py run -e watch_prod -t upload
+uv run --locked python tools/pio.py run -e watch_prod -t upload
 ```
-
-Do not put this variable in a shell profile or a tracked file. The variable is
-only an upload guard. It does not change the firmware security settings.
 
 Use production mode for final sleep, wake, and battery-current tests. Do not use
 a development-mode result as evidence for production power behavior.

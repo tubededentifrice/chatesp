@@ -377,7 +377,7 @@ esp_err_t start(
         return storage_result;
     }
 #if defined(CONFIG_BT_NIMBLE_NVS_PERSIST) && CONFIG_BT_NIMBLE_NVS_PERSIST
-    if (settings_store->persistence() != SettingsPersistence::encrypted_nvs) {
+    if (settings_store->persistence() != SettingsPersistence::plaintext_nvs) {
         return ESP_ERR_INVALID_STATE;
     }
 #endif

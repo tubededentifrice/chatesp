@@ -93,14 +93,14 @@ missing, repeated, or out-of-order fields are errors.
 
 | ID | Setting | Limit and validation | Storage |
 | ---: | --- | --- | --- |
-| 1 | Chat endpoint | 12 through 192 visible ASCII bytes; HTTPS URL with a dotted host; no user information, query, or fragment | iOS preferences and encrypted device NVS |
-| 2 | OpenRouter key | 8 through 256 visible ASCII bytes | iOS Keychain and encrypted device NVS |
-| 3 | Brave key | Empty, or 1 through 128 visible ASCII bytes | iOS Keychain and encrypted device NVS |
-| 4 | Wi-Fi SSID | 1 through 32 valid UTF-8 bytes | iOS Keychain and encrypted device NVS |
-| 5 | Wi-Fi password | 8 through 63 valid UTF-8 bytes | iOS Keychain and encrypted device NVS |
-| 6 | Chat model | 1 through 96 ASCII letters, digits, `.`, `_`, `-`, `/`, or `:` | iOS preferences and encrypted device NVS |
-| 7 | Transcription model | Same model rule | iOS preferences and encrypted device NVS |
-| 8 | Speech model | Same model rule | iOS preferences and encrypted device NVS |
+| 1 | Chat endpoint | 12 through 192 visible ASCII bytes; HTTPS URL with a dotted host; no user information, query, or fragment | iOS preferences and plaintext device NVS |
+| 2 | OpenRouter key | 8 through 256 visible ASCII bytes | iOS Keychain and plaintext device NVS |
+| 3 | Brave key | Empty, or 1 through 128 visible ASCII bytes | iOS Keychain and plaintext device NVS |
+| 4 | Wi-Fi SSID | 1 through 32 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
+| 5 | Wi-Fi password | 8 through 63 valid UTF-8 bytes | iOS Keychain and plaintext device NVS |
+| 6 | Chat model | 1 through 96 ASCII letters, digits, `.`, `_`, `-`, `/`, or `:` | iOS preferences and plaintext device NVS |
+| 7 | Transcription model | Same model rule | iOS preferences and plaintext device NVS |
+| 8 | Speech model | Same model rule | iOS preferences and plaintext device NVS |
 
 An empty Brave key disables search. Empty values are not valid for other
 fields. UTF-8 must use the shortest form and must not contain a null, surrogate,
@@ -130,13 +130,14 @@ them for a retry. It marks them as acknowledged only after a successful
 application acknowledgement.
 
 The firmware validates the complete packet before a persistent write. It then
-writes the changed settings and metadata to encrypted NVS as one logical
+writes the changed settings and metadata to plaintext NVS as one logical
 transaction. It must verify durable storage before it sends `applied`. A repeat
 with the same revision and fingerprint sends `unchanged` and causes no NVS
 write. A validation or storage error must not make a partial setting set active.
-The production profile uses the ESP32-S3 HMAC NVS security provider. ESP-IDF
-creates or reads its HMAC security configuration before BLE provisioning can
-start. The development profile does not claim durable provisioning.
+The production profile does not use the ESP32-S3 HMAC NVS security provider.
+It must not enable NVS encryption because HMAC key setup can burn an eFuse.
+This means a person with physical flash access can read stored credentials.
+The development profile does not claim durable provisioning.
 
 ## Application acknowledgement
 

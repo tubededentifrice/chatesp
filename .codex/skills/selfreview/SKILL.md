@@ -77,9 +77,12 @@ mode, stay in the current execution mode and continue without user triage.
   arguments, URLs, and network responses as untrusted.
 - Require an authenticated encrypted BLE link, versioned packets, exact length,
   revision, fingerprint, validation, and an application acknowledgement.
-- Store iOS secrets in Keychain and device secrets in encrypted NVS. Never log
-  or commit a credential, private content, signing data, personal path, stable
-  device identifier, or precise location.
+- Store iOS secrets in Keychain. Production device secrets use plaintext NVS
+  because the permanent-write policy forbids eFuse-backed NVS encryption.
+  Check that documents state the physical-access risk. Never enable eFuse
+  writes, flash encryption, secure boot, or another irreversible device write.
+  Never log or commit a credential, private content, signing data, personal
+  path, stable device identifier, or precise location.
 - Check that raw microphone audio stays in memory and is deleted after use.
 
 ### Completeness

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 
+#include "device_write_policy.hpp"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -11,28 +12,13 @@
 #endif
 
 #if CHATESP_DEVELOPMENT_MODE
-#if defined(CONFIG_NVS_ENCRYPTION) && CONFIG_NVS_ENCRYPTION
-#error "Development firmware must not initialize irreversible production NVS security"
-#endif
 #if defined(CONFIG_BT_NIMBLE_NVS_PERSIST) && CONFIG_BT_NIMBLE_NVS_PERSIST
 #error "Development firmware must keep BLE bonds volatile"
 #endif
 #else
-#if !defined(CONFIG_NVS_ENCRYPTION) || !CONFIG_NVS_ENCRYPTION
-#error "Production firmware requires encrypted NVS"
-#endif
-#if !defined(CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC) || \
-    !CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC
-#error "Production firmware requires HMAC-protected NVS keys"
-#endif
 #if !defined(CONFIG_BT_NIMBLE_NVS_PERSIST) || \
     !CONFIG_BT_NIMBLE_NVS_PERSIST
 #error "Production firmware requires persistent BLE bonds"
-#endif
-#if !defined(CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID) || \
-    CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID < 0 || \
-    CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID > 5
-#error "Production firmware requires one reserved HMAC eFuse key block"
 #endif
 #endif
 
@@ -110,14 +96,14 @@ esp_err_t SettingsStore::initialize() {
     initialized_ = true;
     return ESP_OK;
 #else
-    // ESP-IDF reads or generates the HMAC-derived NVS security configuration
-    // and then starts the default NVS partition with nvs_flash_secure_init().
+    // Production intentionally uses normal NVS. The settings are plaintext in
+    // flash because eFuse-backed encryption violates the hardware safety policy.
     const esp_err_t init_result = nvs_flash_init();
     if (init_result != ESP_OK) {
         return init_result;
     }
-    persistence_ = SettingsPersistence::encrypted_nvs;
-    if (!load_encrypted_record()) {
+    persistence_ = SettingsPersistence::plaintext_nvs;
+    if (!load_persistent_record()) {
         settings_.clear();
         version_ = {};
     }
@@ -164,8 +150,8 @@ bool SettingsStore::store(
         next.clear();
         return false;
     }
-    if (persistence_ == SettingsPersistence::encrypted_nvs &&
-        !store_encrypted_packet(packet, packet_size)) {
+    if (persistence_ == SettingsPersistence::plaintext_nvs &&
+        !store_persistent_packet(packet, packet_size)) {
         next.clear();
         return false;
     }
@@ -201,8 +187,8 @@ bool SettingsStore::is_volatile() const {
     return persistence() == SettingsPersistence::volatile_development;
 }
 
-bool SettingsStore::load_encrypted_record() {
-#if defined(CONFIG_NVS_ENCRYPTION) && CONFIG_NVS_ENCRYPTION
+bool SettingsStore::load_persistent_record() {
+#if !CHATESP_DEVELOPMENT_MODE
     nvs_handle_t handle = 0;
     const esp_err_t open_result = nvs_open(kNamespace, NVS_READONLY, &handle);
     if (open_result != ESP_OK) {
@@ -242,9 +228,9 @@ bool SettingsStore::load_encrypted_record() {
 #endif
 }
 
-bool SettingsStore::store_encrypted_packet(
+bool SettingsStore::store_persistent_packet(
     const std::uint8_t *packet, std::size_t packet_size) {
-#if defined(CONFIG_NVS_ENCRYPTION) && CONFIG_NVS_ENCRYPTION
+#if !CHATESP_DEVELOPMENT_MODE
     nvs_handle_t handle = 0;
     if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) {
         return false;

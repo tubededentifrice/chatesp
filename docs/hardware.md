@@ -116,6 +116,21 @@ The full-screen image path must pass these checks on the V2 AMOLED:
 
 The current USB-power checks do not verify battery sleep current.
 
+## Permanent-write policy
+
+ChatESP must never burn an eFuse or enable a feature that can burn one on first
+start. This rule also applies to production firmware. NVS encryption, flash
+encryption, and secure boot stay disabled. Each device profile must set
+`CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. Source checks must stop a build if
+this flag is absent or nonzero, or if an irreversible ESP-IDF feature is on.
+There is no approval flag that can bypass this rule.
+
+Production BLE settings and BLE bonds use normal plaintext NVS. This is less
+secure than eFuse-backed encrypted NVS, but it is reversible. An attacker with
+physical flash access can read Wi-Fi and provider credentials. BLE transfer
+still requires an authenticated encrypted connection, and iOS secrets stay in
+Keychain.
+
 Run `tools/device_doctor.py` with the explicit local port after each display or
 power change. Its serial checks can verify the image, V2 probe, command order,
 and runtime start. They cannot verify emitted pixels. A person must confirm the

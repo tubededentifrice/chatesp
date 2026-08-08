@@ -101,16 +101,19 @@ The command cannot inspect emitted pixels. Confirm that `CHAT ESP` or `READY`
 is visible when the command reports that its automatic checks passed.
 
 Use production mode only for final power tests and release images. It enables
-encrypted persistent settings and AXP2101 system-off after a sleep request.
+persistent settings, persistent BLE bonds, and AXP2101 system-off after a sleep
+request. Settings and bonds use plaintext NVS. A person with physical flash
+access can read the stored credentials.
 You can build it without a device change:
 
 ```sh
 uv run --locked python tools/pio.py run -e watch_prod
 ```
 
-The first production start can write an HMAC key to an eFuse block. This
-operation cannot be reversed. The repository wrapper blocks production upload
-until the user gives explicit approval.
+Production does not enable encrypted NVS, flash encryption, or secure boot.
+These features can burn eFuses. Each device profile sets
+`CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`, and source checks reject a build
+that can make one of these permanent changes. There is no approval bypass.
 
 See [development mode](docs/development-mode.md) for the mode contract and the
 recovery procedure.

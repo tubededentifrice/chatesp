@@ -62,14 +62,18 @@ Some files can be absent during initial setup. Read them when they exist.
   not put request audio, chat text, credentials, stable device identifiers, or
   precise location in logs.
 - Store iOS secrets in Keychain. Provision device secrets only over an
-  authenticated and encrypted BLE connection. Store them in encrypted NVS.
+  authenticated and encrypted BLE connection. Production stores them in
+  plaintext NVS because encrypted NVS can burn an eFuse key. State this
+  physical-access risk in security documents.
 - Store non-secret iOS choices in one versioned preferences record. Do not put
   secrets in that record.
 - Never put API keys, Wi-Fi credentials, Apple team IDs, personal paths, names,
   email addresses, device identifiers, or signing data in tracked files.
-- Do not upload `watch_prod` unless the user approves the first-start HMAC
-  eFuse operation. The PlatformIO wrapper must block an unapproved production
-  upload. A production build does not need this approval.
+- Never burn an eFuse or enable another irreversible device write. This rule
+  applies to development, production, tests, and recovery. Keep
+  `CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0` explicit in each device build.
+  Keep source checks that reject NVS encryption, flash encryption, secure boot,
+  or a nonzero irreversible-write flag. Do not add an approval bypass.
 
 ## Tooling and dependency policy
 

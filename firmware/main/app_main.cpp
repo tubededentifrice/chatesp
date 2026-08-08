@@ -1,6 +1,7 @@
 #include <cstdint>
 
 #include "bsp/esp-bsp.h"
+#include "device_write_policy.hpp"
 #include "device_preferences_store.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"

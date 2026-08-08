@@ -15,7 +15,7 @@ namespace chatesp {
 enum class SettingsPersistence : std::uint8_t {
     unavailable,
     volatile_development,
-    encrypted_nvs,
+    plaintext_nvs,
 };
 
 class SettingsStore final : public provisioning::SettingsSink {
@@ -39,8 +39,8 @@ public:
     [[nodiscard]] bool is_volatile() const;
 
 private:
-    [[nodiscard]] bool load_encrypted_record();
-    [[nodiscard]] bool store_encrypted_packet(
+    [[nodiscard]] bool load_persistent_record();
+    [[nodiscard]] bool store_persistent_packet(
         const std::uint8_t *packet, std::size_t packet_size);
     void clear();
 
