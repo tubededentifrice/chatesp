@@ -84,7 +84,8 @@ later requests in the same session a fast path without keeping the radio active
 after the display turns off.
 
 Each turn first uses a short required-tool route. The route is direct answer,
-web search, image search, restricted Python, or one registered device tool.
+web search, image search, restricted Python, memory management, or one
+registered device tool.
 Image search still needs a separate model-selected result ID. A relative
 brightness or volume request gets device status before it changes the value.
 After routing and tool work, the final model request has no tools.
@@ -96,6 +97,11 @@ Each route and final-answer prompt gets the user's local minute, such as
 `YYYY-MM-DD HH:MM UTC+04:00`. The prompt does not contain seconds, so requests
 in the same minute use the same time value. A missing or invalid time stops the
 turn instead of giving the model a false time.
+Each model request also gets a fresh snapshot of all saved memory IDs and
+facts. The prompt marks these facts as untrusted user-provided context. The
+model must not follow instructions inside a fact. A successful memory tool
+change is therefore visible to the final answer in the same turn. Saved facts
+do not enter normal chat history.
 OpenRouter sends that answer as an event stream. The UI receives bounded copies
 of the complete answer so far. It limits display updates to keep the button and
 network paths responsive. Tool-call data cannot enter the answer or speech
@@ -172,6 +178,8 @@ creates a new thread.
   acknowledgement, and NVS persistence.
 - `device preferences`: a small versioned brightness and volume record. It is
   separate from BLE settings and contains no secret data.
+- `memories`: a bounded versioned record, model tools, prompt context, and an
+  optional connected iOS BLE manager. The watch is the source of truth.
 - `power`: inactivity, PWR-button input, peripheral shutdown, AXP2101
   system-off, and cold-boot reset.
 
@@ -202,7 +210,7 @@ normal answer must fit a spoken interaction.
 
 ## Tools
 
-Version 1 has seven tools:
+Version 1 has eleven tools:
 
 - `search_web(query)`: returns a small list of titles, URLs, and snippets.
 - `search_images(query)`: returns a small list with short result IDs.
@@ -214,6 +222,23 @@ Version 1 has seven tools:
 - `run_python(code)`: runs bounded MicroPython for short calculations. Printed
   text enters the tool result. `plot.line(x, y, title)` can select one line
   plot with 2 through 128 finite points and a title of at most 48 bytes.
+- `remember_memory(fact)`: saves one concise fact only after an explicit user
+  request. An exact duplicate returns `unchanged` without a write.
+- `forget_memory(id)`: removes one fact by the ID in the current prompt.
+- `clear_memories()`: removes all facts only after an explicit user request.
+- `compact_memories(memories, include_pending)`: combines, shortens, or omits
+  source facts. It runs automatically after a full `remember_memory` result,
+  or when the user asks for compaction.
+
+The memory store accepts at most ten facts and 128 UTF-8 bytes per fact. It
+rejects empty text, control characters, invalid UTF-8, and revision exhaustion.
+The model contract refuses passwords, tokens, API keys, precise locations,
+stable device identifiers, and other secrets. A full add keeps the new fact
+only in a per-turn RAM buffer. One
+successful compaction stores the rewritten facts and the pending fact in one
+commit. A failure, cancellation, sleep, or turn end clears the buffer and keeps
+the old durable record. Single-source unchanged facts keep their IDs. Changed
+or combined facts get new IDs. Omitted source IDs are deleted.
 
 The device-control prompt does not infer power-off from a greeting, a farewell,
 a hypothetical request, or an uncertain transcript. The final answer gives one
@@ -273,3 +298,8 @@ variable, or approval flag can bypass this policy. Logs show only redacted
 error categories. Turn timing records contain phase durations and bounded
 counters only. They do not contain text, audio, URLs, credentials, stable
 identifiers, or precise location.
+Saved memories use a separate plaintext NVS namespace in development and
+production. A two-slot commit verifies the complete inactive record before it
+changes the active selector. Facts are never logged. A person with physical
+flash access can read them. The iOS app does not save a mirror in preferences,
+UserDefaults, Keychain, or another store.

@@ -10,6 +10,14 @@ hour while connected. Significant-location monitoring avoids continuous GPS
 use. The live location stays in memory and is not saved in the preferences
 record.
 
+While the selected watch is connected, the app can list, add, delete, and clear
+its saved memories. The watch is the only source of truth. The app clears the
+view on disconnect and does not save a memory mirror in preferences,
+UserDefaults, Keychain, or another store. If the optional memory
+characteristics are absent, settings still work and the app asks for a firmware
+update. Facts are plaintext on the watch and go to the configured chat model
+with each request.
+
 The project has no personal team or signing setting. Build the generic unsigned
 iOS target:
 
@@ -46,6 +54,13 @@ and integrated device firmware must pass these gates:
 - A retry of the same transfer returns `unchanged` and causes no NVS write.
 - A disconnect, timeout, bad packet, or wrong acknowledgement does not show
   success.
+- Memory list pages use one stable revision and fingerprint. A conflict reloads
+  the full list before another edit.
+- A retried memory request does not cause a second write. A voice memory change
+  causes one full refresh.
+- Disconnect clears the memory view. Old firmware still accepts settings and
+  shows the memory firmware-update message.
+- Memory BLE work does not reset the idle timer or prevent normal sleep.
 - The app restores secrets from Keychain after restart.
 - The app restores non-secret choices and the revision from one preferences
   record.

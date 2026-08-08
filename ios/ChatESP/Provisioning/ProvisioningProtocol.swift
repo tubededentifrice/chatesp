@@ -324,6 +324,242 @@ struct ProvisioningTransfer {
     }
 }
 
+enum MemoryProtocolV1 {
+    static let version: UInt8 = 1
+    static let maximumFacts = 10
+    static let maximumFactBytes = 128
+    static let commandHeaderSize = 54
+    static let responseHeaderSize = 56
+    static let commandUUID = "7B2E1005-6F3C-4B8A-9D71-4C4553500001"
+    static let responseUUID = "7B2E1006-6F3C-4B8A-9D71-4C4553500001"
+
+    static func validFact(_ fact: String) -> Bool {
+        guard let bytes = fact.data(using: .utf8),
+              !bytes.isEmpty,
+              bytes.count <= maximumFactBytes else {
+            return false
+        }
+        return fact.unicodeScalars.allSatisfy {
+            !CharacterSet.controlCharacters.contains($0)
+        }
+    }
+
+    static func fingerprint(for facts: [MemoryFact]) throws -> Data {
+        guard facts.count <= maximumFacts else {
+            throw MemoryProtocolError.invalidField
+        }
+        var input = Data("CHATESP-MEMORY-V1".utf8)
+        input.append(version)
+        input.append(UInt8(facts.count))
+        var priorID: UInt32 = 0
+        for fact in facts {
+            guard fact.id > priorID,
+                  validFact(fact.fact),
+                  let bytes = fact.fact.data(using: .utf8) else {
+                throw MemoryProtocolError.invalidField
+            }
+            input.appendBigEndian(fact.id)
+            input.appendBigEndian(UInt16(bytes.count))
+            input.append(bytes)
+            priorID = fact.id
+        }
+        return Data(SHA256.hash(data: input))
+    }
+}
+
+struct MemoryFact: Identifiable, Equatable {
+    let id: UInt32
+    let fact: String
+}
+
+enum MemoryOperation: UInt8, Equatable {
+    case changed = 0
+    case listPage = 1
+    case add = 2
+    case delete = 3
+    case clear = 4
+}
+
+enum MemoryStatus: UInt8, Equatable {
+    case applied = 0x00
+    case unchanged = 0x01
+    case full = 0x02
+    case notFound = 0x03
+    case revisionConflict = 0x04
+    case invalidField = 0x10
+    case storageFailure = 0x11
+    case authenticationRequired = 0x12
+    case busy = 0x13
+    case unsupportedVersion = 0x14
+}
+
+struct MemoryCommand: Equatable {
+    let operation: MemoryOperation
+    let requestID: UInt32
+    let expectedRevision: UInt32
+    let expectedFingerprint: Data
+    let memoryID: UInt32
+    let fact: String
+
+    var data: Data {
+        var result = Data("CEMC".utf8)
+        result.append(MemoryProtocolV1.version)
+        result.append(operation.rawValue)
+        result.appendBigEndian(UInt16(0))
+        result.appendBigEndian(requestID)
+        result.appendBigEndian(expectedRevision)
+        result.append(expectedFingerprint)
+        result.appendBigEndian(memoryID)
+        let factData = Data(fact.utf8)
+        result.appendBigEndian(UInt16(factData.count))
+        result.append(factData)
+        return result
+    }
+
+    init(
+        operation: MemoryOperation,
+        requestID: UInt32,
+        expectedRevision: UInt32,
+        expectedFingerprint: Data,
+        memoryID: UInt32 = 0,
+        fact: String = ""
+    ) throws {
+        guard operation != .changed,
+              requestID != 0,
+              expectedFingerprint.count == 32 else {
+            throw MemoryProtocolError.invalidField
+        }
+        switch operation {
+        case .listPage:
+            guard fact.isEmpty else { throw MemoryProtocolError.invalidField }
+        case .add:
+            guard memoryID == 0, MemoryProtocolV1.validFact(fact) else {
+                throw MemoryProtocolError.invalidField
+            }
+        case .delete:
+            guard memoryID != 0, fact.isEmpty else {
+                throw MemoryProtocolError.invalidField
+            }
+        case .clear:
+            guard memoryID == 0, fact.isEmpty else {
+                throw MemoryProtocolError.invalidField
+            }
+        case .changed:
+            throw MemoryProtocolError.invalidField
+        }
+        self.operation = operation
+        self.requestID = requestID
+        self.expectedRevision = expectedRevision
+        self.expectedFingerprint = expectedFingerprint
+        self.memoryID = memoryID
+        self.fact = fact
+    }
+}
+
+struct MemoryResponse: Equatable {
+    let status: MemoryStatus
+    let operation: MemoryOperation
+    let requestID: UInt32
+    let revision: UInt32
+    let fingerprint: Data
+    let memoryID: UInt32
+    let totalCount: Int
+    let fact: String?
+    let hasMore: Bool
+    let isChangeEvent: Bool
+
+    init(data: Data) throws {
+        guard data.count >= MemoryProtocolV1.responseHeaderSize,
+              data.count <= MemoryProtocolV1.responseHeaderSize +
+                MemoryProtocolV1.maximumFactBytes,
+              data.prefix(4) == Data("CEMR".utf8),
+              data[4] == MemoryProtocolV1.version,
+              let status = MemoryStatus(rawValue: data[5]),
+              let operation = MemoryOperation(rawValue: data[6]),
+              data[7] & ~UInt8(0x07) == 0,
+              data[55] == 0 else {
+            throw MemoryProtocolError.malformedResponse
+        }
+        let flags = data[7]
+        let hasItem = flags & 0x01 != 0
+        hasMore = flags & 0x02 != 0
+        isChangeEvent = flags & 0x04 != 0
+        requestID = data.readBigEndianUInt32(at: 8)
+        revision = data.readBigEndianUInt32(at: 12)
+        fingerprint = data.subdata(in: 16..<48)
+        memoryID = data.readBigEndianUInt32(at: 48)
+        let factLength = Int(data.readBigEndianUInt16(at: 52))
+        totalCount = Int(data[54])
+        guard totalCount <= MemoryProtocolV1.maximumFacts,
+              data.count == MemoryProtocolV1.responseHeaderSize + factLength else {
+            throw MemoryProtocolError.malformedResponse
+        }
+        if hasItem {
+            let bytes = data.subdata(
+                in: MemoryProtocolV1.responseHeaderSize..<data.count)
+            guard memoryID != 0,
+                  let value = String(data: bytes, encoding: .utf8),
+                  MemoryProtocolV1.validFact(value) else {
+                throw MemoryProtocolError.malformedResponse
+            }
+            fact = value
+        } else {
+            guard factLength == 0 else {
+                throw MemoryProtocolError.malformedResponse
+            }
+            fact = nil
+        }
+        guard !hasMore || hasItem,
+              !hasItem || operation == .listPage else {
+            throw MemoryProtocolError.malformedResponse
+        }
+        if isChangeEvent {
+            guard operation == .changed,
+                  requestID == 0,
+                  status == .applied,
+                  !hasItem,
+                  !hasMore else {
+                throw MemoryProtocolError.malformedResponse
+            }
+        } else {
+            guard operation != .changed, requestID != 0 else {
+                throw MemoryProtocolError.malformedResponse
+            }
+        }
+        self.status = status
+        self.operation = operation
+    }
+}
+
+enum MemoryProtocolError: Error, Equatable {
+    case invalidField
+    case malformedResponse
+    case responseMismatch
+    case unavailable
+    case disconnected
+    case timeout
+    case rejected(MemoryStatus)
+}
+
+extension MemoryProtocolError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .invalidField:
+            return "The memory fact is not valid."
+        case .malformedResponse, .responseMismatch:
+            return "The watch returned an invalid memory response."
+        case .unavailable:
+            return "Update the watch firmware to manage memories."
+        case .disconnected:
+            return "Connect the selected watch to manage memories."
+        case .timeout:
+            return "The watch did not confirm the memory request in time."
+        case .rejected(let status):
+            return "The watch rejected the memory request (code \(status.rawValue))."
+        }
+    }
+}
+
 enum ProvisioningError: Error, Equatable {
     case invalidField(UInt8)
     case invalidRevision
@@ -410,6 +646,10 @@ extension Data {
             (UInt32(self[offset + 1]) << 16) |
             (UInt32(self[offset + 2]) << 8) |
             UInt32(self[offset + 3])
+    }
+
+    func readBigEndianUInt16(at offset: Int) -> UInt16 {
+        (UInt16(self[offset]) << 8) | UInt16(self[offset + 1])
     }
 
     func readBigEndianUInt64(at offset: Int) -> UInt64 {

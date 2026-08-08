@@ -391,6 +391,7 @@ agent::Error OpenRouterChatProvider::route_turn(
     PsramObject<agent::ChatRequestBody> body;
     PsramObject<agent::OpenRouterSseParser> parser;
     agent::UtcMinuteText current_utc_minute;
+    agent::MemorySnapshot memories;
     if (error == agent::Error::none &&
         (body.get() == nullptr || parser.get() == nullptr)) {
         error = agent::Error::model_failed;
@@ -401,8 +402,11 @@ agent::Error OpenRouterChatProvider::route_turn(
         }
     }
     if (error == agent::Error::none) {
+        error = memory_provider_.snapshot(memories);
+    }
+    if (error == agent::Error::none) {
         error = agent::build_openrouter_route_request(
-            connection_.models, history, tools_,
+            connection_.models, history, tools_, memories,
             approximate_location_.data(), approximate_location_.size(),
             current_utc_minute.c_str(), true, *body.get());
     }
@@ -469,6 +473,7 @@ agent::Error OpenRouterChatProvider::complete_answer_streaming(
     PsramObject<agent::ChatRequestBody> body;
     PsramObject<agent::OpenRouterSseParser> parser;
     agent::UtcMinuteText current_utc_minute;
+    agent::MemorySnapshot memories;
     if (error == agent::Error::none &&
         (body.get() == nullptr || parser.get() == nullptr)) {
         error = agent::Error::model_failed;
@@ -479,8 +484,11 @@ agent::Error OpenRouterChatProvider::complete_answer_streaming(
         }
     }
     if (error == agent::Error::none) {
+        error = memory_provider_.snapshot(memories);
+    }
+    if (error == agent::Error::none) {
         error = agent::build_openrouter_answer_request(
-            connection_.models, history, approximate_location_.data(),
+            connection_.models, history, memories, approximate_location_.data(),
             approximate_location_.size(), current_utc_minute.c_str(), true,
             *body.get());
     }

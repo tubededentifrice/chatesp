@@ -7,6 +7,7 @@ idf_component_register(
         "chatesp_font_18.c"
         "cloud_providers.cpp"
         "device_control.cpp"
+        "device_memory_store.cpp"
         "device_preferences_store.cpp"
         "device_settings.cpp"
         "http_transport.cpp"

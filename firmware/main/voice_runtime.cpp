@@ -26,6 +26,7 @@
 #include "chatesp/turn_timing.hpp"
 #include "cloud_providers.hpp"
 #include "device_control.hpp"
+#include "device_memory_store.hpp"
 #include "device_settings.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -381,11 +382,14 @@ const char *error_message(agent::Error error) {
 class VoiceRuntime::Impl final : public agent::AgentProgressObserver,
                                  public agent::ChatTextSink {
 public:
-    explicit Impl(DevicePreferencesStore &device_preferences_store)
+    Impl(
+        DevicePreferencesStore &device_preferences_store,
+        DeviceMemoryStore &device_memory_store)
         : device_control_(
               device_preferences_store,
               device_preferences_store.preferences(),
               kDevelopmentMode),
+          memory_store_(device_memory_store),
           image_fetch_provider_(image_transport_),
           openrouter_connection_(settings_.openrouter()),
           brave_key_(settings_.brave()),
@@ -398,9 +402,13 @@ public:
           brightness_tool_(device_control_),
           volume_tool_(device_control_),
           power_off_tool_(device_control_),
+          remember_memory_tool_(memory_store_),
+          forget_memory_tool_(memory_store_),
+          clear_memories_tool_(memory_store_),
+          compact_memories_tool_(memory_store_),
           chat_provider_(
               openrouter_control_transport_, network_, openrouter_connection_,
-              tools_, utc_clock_, settings_.location()),
+              tools_, memory_store_, utc_clock_, settings_.location()),
           transcription_provider_(
               openrouter_control_transport_, network_, openrouter_connection_,
               utc_clock_),
@@ -415,7 +423,11 @@ public:
             tools_.add(device_status_tool_) == agent::Error::none &&
             tools_.add(brightness_tool_) == agent::Error::none &&
             tools_.add(volume_tool_) == agent::Error::none &&
-            tools_.add(power_off_tool_) == agent::Error::none;
+            tools_.add(power_off_tool_) == agent::Error::none &&
+            tools_.add(remember_memory_tool_) == agent::Error::none &&
+            tools_.add(forget_memory_tool_) == agent::Error::none &&
+            tools_.add(clear_memories_tool_) == agent::Error::none &&
+            tools_.add(compact_memories_tool_) == agent::Error::none;
         void *agent_memory = heap_caps_malloc(
             sizeof(agent::AgentLoop), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (agent_memory != nullptr) {
@@ -1553,9 +1565,11 @@ private:
             fail("SPEECH PIPELINE COULD NOT START");
             return;
         }
+        memory_store_.clear_turn_state();
         error = agent_loop_->run(
             transcript.data(), transcript.size(), answer,
             request_cancellation);
+        memory_store_.clear_turn_state();
         image_tool_.clear_results();
         python_tool_.clear_plot();
         error = request_cancellation.normalize(error);
@@ -1736,6 +1750,7 @@ private:
 
     void cancel_current() {
         device_control_.cancel_power_off();
+        memory_store_.clear_turn_state();
         capture_.discard();
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
@@ -1753,6 +1768,7 @@ private:
 
     void fail(const char *message) {
         device_control_.cancel_power_off();
+        memory_store_.clear_turn_state();
         capture_.discard();
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
@@ -1807,6 +1823,7 @@ private:
 
     void enter_sleep() {
         device_control_.cancel_power_off();
+        memory_store_.clear_turn_state();
         display_available_.store(false, std::memory_order_release);
         display_wake_pending_ = false;
         footer_shown_ = false;
@@ -1887,7 +1904,8 @@ private:
         }
         ble_start_attempted_ = true;
         const esp_err_t result = ble_provisioning::start(
-            &settings_store_, passkey_callback, device_context_callback, this);
+            &settings_store_, &memory_store_, passkey_callback,
+            device_context_callback, this);
         ble_started_ = result == ESP_OK;
         if (!ble_started_) {
             ESP_LOGE(kTag, "BLE provisioning restart failed");
@@ -1909,6 +1927,7 @@ private:
     RuntimeSettings settings_;
     SettingsStore settings_store_;
     DeviceControl device_control_;
+    DeviceMemoryStore &memory_store_;
     network::NetworkManager network_;
     transport::HttpTransport openrouter_control_transport_;
     transport::HttpTransport openrouter_audio_transport_;
@@ -1934,6 +1953,10 @@ private:
     agent::SetBrightnessTool brightness_tool_;
     agent::SetVolumeTool volume_tool_;
     agent::PowerOffTool power_off_tool_;
+    agent::RememberMemoryTool remember_memory_tool_;
+    agent::ForgetMemoryTool forget_memory_tool_;
+    agent::ClearMemoriesTool clear_memories_tool_;
+    agent::CompactMemoriesTool compact_memories_tool_;
     cloud::OpenRouterChatProvider chat_provider_;
     cloud::OpenRouterTranscriptionProvider transcription_provider_;
     cloud::OpenRouterSpeechProvider speech_provider_;
@@ -2014,11 +2037,13 @@ VoiceRuntime::~VoiceRuntime() {
 
 esp_err_t VoiceRuntime::start(
     bool startup_button_down, std::uint32_t startup_at_ms,
-    DevicePreferencesStore &device_preferences_store) {
+    DevicePreferencesStore &device_preferences_store,
+    DeviceMemoryStore &device_memory_store) {
     if (impl_ != nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
-    impl_ = new (std::nothrow) Impl(device_preferences_store);
+    impl_ = new (std::nothrow) Impl(
+        device_preferences_store, device_memory_store);
     if (impl_ == nullptr) {
         return ESP_ERR_NO_MEM;
     }

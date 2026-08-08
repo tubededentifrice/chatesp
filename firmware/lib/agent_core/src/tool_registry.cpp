@@ -40,6 +40,25 @@ constexpr char volume_schema[] =
     "\"integer\",\"minimum\":0,\"maximum\":100}},"
     "\"required\":[\"percent\"],\"additionalProperties\":false}";
 
+constexpr char remember_memory_schema[] =
+    "{\"type\":\"object\",\"properties\":{\"fact\":{\"type\":\"string\","
+    "\"maxLength\":128}},\"required\":[\"fact\"],"
+    "\"additionalProperties\":false}";
+
+constexpr char forget_memory_schema[] =
+    "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\","
+    "\"minimum\":1}},\"required\":[\"id\"],\"additionalProperties\":false}";
+
+constexpr char compact_memories_schema[] =
+    "{\"type\":\"object\",\"properties\":{\"memories\":{\"type\":\"array\","
+    "\"maxItems\":10,\"items\":{\"type\":\"object\",\"properties\":{"
+    "\"source_ids\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":10,"
+    "\"items\":{\"type\":\"integer\",\"minimum\":1}},\"fact\":{"
+    "\"type\":\"string\",\"maxLength\":128}},\"required\":[\"source_ids\","
+    "\"fact\"],\"additionalProperties\":false}},\"include_pending\":{"
+    "\"type\":\"boolean\"}},\"required\":[\"memories\",\"include_pending\"],"
+    "\"additionalProperties\":false}";
+
 enum class ImageActionKind : std::uint8_t { query, select };
 
 struct ImageAction {
@@ -218,6 +237,191 @@ Error parse_percent(
     return Error::none;
 }
 
+Error parse_memory_fact(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_memory_fact_bytes> &fact) {
+    if (arguments == nullptr || size == 0 ||
+        size > Limits::max_tool_arguments_bytes) {
+        return Error::invalid_argument;
+    }
+    detail::JsonReader reader(arguments, size);
+    FixedText<16> key;
+    if (!reader.consume('{') || !reader.read_string(key) ||
+        !key.equals("fact") || !reader.consume(':') ||
+        !reader.read_string(fact) || !reader.consume('}') ||
+        !reader.finish() || !valid_memory_fact(fact.data(), fact.size())) {
+        fact.clear();
+        return Error::invalid_argument;
+    }
+    return Error::none;
+}
+
+Error parse_memory_id(
+    const char *arguments, std::size_t size, std::uint32_t &id) {
+    if (arguments == nullptr || size == 0 ||
+        size > Limits::max_tool_arguments_bytes) {
+        return Error::invalid_argument;
+    }
+    detail::JsonReader reader(arguments, size);
+    FixedText<16> key;
+    if (!reader.consume('{') || !reader.read_string(key) || !key.equals("id") ||
+        !reader.consume(':') || !reader.read_u32(id) || id == 0 ||
+        !reader.consume('}') || !reader.finish()) {
+        return Error::invalid_argument;
+    }
+    return Error::none;
+}
+
+bool parse_source_ids(
+    detail::JsonReader &reader, MemoryCompactionEntry &entry) {
+    if (!reader.consume('[') || reader.peek() == ']') {
+        return false;
+    }
+    while (true) {
+        if (entry.source_count == entry.source_ids.size()) {
+            return false;
+        }
+        std::uint32_t id = 0;
+        if (!reader.read_u32(id) || id == 0) {
+            return false;
+        }
+        entry.source_ids[entry.source_count++] = id;
+        if (reader.consume(']')) {
+            return true;
+        }
+        if (!reader.consume(',')) {
+            return false;
+        }
+    }
+}
+
+bool parse_compaction_entry(
+    detail::JsonReader &reader, MemoryCompactionEntry &entry) {
+    if (!reader.consume('{')) {
+        return false;
+    }
+    bool saw_sources = false;
+    bool saw_fact = false;
+    while (reader.peek() != '}') {
+        FixedText<16> key;
+        if (!reader.read_string(key) || !reader.consume(':')) {
+            return false;
+        }
+        if (key.equals("source_ids") && !saw_sources) {
+            saw_sources = parse_source_ids(reader, entry);
+            if (!saw_sources) {
+                return false;
+            }
+        } else if (key.equals("fact") && !saw_fact) {
+            saw_fact = reader.read_string(entry.fact) &&
+                valid_memory_fact(entry.fact.data(), entry.fact.size());
+            if (!saw_fact) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        if (reader.consume('}')) {
+            break;
+        }
+        if (!reader.consume(',')) {
+            return false;
+        }
+    }
+    return saw_sources && saw_fact;
+}
+
+bool parse_compaction_entries(
+    detail::JsonReader &reader, MemoryCompactionPlan &plan) {
+    if (!reader.consume('[')) {
+        return false;
+    }
+    if (reader.consume(']')) {
+        return true;
+    }
+    while (true) {
+        if (plan.size == plan.entries.size() ||
+            !parse_compaction_entry(reader, plan.entries[plan.size])) {
+            return false;
+        }
+        ++plan.size;
+        if (reader.consume(']')) {
+            return true;
+        }
+        if (!reader.consume(',')) {
+            return false;
+        }
+    }
+}
+
+Error parse_compaction_plan(
+    const char *arguments, std::size_t size, MemoryCompactionPlan &plan) {
+    plan.clear();
+    if (arguments == nullptr || size == 0 ||
+        size > Limits::max_tool_arguments_bytes) {
+        return Error::invalid_argument;
+    }
+    detail::JsonReader reader(arguments, size);
+    if (!reader.consume('{')) {
+        return Error::invalid_argument;
+    }
+    bool saw_memories = false;
+    bool saw_pending = false;
+    while (reader.peek() != '}') {
+        FixedText<24> key;
+        if (!reader.read_string(key) || !reader.consume(':')) {
+            return Error::invalid_argument;
+        }
+        if (key.equals("memories") && !saw_memories) {
+            saw_memories = parse_compaction_entries(reader, plan);
+            if (!saw_memories) {
+                return Error::invalid_argument;
+            }
+        } else if (key.equals("include_pending") && !saw_pending) {
+            if (reader.consume_literal("true")) {
+                plan.include_pending = true;
+            } else if (reader.consume_literal("false")) {
+                plan.include_pending = false;
+            } else {
+                return Error::invalid_argument;
+            }
+            saw_pending = true;
+        } else {
+            return Error::invalid_argument;
+        }
+        if (reader.consume('}')) {
+            break;
+        }
+        if (!reader.consume(',')) {
+            return Error::invalid_argument;
+        }
+    }
+    if (!saw_memories || !saw_pending || !reader.finish()) {
+        return Error::invalid_argument;
+    }
+    for (std::size_t entry_index = 0; entry_index < plan.size;
+         ++entry_index) {
+        const MemoryCompactionEntry &entry = plan.entries[entry_index];
+        for (std::size_t source_index = 0;
+             source_index < entry.source_count; ++source_index) {
+            const std::uint32_t id = entry.source_ids[source_index];
+            for (std::size_t prior_entry = 0;
+                 prior_entry <= entry_index; ++prior_entry) {
+                const std::size_t prior_limit = prior_entry == entry_index
+                    ? source_index
+                    : plan.entries[prior_entry].source_count;
+                for (std::size_t prior_source = 0;
+                     prior_source < prior_limit; ++prior_source) {
+                    if (plan.entries[prior_entry].source_ids[prior_source] == id) {
+                        return Error::invalid_argument;
+                    }
+                }
+            }
+        }
+    }
+    return Error::none;
+}
+
 const char *power_off_mode_name(PowerOffMode mode) {
     return mode == PowerOffMode::system_off
         ? "system_off"
@@ -259,6 +463,37 @@ bool append_image_result(
            detail::append_json_string(
                output, item.thumbnail_url.data(), item.thumbnail_url.size()) &&
            output.push_back('}');
+}
+
+const char *memory_status_name(MemoryMutationStatus status) {
+    switch (status) {
+        case MemoryMutationStatus::applied: return "applied";
+        case MemoryMutationStatus::unchanged: return "unchanged";
+        case MemoryMutationStatus::full: return "full";
+        case MemoryMutationStatus::not_found: return "not_found";
+        case MemoryMutationStatus::revision_conflict: return "revision_conflict";
+        case MemoryMutationStatus::invalid_field: return "invalid_field";
+        case MemoryMutationStatus::storage_failure: return "storage_failure";
+    }
+    return "invalid_field";
+}
+
+bool append_memory_result(
+    FixedText<Limits::max_tool_result_bytes> &output,
+    const MemoryMutationResult &mutation) {
+    char suffix[96]{};
+    const int written = std::snprintf(
+        suffix, sizeof(suffix),
+        "\",\"id\":%lu,\"count\":%lu,\"revision\":%lu,\"compacted\":%s}",
+        static_cast<unsigned long>(mutation.id),
+        static_cast<unsigned long>(mutation.count),
+        static_cast<unsigned long>(mutation.revision),
+        mutation.compacted ? "true" : "false");
+    return written > 0 &&
+        static_cast<std::size_t>(written) < sizeof(suffix) &&
+        output.append("{\"status\":\"") &&
+        output.append(memory_status_name(mutation.status)) &&
+        output.append(suffix, static_cast<std::size_t>(written));
 }
 
 }  // namespace
@@ -315,6 +550,112 @@ Error ToolRegistry::execute(
         result.clear();
     }
     return cancellation.cancelled() ? Error::cancelled : error;
+}
+
+const char *RememberMemoryTool::name() const { return "remember_memory"; }
+const char *RememberMemoryTool::description() const {
+    return "Save one concise fact only when the user explicitly asks to remember it.";
+}
+const char *RememberMemoryTool::parameters_schema() const {
+    return remember_memory_schema;
+}
+Error RememberMemoryTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    FixedText<Limits::max_memory_fact_bytes> fact;
+    Error error = parse_memory_fact(arguments, size, fact);
+    if (error != Error::none || cancellation.cancelled()) {
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    MemoryMutationResult mutation;
+    error = provider_.remember(fact.data(), fact.size(), mutation);
+    fact.clear();
+    if (error != Error::none || cancellation.cancelled()) {
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    return append_memory_result(result, mutation)
+        ? Error::none
+        : Error::limit_exceeded;
+}
+
+const char *ForgetMemoryTool::name() const { return "forget_memory"; }
+const char *ForgetMemoryTool::description() const {
+    return "Delete one saved memory by its current ID after an explicit request.";
+}
+const char *ForgetMemoryTool::parameters_schema() const {
+    return forget_memory_schema;
+}
+Error ForgetMemoryTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    std::uint32_t id = 0;
+    Error error = parse_memory_id(arguments, size, id);
+    if (error != Error::none || cancellation.cancelled()) {
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    MemoryMutationResult mutation;
+    error = provider_.forget(id, mutation);
+    if (error != Error::none || cancellation.cancelled()) {
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    return append_memory_result(result, mutation)
+        ? Error::none
+        : Error::limit_exceeded;
+}
+
+const char *ClearMemoriesTool::name() const { return "clear_memories"; }
+const char *ClearMemoriesTool::description() const {
+    return "Delete all saved memories only when the user explicitly asks.";
+}
+const char *ClearMemoriesTool::parameters_schema() const {
+    return empty_object_schema;
+}
+Error ClearMemoriesTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    Error error = parse_empty_object(arguments, size);
+    if (error != Error::none || cancellation.cancelled()) {
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    MemoryMutationResult mutation;
+    error = provider_.clear_memories(mutation);
+    if (error != Error::none || cancellation.cancelled()) {
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    return append_memory_result(result, mutation)
+        ? Error::none
+        : Error::limit_exceeded;
+}
+
+const char *CompactMemoriesTool::name() const { return "compact_memories"; }
+const char *CompactMemoriesTool::description() const {
+    return "Replace saved memories with fewer or shorter grounded facts after a full result or an explicit request.";
+}
+const char *CompactMemoriesTool::parameters_schema() const {
+    return compact_memories_schema;
+}
+Error CompactMemoriesTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    MemoryCompactionPlan plan;
+    Error error = parse_compaction_plan(arguments, size, plan);
+    if (error != Error::none || cancellation.cancelled()) {
+        plan.clear();
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    MemoryMutationResult mutation;
+    error = provider_.compact(plan, mutation);
+    plan.clear();
+    if (error != Error::none || cancellation.cancelled()) {
+        return cancellation.cancelled() ? Error::cancelled : error;
+    }
+    return append_memory_result(result, mutation)
+        ? Error::none
+        : Error::limit_exceeded;
 }
 
 const char *SearchWebTool::name() const { return "search_web"; }

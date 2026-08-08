@@ -3,17 +3,81 @@ import SwiftUI
 struct ConfigurationView: View {
     @EnvironmentObject private var store: ConfigurationStore
     @EnvironmentObject private var provisioner: BLEProvisioner
+    @State private var newMemory = ""
+    @State private var confirmClearMemories = false
 
     var body: some View {
         NavigationStack {
             Form {
                 watchSection
+                memorySection
                 connectionSection
                 locationSection
                 modelSection
                 actionSection
             }
             .navigationTitle("ChatESP")
+            .alert("Clear all memories?", isPresented: $confirmClearMemories) {
+                Button("Cancel", role: .cancel) {}
+                Button("Clear All", role: .destructive) {
+                    provisioner.clearAllMemories()
+                }
+            } message: {
+                Text("This deletes all saved facts from the watch.")
+            }
+        }
+    }
+
+    private var memorySection: some View {
+        Section {
+            if !provisioner.isWatchConnected {
+                Text("Connect the selected watch to view memories.")
+                    .foregroundStyle(.secondary)
+            } else if !provisioner.memoryAvailable {
+                Text("Update the watch firmware to manage memories.")
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    TextField("One concise fact", text: $newMemory)
+                        .textInputAutocapitalization(.sentences)
+                    Button("Add") {
+                        provisioner.addMemory(newMemory)
+                        newMemory = ""
+                    }
+                    .disabled(!MemoryProtocolV1.validFact(newMemory))
+                }
+
+                ForEach(provisioner.memories) { memory in
+                    HStack(alignment: .top) {
+                        Text(memory.fact)
+                        Spacer()
+                        Button(role: .destructive) {
+                            provisioner.deleteMemory(id: memory.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .accessibilityLabel("Delete memory \(memory.id)")
+                    }
+                }
+
+                HStack {
+                    Button("Refresh") {
+                        provisioner.refreshMemories()
+                    }
+                    Spacer()
+                    Button("Clear All", role: .destructive) {
+                        confirmClearMemories = true
+                    }
+                    .disabled(provisioner.memories.isEmpty)
+                }
+            }
+
+            Text(provisioner.memoryMessage)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Memories")
+        } footer: {
+            Text("Facts are stored in plaintext on the watch. The watch sends them to the configured chat model with each request.")
         }
     }
 
