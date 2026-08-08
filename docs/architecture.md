@@ -98,7 +98,9 @@ starts again when the interaction ends and the runtime returns to idle. A phone
 connection can close at the end of a recording. The app must treat this as a
 normal disconnect and reconnect when the ChatESP device advertises again.
 If the Bluetooth host does not stop, the runtime keeps its state intact and
-does not start TLS work. A later stop can retry the incomplete shutdown.
+does not start TLS work. BLE stop runs in a separate worker. The NimBLE
+completion wait has a one-second limit. A timeout does not block sleep or a
+PWR-button wake. A later stop can retry or collect the incomplete shutdown.
 
 When no live app location is available, the runtime also stops BLE for one
 short IP-context HTTPS lookup. This gives TLS the same controller-memory

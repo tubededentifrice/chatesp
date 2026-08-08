@@ -8,6 +8,44 @@ namespace runtime {
 
 enum class ButtonRoute : std::uint8_t { normal, wake };
 
+class AsyncShutdownGate {
+public:
+    [[nodiscard]] bool begin() {
+        State expected = State::idle;
+        return state_.compare_exchange_strong(
+            expected, State::running, std::memory_order_acq_rel);
+    }
+
+    [[nodiscard]] bool cancel_begin() {
+        State expected = State::running;
+        return state_.compare_exchange_strong(
+            expected, State::idle, std::memory_order_acq_rel);
+    }
+
+    void complete() {
+        state_.store(State::complete, std::memory_order_release);
+    }
+
+    [[nodiscard]] bool consume_completion() {
+        State expected = State::complete;
+        return state_.compare_exchange_strong(
+            expected, State::idle, std::memory_order_acq_rel);
+    }
+
+    [[nodiscard]] bool running() const {
+        return state_.load(std::memory_order_acquire) == State::running;
+    }
+
+    [[nodiscard]] bool completed() const {
+        return state_.load(std::memory_order_acquire) == State::complete;
+    }
+
+private:
+    enum class State : std::uint8_t { idle, running, complete };
+
+    std::atomic<State> state_{State::idle};
+};
+
 class MonotonicDeadline {
 public:
     MonotonicDeadline(std::uint32_t started_ms, std::uint32_t timeout_ms)

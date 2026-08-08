@@ -1,11 +1,13 @@
 #include "ble_provisioning.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 #include "chatesp/ble_shutdown.hpp"
 #include "chatesp/provisioning_session.hpp"
+#include "chatesp/runtime_control.hpp"
 #include "device_memory_store.hpp"
 #include "esp_random.h"
 #include "host/ble_gap.h"
@@ -34,6 +36,9 @@ constexpr char kDeviceName[] = "ChatESP Setup";
 constexpr std::uint16_t kNoConnection = BLE_HS_CONN_HANDLE_NONE;
 constexpr std::size_t kMaximumDataFrameSize =
     provisioning::kDataFrameHeaderSize + provisioning::kMaximumFrameDataSize;
+constexpr std::uint32_t kStopTaskStackBytes = 4 * 1024;
+constexpr UBaseType_t kStopTaskPriority = 5;
+constexpr std::uint32_t kStopTaskReclaimDelayMs = 10;
 
 const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
     0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
@@ -85,8 +90,11 @@ std::array<std::uint8_t, agent::max_memory_ble_response_bytes>
 std::size_t s_cached_memory_response_size = 0;
 std::uint16_t s_cached_memory_connection = kNoConnection;
 std::uint8_t s_address_type = 0;
-bool s_running = false;
+std::atomic<bool> s_running{false};
 runtime::BleShutdown s_shutdown;
+runtime::AsyncShutdownGate s_stop_gate;
+SemaphoreHandle_t s_stop_done = nullptr;
+std::atomic<esp_err_t> s_stop_result{ESP_OK};
 
 int gap_event(ble_gap_event *event, void *argument);
 int gatt_access(
@@ -592,6 +600,79 @@ void host_task(void *) {
     nimble_port_freertos_deinit();
 }
 
+esp_err_t stop_host() {
+    if (!s_running.load(std::memory_order_acquire)) {
+        return ESP_OK;
+    }
+    if (s_shutdown.step() == runtime::BleShutdown::Step::stop_host) {
+        const int advertisement_stop_result = ble_gap_adv_stop();
+        if (nimble_port_stop() != 0) {
+            if (advertisement_stop_result == 0) {
+                advertise();
+            }
+            return ESP_FAIL;
+        }
+        s_shutdown.host_stopped();
+    }
+    if (s_shutdown.step() ==
+        runtime::BleShutdown::Step::deinitialize_host) {
+        const esp_err_t deinit_result = nimble_port_deinit();
+        if (deinit_result != ESP_OK) {
+            return deinit_result;
+        }
+        s_shutdown.host_deinitialized();
+    }
+    if (s_memory_store != nullptr) {
+        s_memory_store->set_change_callback(nullptr, nullptr);
+    }
+    s_session.disconnect();
+    s_owner_connection = kNoConnection;
+    hide_all_passkeys();
+    if (s_memory_ble_mutex != nullptr) {
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
+    }
+    s_pending_memory_change.clear();
+    s_queued_memory_response.fill(0);
+    s_queued_memory_response_size = 0;
+    s_cached_memory_command.fill(0);
+    s_cached_memory_command_size = 0;
+    s_cached_memory_response.fill(0);
+    s_cached_memory_response_size = 0;
+    s_settings_store = nullptr;
+    s_memory_store = nullptr;
+    s_passkey_callback = nullptr;
+    s_device_context_callback = nullptr;
+    s_callback_context = nullptr;
+    s_running.store(false, std::memory_order_release);
+    return ESP_OK;
+}
+
+void stop_task(void *) {
+    s_stop_result.store(stop_host(), std::memory_order_release);
+    s_stop_gate.complete();
+    if (s_stop_done != nullptr) {
+        xSemaphoreGive(s_stop_done);
+    }
+    vTaskDelete(nullptr);
+}
+
+esp_err_t consume_stop_result() {
+    if (!s_stop_gate.consume_completion()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_stop_done != nullptr) {
+        (void)xSemaphoreTake(s_stop_done, 0);
+    }
+    const esp_err_t result =
+        s_stop_result.load(std::memory_order_acquire);
+    // The worker deletes itself after it gives the semaphore. Give the idle
+    // task one bounded interval to reclaim that stack before the caller starts
+    // another memory-heavy worker or initializes Bluetooth again.
+    vTaskDelay(pdMS_TO_TICKS(kStopTaskReclaimDelayMs));
+    return result;
+}
+
 int gap_event(ble_gap_event *event, void *) {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
@@ -824,7 +905,16 @@ esp_err_t start(
         device_context_callback == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_running) {
+    if (s_stop_gate.running()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_stop_gate.completed()) {
+        const esp_err_t prior_stop_result = consume_stop_result();
+        if (s_running.load(std::memory_order_acquire)) {
+            return prior_stop_result;
+        }
+    }
+    if (s_running.load(std::memory_order_acquire)) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -915,60 +1005,43 @@ esp_err_t start(
 
     ble_store_config_init();
     s_shutdown.reset();
-    s_running = true;
+    s_running.store(true, std::memory_order_release);
     nimble_port_freertos_init(host_task);
     return ESP_OK;
 }
 
-esp_err_t stop() {
-    if (!s_running) {
+esp_err_t stop(std::uint32_t timeout_ms) {
+    if (s_stop_gate.completed()) {
+        return consume_stop_result();
+    }
+    if (!s_running.load(std::memory_order_acquire)) {
         return ESP_OK;
     }
-    if (s_shutdown.step() == runtime::BleShutdown::Step::stop_host) {
-        const int advertisement_stop_result = ble_gap_adv_stop();
-        if (nimble_port_stop() != 0) {
-            if (advertisement_stop_result == 0) {
-                advertise();
+    if (!s_stop_gate.running()) {
+        if (s_stop_done == nullptr) {
+            s_stop_done = xSemaphoreCreateBinary();
+            if (s_stop_done == nullptr) {
+                return ESP_ERR_NO_MEM;
             }
-            return ESP_FAIL;
         }
-        s_shutdown.host_stopped();
-    }
-    if (s_shutdown.step() ==
-        runtime::BleShutdown::Step::deinitialize_host) {
-        const esp_err_t deinit_result = nimble_port_deinit();
-        if (deinit_result != ESP_OK) {
-            return deinit_result;
+        if (!s_stop_gate.begin()) {
+            return ESP_ERR_INVALID_STATE;
         }
-        s_shutdown.host_deinitialized();
+        const BaseType_t task_result = xTaskCreate(
+            stop_task, "ble_stop", kStopTaskStackBytes, nullptr,
+            kStopTaskPriority, nullptr);
+        if (task_result != pdPASS) {
+            (void)s_stop_gate.cancel_begin();
+            return ESP_ERR_NO_MEM;
+        }
     }
-    if (s_memory_store != nullptr) {
-        s_memory_store->set_change_callback(nullptr, nullptr);
+    if (xSemaphoreTake(s_stop_done, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
     }
-    s_session.disconnect();
-    s_owner_connection = kNoConnection;
-    hide_all_passkeys();
-    if (s_memory_ble_mutex != nullptr) {
-        vSemaphoreDelete(s_memory_ble_mutex);
-        s_memory_ble_mutex = nullptr;
-    }
-    s_pending_memory_change.clear();
-    s_queued_memory_response.fill(0);
-    s_queued_memory_response_size = 0;
-    s_cached_memory_command.fill(0);
-    s_cached_memory_command_size = 0;
-    s_cached_memory_response.fill(0);
-    s_cached_memory_response_size = 0;
-    s_settings_store = nullptr;
-    s_memory_store = nullptr;
-    s_passkey_callback = nullptr;
-    s_device_context_callback = nullptr;
-    s_callback_context = nullptr;
-    s_running = false;
-    return ESP_OK;
+    return consume_stop_result();
 }
 
-bool running() { return s_running; }
+bool running() { return s_running.load(std::memory_order_acquire); }
 
 }  // namespace ble_provisioning
 }  // namespace chatesp

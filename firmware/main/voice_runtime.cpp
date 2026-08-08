@@ -72,6 +72,7 @@ constexpr std::uint32_t kInteractionTimeoutMs = 180'000;
 constexpr std::uint32_t kClockReturnDelayMs = 30'000;
 constexpr std::uint32_t kModeDisplayRetryMs = 100;
 constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
+constexpr std::uint32_t kBleStopTimeoutMs = 1'000;
 constexpr std::size_t kMinimumRecordingSamples =
     AudioCapture::kSampleRateHz / 10;
 static_assert(
@@ -462,7 +463,7 @@ public:
             speech_events_ = nullptr;
         }
         if (ble_started_) {
-            ble_provisioning::stop();
+            (void)ble_provisioning::stop(kBleStopTimeoutMs);
         }
         if (agent_loop_ != nullptr) {
             agent_loop_->clear_thread();
@@ -1546,6 +1547,10 @@ private:
                 now_ms - settings_checked_at_ms_ >=
                     kSettingsRefreshMs) {
                 settings_checked_at_ms_ = now_ms;
+                if (ble_started_ && !ble_provisioning::running()) {
+                    ble_started_ = false;
+                    ble_start_attempted_ = false;
+                }
                 if (!interaction_.button_is_down() && !ble_started_ &&
                     !ble_start_attempted_ &&
                     network_context_task_ == nullptr &&
@@ -2247,9 +2252,13 @@ private:
         if (!ble_started_) {
             return true;
         }
-        const esp_err_t result = ble_provisioning::stop();
+        const esp_err_t result =
+            ble_provisioning::stop(kBleStopTimeoutMs);
         if (result != ESP_OK) {
-            ESP_LOGE(kTag, "BLE provisioning stop failed");
+            ESP_LOGE(
+                kTag,
+                "BLE provisioning stop failed (category %s)",
+                esp_err_to_name(result));
         }
         ble_started_ = ble_provisioning::running();
         ble_start_attempted_ = ble_started_;

@@ -62,6 +62,11 @@ cancellation, network cancellation, and thread reset stay equal in both modes.
 Logs must show the selected mode but must not show credentials, chat text,
 audio, or a stable device identifier.
 
+The NimBLE shutdown completion wait has a one-second limit. If the host does
+not stop in that time, automatic or button sleep still completes. The runtime
+stays available for the next PWR-button wake while the stop worker finishes or
+stays blocked.
+
 A model `power_off` request uses the same development soft-sleep path. The
 model gives a short confirmation first. A PWR-button action can cancel the
 pending request before cleanup starts. After soft sleep, one PWR-button press

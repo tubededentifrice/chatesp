@@ -27,7 +27,7 @@ esp_err_t start(
     PasskeyCallback passkey_callback,
     DeviceContextCallback device_context_callback,
     void *callback_context);
-esp_err_t stop();
+esp_err_t stop(std::uint32_t timeout_ms);
 [[nodiscard]] bool running();
 
 }  // namespace ble_provisioning
