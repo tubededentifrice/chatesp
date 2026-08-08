@@ -100,11 +100,14 @@ changes. Adapt your work to the current worktree.
 4. Run the applicable native tests, firmware builds, iOS builds, and hardware
    tests.
 5. Run `$selfreview autofix` as the last implementation step.
-6. Run the secret scan. Stage only task files. Commit one complete task with a
-   short imperative subject and push `main`.
+6. Run the secret scan.
+7. Stage only task files. Commit one complete task with a short imperative
+   subject and push the commit to `main`.
 
-Do not commit an incomplete task. If a push is blocked, keep the verified local
-commit and report the exact blocker.
+The agent that finishes the task must complete the commit and push. Do not leave
+these steps for the user or a later agent. Do not report that the task is
+complete until the push succeeds. Do not commit an incomplete task. If a push
+is blocked, keep the verified local commit and report the exact blocker.
 
 ## Engineering quality
 

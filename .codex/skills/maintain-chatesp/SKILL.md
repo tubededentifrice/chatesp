@@ -96,8 +96,10 @@ success does not prove pixel output. Record a visible AMOLED check separately.
 - Build before a flash. Record the serial result and the physical screen,
   button, microphone, speaker, Wi-Fi, BLE, and current gates that ran.
 - Separate generic iOS build success from physical iPhone BLE success.
-- Run `$selfreview autofix` last. Then let the caller scan, stage, commit, and
-  push the complete task.
+- Run `$selfreview autofix` last. After it returns, run the secret scan. The
+  agent that finishes the task must then stage only the task files, commit the
+  complete task, and push the commit to `main`. Do not leave publication for
+  the user or a later agent. Do not report completion before the push succeeds.
 
 ## Maintain guidance
 
