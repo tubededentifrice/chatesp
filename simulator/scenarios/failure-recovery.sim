@@ -1,0 +1,7 @@
+ready
+action down
+advance 350
+action up
+fail
+advance 2200
+status

@@ -1,0 +1,9 @@
+ready
+action down
+advance 100
+action up
+advance 0
+action down
+advance 100
+action up
+status
