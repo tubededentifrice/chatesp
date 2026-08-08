@@ -785,16 +785,21 @@ void controls_gesture_event(lv_event_t *event) {
     const bool was_open = controls_gesture.open();
     const QuickControlsAction action =
         controls_gesture.release(point.x, point.y, now_ms);
-    if (action == QuickControlsAction::open) {
+    QuickControlsAction settle_action = action;
+    if (controls_drag_visible) {
+        settle_action = controls_gesture.release_was_accepted()
+            ? quick_controls_settle_action(
+                  lv_obj_get_y(controls_panel),
+                  kControlsPanelHiddenY,
+                  kControlsPanelShownY)
+            : (was_open
+                  ? QuickControlsAction::open
+                  : QuickControlsAction::close);
+    }
+    if (settle_action == QuickControlsAction::open) {
         settle_controls_open();
-    } else if (action == QuickControlsAction::close) {
+    } else if (settle_action == QuickControlsAction::close) {
         close_controls(true);
-    } else if (controls_drag_visible) {
-        if (was_open) {
-            settle_controls_open();
-        } else {
-            close_controls(true);
-        }
     }
 }
 

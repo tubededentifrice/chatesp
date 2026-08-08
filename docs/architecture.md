@@ -60,8 +60,9 @@ The top edge of the touch display has a small control handle. A tap or a
 The top touch target keeps control until release, so the swipe can continue
 beyond the small handle without losing the gesture.
 The panel position follows the finger during a pull. A short settle animation
-completes the movement after release. The display and touch refresh period is
-16 ms. The internal draw buffer holds 32 rows.
+closes it when the release position is below half deployment and opens it at or
+above half deployment. The display and touch refresh period is 16 ms. The
+internal draw buffer holds 32 rows.
 The panel has one shared five-percent control component for brightness and
 volume. Each existing 320-by-44-pixel layout box has a centered transparent
 352-by-64-pixel touch target. Thus, the rail, fill, dot, labels, and spacing do

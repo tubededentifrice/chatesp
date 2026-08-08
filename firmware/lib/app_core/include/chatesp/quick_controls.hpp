@@ -25,6 +25,25 @@ constexpr bool quick_controls_can_persist(
         !sleep_is_pending;
 }
 
+constexpr QuickControlsAction quick_controls_settle_action(
+    std::int32_t panel_y,
+    std::int32_t hidden_y,
+    std::int32_t shown_y) {
+    if (shown_y <= hidden_y) {
+        return QuickControlsAction::close;
+    }
+    const std::int32_t bounded_y = panel_y < hidden_y
+        ? hidden_y
+        : (panel_y > shown_y ? shown_y : panel_y);
+    const std::int64_t deployed =
+        static_cast<std::int64_t>(bounded_y) - hidden_y;
+    const std::int64_t travel =
+        static_cast<std::int64_t>(shown_y) - hidden_y;
+    return deployed * 2 >= travel
+        ? QuickControlsAction::open
+        : QuickControlsAction::close;
+}
+
 class QuickControlsGesture {
 public:
     explicit QuickControlsGesture(QuickControlsConfig config = {})
@@ -47,6 +66,7 @@ public:
     void press(
         std::int16_t x, std::int16_t y, std::uint32_t now_ms) {
         pressed_ = allowed_ && (open_ || y <= config_.top_edge_height_px);
+        release_was_accepted_ = false;
         start_x_ = x;
         start_y_ = y;
         last_activity_at_ms_ = now_ms;
@@ -69,6 +89,7 @@ public:
         if (horizontal_distance > config_.maximum_horizontal_drift_px) {
             return QuickControlsAction::none;
         }
+        release_was_accepted_ = true;
         if (!open_ && vertical >= config_.swipe_distance_px) {
             return QuickControlsAction::open;
         }
@@ -91,6 +112,9 @@ public:
     [[nodiscard]] bool open() const { return open_; }
     [[nodiscard]] bool allowed() const { return allowed_; }
     [[nodiscard]] bool pressed() const { return pressed_; }
+    [[nodiscard]] bool release_was_accepted() const {
+        return release_was_accepted_;
+    }
 
     [[nodiscard]] std::int32_t drag_distance_y(std::int16_t y) const {
         return pressed_
@@ -134,6 +158,7 @@ private:
     bool allowed_ = false;
     bool open_ = false;
     bool pressed_ = false;
+    bool release_was_accepted_ = false;
 };
 
 }  // namespace chatesp

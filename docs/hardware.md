@@ -81,11 +81,12 @@ The user can also open a top touch panel and change brightness or volume in
 five-percent steps. The panel follows a downward finger movement. A press or a
 drag in the 352-by-64-pixel invisible row around either track sets its value.
 The visible rail, fill, dot, labels, and spacing do not change. The dot shows
-the current value, but it is not the required touch target. Brightness changes
-during a drag. Volume changes during active playback. Firmware saves the final
-pair after release and does not write NVS for each input position. The LVGL
-refresh period is 16 ms. Its internal draw buffer is 368 by 48 pixels to reduce
-transfers during panel motion.
+the current value, but it is not the required touch target. A release below
+half panel deployment closes the panel. A release at or above half deployment
+opens it. Brightness changes during a drag. Volume changes during active
+playback. Firmware saves the final pair after release and does not write NVS
+for each input position. The LVGL refresh period is 16 ms. Its internal draw
+buffer is 368 by 32 pixels to reduce transfers during panel motion.
 Brightness and volume persist across a restart when NVS is available. A model
 power-off first completes a short spoken confirmation. Production then uses the
 same system-off cleanup as the PWR button and inactivity timer. One bottom PWR
@@ -158,6 +159,8 @@ The connected V2 board must pass these checks for this control change:
 - a tap on the top handle and a downward top-edge swipe open the control panel;
 - the downward swipe stays captured after it moves below the top touch target;
 - the panel follows the finger during a downward pull without a visible jump;
+- releasing the panel below half deployment closes it, and releasing it at or
+  above half deployment opens it;
 - a swipe that starts below the top edge or moves mainly sideways does not open
   the control panel;
 - the panel closes after an upward swipe, a tap outside, five seconds without

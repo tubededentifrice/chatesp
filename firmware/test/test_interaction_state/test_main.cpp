@@ -364,6 +364,7 @@ void test_quick_controls_reject_a_sideways_drag() {
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(chatesp::QuickControlsAction::none),
         static_cast<int>(controls.release(140, 100, 200)));
+    TEST_ASSERT_FALSE(controls.release_was_accepted());
 }
 
 void test_quick_controls_reports_live_finger_distance() {
@@ -375,6 +376,7 @@ void test_quick_controls_reports_live_finger_distance() {
     TEST_ASSERT_EQUAL_INT32(73, controls.drag_distance_y(93));
     controls.release(180, 93, 200);
     TEST_ASSERT_FALSE(controls.pressed());
+    TEST_ASSERT_TRUE(controls.release_was_accepted());
     TEST_ASSERT_EQUAL_INT32(0, controls.drag_distance_y(120));
 }
 
@@ -386,6 +388,23 @@ void test_quick_controls_close_with_an_upward_swipe() {
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(chatesp::QuickControlsAction::close),
         static_cast<int>(controls.release(180, 172, 300)));
+}
+
+void test_quick_controls_settle_at_half_deployment() {
+    constexpr std::int32_t hidden_y = -288;
+    constexpr std::int32_t shown_y = -12;
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::QuickControlsAction::close),
+        static_cast<int>(chatesp::quick_controls_settle_action(
+            -151, hidden_y, shown_y)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::QuickControlsAction::open),
+        static_cast<int>(chatesp::quick_controls_settle_action(
+            -149, hidden_y, shown_y)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::QuickControlsAction::open),
+        static_cast<int>(chatesp::quick_controls_settle_action(
+            -150, hidden_y, shown_y)));
 }
 
 void test_quick_controls_auto_close_handles_wrap_and_active_touch() {
@@ -559,6 +578,7 @@ int main(int, char **) {
     RUN_TEST(test_quick_controls_reject_a_sideways_drag);
     RUN_TEST(test_quick_controls_reports_live_finger_distance);
     RUN_TEST(test_quick_controls_close_with_an_upward_swipe);
+    RUN_TEST(test_quick_controls_settle_at_half_deployment);
     RUN_TEST(test_quick_controls_auto_close_handles_wrap_and_active_touch);
     RUN_TEST(test_quick_controls_snap_to_valid_five_percent_steps);
     RUN_TEST(test_quick_controls_defer_flash_work_until_input_is_idle);
