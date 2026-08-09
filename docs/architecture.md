@@ -44,7 +44,8 @@ hides the passkey view.
 A debounced top GPIO0 press from 80 through 700 ms changes between ChatESP and
 Clock. A shorter electrical pulse or a longer press has no app action. A
 top-button press has no effect during soft sleep, and GPIO0 is not a production
-wake source. A switch to Clock cancels active voice work and clears the
+wake source. This short BOOT-button press is the only action that enters Clock.
+A switch to Clock cancels active voice work and clears the
 in-memory thread. If local time is not ready, Clock keeps the startup Wi-Fi
 connection for at most 15 seconds while NTP and the timezone lookup finish. It
 stops Wi-Fi when local time becomes available or the limit expires. The board
@@ -140,10 +141,9 @@ access point. It rejects access points below -75 dBm and retries the strongest
 candidate before it starts the existing 10-second background retry. It then
 uses modem power saving. Voice work uses the active Wi-Fi power mode. It stays
 connected only during the active session.
-Production ChatESP mode uses a 30-second idle timer. Development ChatESP mode
-uses a five-minute idle timer so that a test result stays visible. Clock mode
-resets that idle gate and stays on. A short PWR-button press can still request
-sleep in either mode. Sleep stops the station.
+ChatESP mode uses a 30-second idle timer in development and production. Clock
+mode resets that idle gate and stays on. A short PWR-button press can still
+request sleep in either mode. Sleep stops the station.
 
 Each turn first uses a short required-tool route. The route is direct answer,
 web search, image search, restricted Python, memory management, or one
@@ -226,13 +226,12 @@ removes this tool but does not disable the other voice tools.
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
 
-Each accepted interaction resets the monotonic inactivity timer. A voice
-interaction sets a Clock-return gate. After 30 seconds of idle follow-up time,
-the runtime enters Clock, clears the PSRAM thread, and stops Wi-Fi. Clock keeps
-BLE available for time context and does not enter automatic sleep. A manual
-ChatESP session with no voice interaction uses the normal production or
-development sleep timer. AXP2101 system-off clears all volatile state. A
-PWR-button wake causes a cold boot and creates a new thread.
+Each accepted interaction resets the monotonic inactivity timer. After 30
+seconds of idle ChatESP time, the runtime requests sleep, clears the PSRAM
+thread, and stops Wi-Fi. Clock keeps BLE available for time context and does
+not enter automatic sleep. Only a short BOOT-button press enters Clock.
+AXP2101 system-off clears all volatile state. A PWR-button wake causes a cold
+boot and creates a new thread.
 
 ## Modules
 

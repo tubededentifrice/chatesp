@@ -105,14 +105,15 @@ quit
 
 One `advance` command accepts at most ten simulated minutes. The simulator
 processes shorter internal ticks so a large accepted advance does not skip an
-error recovery, an idle timeout, or a Clock return.
+error recovery or an idle timeout.
 
 ## Scope
 
 The simulator verifies user flow, state transitions, button duration rules,
-Clock return, display orientation, pairing-code priority, touch gestures,
-control values, the bounded Clock network window, timeout behavior, privacy of
-command output, and SVG display artifacts. It also runs the production BLE
+BOOT-only Clock entry, continuous Clock mode, display orientation,
+pairing-code priority, touch gestures, control values, the bounded Clock
+network window, timeout behavior, privacy of command output, and SVG display
+artifacts. It also runs the production BLE
 packet validation, transfer assembly, settings ownership, and provisioning
 session. The simulated link covers passkey confirmation, secure-link rejection,
 bond retention, radio and cold restarts, bounded phone retry, dropped

@@ -89,15 +89,12 @@ bool valid_private_text(std::string_view text) {
 }  // namespace
 
 Simulator::Simulator(bool development_mode)
-    : development_mode_(development_mode),
-      interaction_(interaction_config_for_mode(development_mode)),
-      ble_(development_mode) {
+    : ble_(development_mode) {
     refresh_controls_allowed();
 }
 
 void Simulator::reset() {
-    interaction_ = InteractionStateMachine(
-        interaction_config_for_mode(development_mode_));
+    interaction_ = InteractionStateMachine();
     ble_.factory_reset();
     mode_button_.cancel();
     controls_ = QuickControlsGesture();
@@ -114,7 +111,6 @@ void Simulator::reset() {
     clock_time_available_ = false;
     battery_available_ = false;
     pairing_code_visible_ = false;
-    return_to_clock_pending_ = false;
     clock_network_shutdown_pending_ = false;
     clear_private_text();
     refresh_controls_allowed();
@@ -147,19 +143,13 @@ bool Simulator::advance(std::uint32_t milliseconds) {
 }
 
 void Simulator::process_time() {
-    if (clock_return_due(
-            mode_, return_to_clock_pending_,
-            interaction_.state() == InteractionState::idle,
-            interaction_.inactivity_ms(now_ms_))) {
-        enter_clock();
-    } else if (mode_ == AppMode::chat && screen_on_) {
+    if (mode_ == AppMode::chat && screen_on_) {
         interaction_.tick(now_ms_);
     }
 
     if (interaction_.state() == InteractionState::sleep_pending) {
         screen_on_ = false;
         ble_.stop_radio();
-        return_to_clock_pending_ = false;
         pairing_code_visible_ = false;
         controls_.set_allowed(false);
         clear_private_text();
@@ -180,14 +170,12 @@ bool Simulator::action_button(bool pressed) {
         clear_private_text();
         pairing_code_visible_ = false;
         controls_.set_open(false, now_ms_);
-        return_to_clock_pending_ = false;
         clock_network_shutdown_pending_ = false;
         if (!screen_on_ ||
             interaction_.state() == InteractionState::sleep_pending) {
             screen_on_ = true;
             mode_ = AppMode::chat;
-            interaction_ = InteractionStateMachine(
-                interaction_config_for_mode(development_mode_));
+            interaction_ = InteractionStateMachine();
             interaction_.ready(now_ms_);
             interaction_.wake_button_down(now_ms_);
             ble_.start_radio();
@@ -222,6 +210,7 @@ bool Simulator::mode_button(std::uint32_t duration_ms) {
         return advance(duration_ms);
     }
     mode_button_.press(now_ms_);
+    interaction_.note_idle_activity(now_ms_);
     if (!advance(duration_ms) ||
         interaction_.state() == InteractionState::sleep_pending) {
         mode_button_.cancel();
@@ -236,7 +225,6 @@ bool Simulator::mode_button(std::uint32_t duration_ms) {
     } else {
         mode_ = AppMode::chat;
         interaction_.ready(now_ms_);
-        return_to_clock_pending_ = false;
         clock_network_shutdown_pending_ = false;
     }
     refresh_controls_allowed();
@@ -287,7 +275,6 @@ bool Simulator::finish_interaction() {
     }
     interaction_.interaction_finished(now_ms_);
     ble_.start_radio();
-    return_to_clock_pending_ = true;
     refresh_controls_allowed();
     return true;
 }
@@ -298,7 +285,6 @@ bool Simulator::fail_interaction() {
     }
     interaction_.fail(now_ms_);
     ble_.start_radio();
-    return_to_clock_pending_ = false;
     clear_private_text();
     refresh_controls_allowed();
     return true;
@@ -474,7 +460,6 @@ Snapshot Simulator::snapshot() const {
     value.battery_available = battery_available_;
     value.pairing_code_visible = pairing_code_visible_;
     value.controls_open = controls_.open();
-    value.return_to_clock_pending = return_to_clock_pending_;
     value.clock_network_shutdown_pending =
         clock_network_shutdown_pending_;
     value.ble = ble_.snapshot();
@@ -577,7 +562,6 @@ void Simulator::enter_clock() {
         wifi_ = WifiState::off;
     }
     interaction_.ready(now_ms_);
-    return_to_clock_pending_ = false;
     controls_.set_open(false, now_ms_);
     clear_private_text();
 }

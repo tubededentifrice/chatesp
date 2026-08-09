@@ -54,10 +54,9 @@ not prove pixel output. Confirm that `CHAT ESP` or `READY` is visible before a
 physical display gate passes. Use `--no-upload` only to check an image that is
 already installed.
 
-Development ChatESP mode uses a five-minute automatic idle timer. This keeps
-the ready screen visible during a test. Clock mode has no automatic sleep
-timer. A short PWR-button press still requests sleep at once. Production
-ChatESP mode keeps the 30-second automatic idle timer. Audio
+Development and production ChatESP modes use the same 30-second automatic idle
+timer. Clock mode has no automatic sleep timer. A short PWR-button press still
+requests sleep at once. Audio
 cancellation, network cancellation, and thread reset stay equal in both modes.
 Logs must show the selected mode but must not show credentials, chat text,
 audio, or a stable device identifier.

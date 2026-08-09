@@ -46,6 +46,7 @@ struct Snapshot {
     bool battery_available = false;
     bool pairing_code_visible = false;
     bool controls_open = false;
+    // Compatibility field. Clock entry is never automatic.
     bool return_to_clock_pending = false;
     bool clock_network_shutdown_pending = false;
     BleSnapshot ble{};
@@ -109,7 +110,6 @@ private:
     void process_time();
     void refresh_controls_allowed();
 
-    const bool development_mode_;
     InteractionStateMachine interaction_;
     BleSimulator ble_;
     ShortPressGesture mode_button_;
@@ -131,7 +131,6 @@ private:
     bool clock_time_available_ = false;
     bool battery_available_ = false;
     bool pairing_code_visible_ = false;
-    bool return_to_clock_pending_ = false;
     bool clock_network_shutdown_pending_ = false;
 };
 

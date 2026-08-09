@@ -79,8 +79,8 @@ startup Wi-Fi connection for at most 15 seconds. It stops Wi-Fi when local time
 becomes available or the limit expires. Clock does not request automatic
 sleep. The bottom PWR button keeps its short-press sleep action. A bottom-button
 press first restores the portrait ChatESP layout, and a held press then starts
-recording at the normal threshold. After 30 seconds without a follow-up
-interaction, the runtime returns to Clock and clears the thread.
+recording at the normal threshold. ChatESP requests sleep after 30 seconds
+without input. Only a short top BOOT-button press enters Clock.
 
 The model can request device status, set display brightness from 5 through 100
 percent, set playback volume from 0 through 100 percent, and request power-off.
@@ -117,8 +117,8 @@ The connected V2 board must pass these checks for this control change:
 - with USB disconnected, a held PWR press starts recording and its release
   submits without a USB reconnection;
 - a short PWR press from idle turns the screen off and requests system-off;
-- 30 seconds without input in a manual production ChatESP session turns the
-  screen off and requests system-off;
+- 30 seconds without input in ChatESP turns the screen off and requests the
+  selected development or production sleep path;
 - a stalled BLE shutdown does not block a PWR-button wake from development
   soft sleep or a production system-off request;
 - after Wi-Fi and BLE start, repeated full-screen refreshes do not report a
@@ -146,7 +146,7 @@ The connected V2 board must pass these checks for this control change:
   PWR press still requests sleep;
 - a bottom PWR press in Clock shows ChatESP without visible delay, and a held
   press starts `LISTENING` at the normal threshold;
-- 30 seconds after the final voice interaction, Clock returns, Wi-Fi stops,
+- 30 seconds after the final voice interaction, ChatESP sleeps, Wi-Fi stops,
   and the prior thread is not available;
 - the footer shows Wi-Fi connection state and a valid battery percentage, or a
   clear unavailable value;

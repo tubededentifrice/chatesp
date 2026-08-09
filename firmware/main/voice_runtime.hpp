@@ -23,6 +23,7 @@ public:
         DeviceMemoryStore &device_memory_store);
     void action_button_edge(bool pressed, std::uint32_t at_ms);
     [[nodiscard]] bool mode_button_available() const;
+    void mode_button_edge(bool pressed);
     void mode_button_short_press(std::uint32_t at_ms);
 
     [[nodiscard]] bool poweroff_ready() const;

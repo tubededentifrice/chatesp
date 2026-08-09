@@ -22,15 +22,6 @@ struct InteractionConfig {
     std::uint32_t error_visible_ms = 2'200;
 };
 
-constexpr InteractionConfig interaction_config_for_mode(
-    bool development_mode) {
-    InteractionConfig config;
-    if (development_mode) {
-        config.idle_sleep_ms = 5 * 60'000;
-    }
-    return config;
-}
-
 class InteractionStateMachine {
 public:
     explicit InteractionStateMachine(InteractionConfig config = {});

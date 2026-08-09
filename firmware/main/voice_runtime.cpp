@@ -72,7 +72,6 @@ constexpr std::uint32_t kBatteryRefreshMs = 30'000;
 constexpr std::uint32_t kAnswerStreamRefreshMs = 60;
 constexpr std::uint32_t kPoweroffGraceMs = 250;
 constexpr std::uint32_t kInteractionTimeoutMs = 180'000;
-constexpr std::uint32_t kClockReturnDelayMs = 30'000;
 constexpr std::uint32_t kClockTimeSyncLimitMs = 15'000;
 constexpr std::uint32_t kModeDisplayRetryMs = 100;
 constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
@@ -433,8 +432,7 @@ public:
               utc_clock_),
           speech_provider_(
               openrouter_audio_transport_, network_, openrouter_connection_),
-          pcm_sink_(playback_, device_control_),
-          interaction_(interaction_config_for_mode(kDevelopmentMode)) {
+          pcm_sink_(playback_, device_control_) {
         tools_ready_ = tools_.add(web_tool_) == agent::Error::none &&
             tools_.add(image_tool_) == agent::Error::none &&
             (!python_executor_.available() ||
@@ -661,6 +659,10 @@ public:
             cancel_transports();
         }
         queue_command({CommandKind::toggle_mode, at_ms});
+    }
+
+    void mode_button_edge(bool pressed) {
+        mode_button_pressed_.store(pressed, std::memory_order_release);
     }
 
     [[nodiscard]] bool mode_button_available() const {
@@ -1271,7 +1273,6 @@ private:
             return;
         }
         app_mode_.store(AppMode::clock, std::memory_order_release);
-        clock_return_pending_ = false;
         interaction_.ready(now_ms);
         previous_state_ = interaction_.state();
         agent_loop_->clear_thread();
@@ -1301,20 +1302,19 @@ private:
         ESP_LOGI(kTag, "Clock mode is active");
     }
 
-    void enter_chat_mode(std::uint32_t now_ms, bool return_to_clock) {
+    void enter_chat_mode(std::uint32_t now_ms, bool defer_network) {
         if (!display_available_.load(std::memory_order_acquire)) {
             return;
         }
         app_mode_.store(AppMode::chat, std::memory_order_release);
         clock_network_stop_pending_ = false;
-        clock_return_pending_ = return_to_clock;
         interaction_.ready(now_ms);
         previous_state_ = interaction_.state();
         mode_display_attempted_at_ms_ = now_ms;
         (void)apply_mode_display(AppMode::chat, interaction_.state());
         footer_shown_ = false;
         refresh_footer(now_ms, true);
-        if (!return_to_clock) {
+        if (!defer_network) {
             start_network_early(true);
         }
         ESP_LOGI(kTag, "ChatESP mode is active");
@@ -1574,6 +1574,12 @@ private:
             finish_network_context_worker(false);
             const AppMode app_mode =
                 app_mode_.load(std::memory_order_acquire);
+            if (app_mode == AppMode::chat &&
+                mode_button_pressed_.load(std::memory_order_acquire)) {
+                // A valid short press can cross the ChatESP idle boundary.
+                // Keep the device active until the gesture is resolved.
+                interaction_.note_idle_activity(now_ms);
+            }
             if (app_mode == AppMode::clock) {
                 // Clock mode is a continuous display mode. It does not use the
                 // normal ChatESP idle sleep timer.
@@ -1586,12 +1592,6 @@ private:
                         kClockTimeSyncLimitMs)) {
                     stop_clock_network();
                 }
-            } else if (clock_return_due(
-                           app_mode, clock_return_pending_,
-                           interaction_.state() == InteractionState::idle,
-                           interaction_.inactivity_ms(now_ms),
-                           kClockReturnDelayMs)) {
-                enter_clock_mode(now_ms);
             }
             interaction_.tick(now_ms);
             process_state_change(now_ms);
@@ -1837,9 +1837,6 @@ private:
     }
 
     void begin_recording(std::uint32_t now_ms) {
-        // Every completed voice attempt returns to the travel clock after the
-        // final 30-second follow-up window.
-        clock_return_pending_ = true;
         pcm_sink_.cancel_and_stop();
         capture_.discard();
         python_tool_.clear_plot();
@@ -2261,8 +2258,8 @@ private:
         memory_store_.clear_turn_state();
         display_available_.store(false, std::memory_order_release);
         app_mode_.store(AppMode::chat, std::memory_order_release);
+        mode_button_pressed_.store(false, std::memory_order_release);
         clock_network_stop_pending_ = false;
-        clock_return_pending_ = false;
         mode_display_pending_ = false;
         display_wake_pending_ = false;
         footer_shown_ = false;
@@ -2469,6 +2466,7 @@ private:
     std::atomic<bool> voice_priority_{false};
     std::atomic<bool> display_available_{true};
     std::atomic<bool> button_pressed_{false};
+    std::atomic<bool> mode_button_pressed_{false};
     std::atomic<bool> started_{false};
     std::atomic<AppMode> app_mode_{AppMode::chat};
     std::atomic<std::uint8_t> pending_brightness_percent_{
@@ -2507,7 +2505,6 @@ private:
     bool stream_text_shown_ = false;
     bool request_active_ = false;
     bool quick_controls_enabled_ = false;
-    bool clock_return_pending_ = false;
     bool clock_time_available_ = false;
     bool clock_network_stop_pending_ = false;
     std::uint32_t clock_network_stop_started_at_ms_ = 0;
@@ -2555,6 +2552,12 @@ void VoiceRuntime::action_button_edge(bool pressed, std::uint32_t at_ms) {
 
 bool VoiceRuntime::mode_button_available() const {
     return impl_ != nullptr && impl_->mode_button_available();
+}
+
+void VoiceRuntime::mode_button_edge(bool pressed) {
+    if (impl_ != nullptr) {
+        impl_->mode_button_edge(pressed);
+    }
 }
 
 void VoiceRuntime::mode_button_short_press(std::uint32_t at_ms) {

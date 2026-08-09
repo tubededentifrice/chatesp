@@ -122,13 +122,6 @@ private:
     bool pressed_ = false;
 };
 
-[[nodiscard]] constexpr bool clock_return_due(
-    AppMode mode, bool return_pending, bool interaction_idle,
-    std::uint32_t inactivity_ms, std::uint32_t delay_ms = 30'000) {
-    return mode == AppMode::chat && return_pending && interaction_idle &&
-        inactivity_ms >= delay_ms;
-}
-
 [[nodiscard]] constexpr bool clock_network_shutdown_due(
     bool pending, bool local_time_available,
     std::uint32_t elapsed_ms, std::uint32_t limit_ms) {

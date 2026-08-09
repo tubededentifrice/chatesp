@@ -30,7 +30,7 @@ ChatESP.*
 - **Useful tools:** Search the web, find and show images, run bounded
   calculations, draw line plots, and control the device by voice.
 - **Short follow-up chat:** Continue the same conversation for 30 seconds. The
-  device then clears the thread and returns to Clock.
+  device then clears the thread and sleeps.
 - **Travel Clock:** Use the large AMOLED as a landscape 24-hour clock with a
   rounded seconds path.
 - **Touch controls:** Pull down the top handle to change brightness or volume.
@@ -60,7 +60,7 @@ photos.*
    web, image, device-control, calculation, or memory route.
 3. Read the streamed answer and hear each complete sentence.
 4. Ask a follow-up within 30 seconds, or let ChatESP clear the thread and
-   return to Clock.
+   sleep.
 
 A short top-button press changes between ChatESP and Clock. A short PWR-button
 press without a recording requests sleep. Pull down from the top edge for the
@@ -195,9 +195,9 @@ Upload the development image:
 uv run --locked python tools/pio.py run -e watch_dev -t upload
 ```
 
-Development mode keeps USB flashing available and uses a five-minute ChatESP
-idle timer. Clock stays on. For a black screen, or after a display or power
-change, run the device doctor with the explicit device port:
+Development mode keeps USB flashing available and uses the same 30-second
+ChatESP idle timer as production. Clock stays on. For a black screen, or after
+a display or power change, run the device doctor with the explicit device port:
 
 ```sh
 uv run --locked python tools/device_doctor.py --port LOCAL_PORT

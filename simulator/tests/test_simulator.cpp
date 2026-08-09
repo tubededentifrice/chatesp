@@ -49,7 +49,7 @@ void test_short_press_sleeps_and_clears_private_text() {
     check(state.answer_bytes == 0, "sleep must clear the answer");
 }
 
-void test_voice_flow_returns_to_clock() {
+void test_voice_flow_sleeps_after_chat_idle_timeout() {
     Simulator simulator;
     start_recording(simulator);
     check(
@@ -69,15 +69,29 @@ void test_voice_flow_returns_to_clock() {
     check(simulator.advance(29'999), "follow-up advance must be accepted");
     check(
         simulator.snapshot().mode == AppMode::chat,
-        "Clock return must wait for the full follow-up interval");
-    check(simulator.advance(1), "Clock boundary advance must be accepted");
-    const auto state = simulator.snapshot();
-    check(state.mode == AppMode::clock, "voice flow must return to Clock");
+        "voice flow must stay in ChatESP before the idle timeout");
     check(
-        state.orientation == DisplayOrientation::clock,
-        "Clock must use the landscape orientation");
-    check(state.transcript_bytes == 0, "Clock entry must clear transcript");
-    check(state.answer_bytes == 0, "Clock entry must clear answer");
+        simulator.snapshot().screen_on,
+        "ChatESP display must stay on before the idle timeout");
+    check(simulator.advance(1), "sleep boundary advance must be accepted");
+    const auto state = simulator.snapshot();
+    check(state.mode == AppMode::chat, "idle timeout must not enter Clock");
+    check(
+        state.interaction == InteractionState::sleep_pending,
+        "ChatESP idle timeout must request sleep");
+    check(!state.screen_on, "ChatESP idle timeout must turn the display off");
+    check(state.transcript_bytes == 0, "sleep must clear transcript");
+    check(state.answer_bytes == 0, "sleep must clear answer");
+
+    Simulator development(true);
+    check(development.ready(), "development ready transition failed");
+    check(
+        development.advance(30'000),
+        "development idle boundary must be accepted");
+    check(
+        development.snapshot().interaction ==
+            InteractionState::sleep_pending,
+        "development ChatESP must use the same 30-second idle timeout");
 }
 
 void test_mode_and_pairing_orientation() {
@@ -101,6 +115,15 @@ void test_mode_and_pairing_orientation() {
     check(
         simulator.snapshot().orientation == DisplayOrientation::clock,
         "pairing close must restore Clock orientation");
+    check(
+        simulator.advance(chatesp::simulator::kMaximumAdvanceMs),
+        "Clock no-timeout advance must be accepted");
+    check(
+        simulator.snapshot().mode == AppMode::clock,
+        "Clock must stay active without a timeout");
+    check(
+        simulator.snapshot().screen_on,
+        "Clock must keep the display on without a timeout");
     check(simulator.mode_button(701), "long top-button press must be valid");
     check(
         simulator.snapshot().mode == AppMode::clock,
@@ -108,6 +131,23 @@ void test_mode_and_pairing_orientation() {
     check(
         !simulator.show_pairing_code(1'000'000),
         "pairing code must have six digits at most");
+}
+
+void test_mode_button_press_wins_at_chat_idle_boundary() {
+    Simulator simulator;
+    check(simulator.ready(), "ready transition failed");
+    check(
+        simulator.advance(29'950),
+        "advance before the ChatESP idle boundary must work");
+    check(
+        simulator.mode_button(80),
+        "top-button press across the idle boundary must work");
+    check(
+        simulator.snapshot().mode == AppMode::clock,
+        "top-button press must enter Clock across the idle boundary");
+    check(
+        simulator.snapshot().screen_on,
+        "top-button press must keep the display on across the idle boundary");
 }
 
 void test_touch_controls_are_bounded() {
@@ -468,8 +508,9 @@ void test_ble_bond_restart_and_sanitized_fuzz() {
 
 int main() {
     test_short_press_sleeps_and_clears_private_text();
-    test_voice_flow_returns_to_clock();
+    test_voice_flow_sleeps_after_chat_idle_timeout();
     test_mode_and_pairing_orientation();
+    test_mode_button_press_wins_at_chat_idle_boundary();
     test_touch_controls_are_bounded();
     test_status_is_private_and_svg_is_explicit();
     test_invalid_text_and_wake_paths();

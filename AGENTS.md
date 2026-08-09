@@ -32,10 +32,10 @@ Some files can be absent during initial setup. Read them when they exist.
   without a recording, starts sleep.
 - Transcribe the request on the display. Show progress while the model works.
   Show the short answer and speak it.
-- Keep one chat thread during the 30-second follow-up window. After a voice
-  interaction, return to Clock mode and discard the thread. In ChatESP mode,
-  an idle timeout requests AXP2101 system-off. A PWR-button cold start starts
-  a new thread.
+- Keep one chat thread during the 30-second follow-up window. When the window
+  expires, request sleep and discard the thread. Only a short BOOT-button press
+  enters Clock mode. Clock mode has no idle timeout. A PWR-button cold start
+  starts a new thread.
 - Use an all-black terminal-style interface. Use motion only to communicate
   state or progress. Avoid decorative motion.
 - Instruct the chat model to answer in concise, natural speech.

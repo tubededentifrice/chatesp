@@ -151,18 +151,24 @@ extern "C" void app_main() {
             if (mode_edges.pressed) {
                 if (runtime.mode_button_available()) {
                     mode_button.press(now_ms);
+                    runtime.mode_button_edge(true);
                 } else {
                     mode_button.cancel();
+                    runtime.mode_button_edge(false);
                 }
             }
-            if (mode_edges.released && mode_button.release(now_ms)) {
-                ESP_LOGI(kTag, "Top mode button short press accepted");
-                runtime.mode_button_short_press(now_ms);
+            if (mode_edges.released) {
+                runtime.mode_button_edge(false);
+                if (mode_button.release(now_ms)) {
+                    ESP_LOGI(kTag, "Top mode button short press accepted");
+                    runtime.mode_button_short_press(now_ms);
+                }
             }
         } else if (!mode_button_error_reported) {
             ESP_LOGW(kTag, "Top mode button read is not available");
             mode_button_error_reported = true;
             mode_button.cancel();
+            runtime.mode_button_edge(false);
         }
         if (runtime.poweroff_ready()) {
             if (chatesp::power::action_button_is_pressed()) {
