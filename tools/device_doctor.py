@@ -73,10 +73,9 @@ def diagnose_boot(log: str, expected_version: str) -> BootDiagnosis:
             "V2 CST820-compatible touch",
             "The boot log did not identify the V2 board.",
         ),
-        ("Panel on", "The panel-on command did not complete."),
         (
             "Display ready at ",
-            "The firmware did not report display readiness.",
+            "The firmware did not report the completed display wake sequence.",
         ),
         ("Voice runtime ready", "The voice runtime did not become ready."),
     )

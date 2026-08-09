@@ -51,8 +51,10 @@ uv run --locked python tools/device_doctor.py --port LOCAL_PORT
 ```
 
 It uploads `watch_dev`, checks that the image matches the current Git commit,
-and reads one bounded boot window. It requires a V2 probe, panel-on, two equal
-nonzero brightness commands, display readiness, and voice runtime readiness.
+and reads one bounded boot window. It requires a V2 probe, two equal nonzero
+brightness commands, a completed display wake sequence, and voice runtime
+readiness. The board logs `Panel on` only when its tracked panel state changes,
+so that optional record is not a separate pass condition.
 It redacts network addresses and the device address. Its automatic checks do
 not prove pixel output. Confirm that `CHAT ESP` or `READY` is visible before a
 physical display gate passes. Use `--no-upload` only to check an image that is

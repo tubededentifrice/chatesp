@@ -32,7 +32,6 @@ I app_init: App version:      abc1234-dirty
 I chatesp: Starting application in development mode
 I board: V2 CST820-compatible touch 0x15 found
 I co5300: set brightness to 65% (hardware value: 165)
-I board: Panel on
 I co5300: set brightness to 65% (hardware value: 165)
 I chatesp: Display ready at 65 percent
 I chatesp: Voice runtime ready
@@ -50,7 +49,6 @@ I app_init: App version:      old1234
 I chatesp: Starting application in development mode
 I board: V2 CST820-compatible touch 0x15 found
 I co5300: set brightness to 65% (hardware value: 165)
-I board: Panel on
 I chatesp: Display ready at 65 percent
 I chatesp: Voice runtime ready
 """
@@ -99,7 +97,8 @@ I chatesp: Voice runtime ready
 
         self.assertFalse(result.passed)
         self.assertIn(
-            "The firmware did not report display readiness.", result.issues
+            "The firmware did not report the completed display wake sequence.",
+            result.issues,
         )
         self.assertIn(
             "The boot log contains a fatal record: Display start failed.",
