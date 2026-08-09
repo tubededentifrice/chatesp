@@ -92,6 +92,20 @@ AXP2101 state can survive an ESP reset. Firmware must restore the normal
 long-hold shutdown policy at an idle startup. This keeps the hardware recovery
 action available if the ESP later becomes unresponsive.
 
+### A short battery wake starts listening and then reports a key error
+
+The battery-powered EXIO4 level can stay active after the user releases PWR.
+The old cold-start path treated this level as a continued hold. It could enter
+recording before the 500-millisecond idle settings check applied the saved NVS
+record. The first request then had no active service key, even though the key
+was present in flash.
+
+At startup, a completed AXP2101 release or short-press event must override the
+EXIO4 level. Production must also apply its valid NVS settings record before it
+queues a startup button command. One short battery wake must show `READY`. A
+continued hold must show `LISTENING` at the normal threshold and must use the
+saved service key.
+
 ### The iPhone misses a short advertising window
 
 The selected-device reconnect scan runs for 30 seconds. A failed scan has only

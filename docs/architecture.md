@@ -12,6 +12,10 @@ flushes the splash while the AMOLED is off and raises the brightness only after
 the complete black frame is ready. It sends a second complete frame and repeats
 the selected brightness command after panel-on. This recovers a CO5300 that
 accepts the first commands but does not show the first pixel transfer. The
+startup path builds hidden runtime views only after this reliable splash
+transfer. It loads saved memories after the splash is visible. Production also
+skips the optional full-PSRAM start test and uses a speed-optimized bootloader.
+These changes do not change system-off or steady active power policy. The
 runtime replaces the splash as soon as its task and button queue can accept
 input. It does not use a minimum splash timer. An in-session display wake shows
 the current interaction state instead. Development soft sleep keeps the CO5300
@@ -33,7 +37,9 @@ recording threshold requests sleep. A held press cancels active work or speech
 and starts audio capture. Release ends the capture and submits it. A held wake
 continues into audio capture. The exact threshold is a tested configuration
 value. At start, the power module uses the IO-expander level to detect a held
-PWR key. During operation, it uses debounced AXP2101 PWR-key edge events. It
+PWR key. A completed AXP2101 release or short-press event overrides a latched
+IO-expander level. Thus, a short battery wake does not become a voice hold.
+During operation, it uses debounced AXP2101 PWR-key edge events. It
 rejects a PWR-key event when the same PMU sample contains a USB power-source
 event. A USB power-source change does not start or submit a recording.
 
@@ -195,6 +201,11 @@ the secure phone proxy when it is ready. Otherwise, it stops BLE, protects the
 restart block, and starts Wi-Fi while capture continues. The capture task does
 not run radio setup. This order prevents idle Wi-Fi allocations from splitting
 memory that a later BLE restart needs.
+
+Production reads and applies the last valid NVS settings record before it can
+process a startup button command. A held cold wake therefore has its saved
+service key, model choices, and Wi-Fi values before recording starts. The
+500-millisecond idle check applies later BLE settings changes.
 
 The station scans all 2.4 GHz channels and selects the strongest matching
 access point. It rejects access points below -75 dBm and retries the strongest

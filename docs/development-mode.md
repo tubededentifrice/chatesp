@@ -131,6 +131,18 @@ profile. A sleep request stops active work, turns off the display, and requests
 AXP2101 system-off. USB can disconnect after system-off. This profile enables
 persistent settings and persistent BLE bonds in plaintext NVS.
 
+Production applies the last valid settings record before it accepts a startup
+PWR-button command. A completed PMU short-press or release event also overrides
+the battery-powered EXIO4 level at start. Thus, one short PWR press wakes to
+`READY`; it does not start `LISTENING`. A continued hold still starts recording
+at the normal threshold.
+
+The production profile skips the optional full-PSRAM start test and optimizes
+the bootloader for speed. Development keeps the memory test. Both profiles use
+the same PSRAM at run time. Production also shows the reliable two-frame splash
+before it builds hidden runtime views or loads saved memories. These changes do
+not change the system-off or steady active power policy.
+
 A model `power_off` request gives a short confirmation and then uses this same
 system-off path. One bottom PWR-button press starts the board again. A held wake
 continues into recording at the normal hold threshold.

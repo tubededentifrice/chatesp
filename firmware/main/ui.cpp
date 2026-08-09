@@ -1145,7 +1145,7 @@ void create_quick_controls(lv_obj_t *screen) {
     controls_timer = lv_timer_create(controls_timer_callback, 250, nullptr);
 }
 
-void create_screen() {
+void create_startup_screen() {
     lv_obj_t *screen = active_screen();
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
@@ -1165,6 +1165,10 @@ void create_screen() {
     lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(hint_label, 1, LV_PART_MAIN);
     lv_obj_align(hint_label, LV_ALIGN_TOP_LEFT, 16, 84);
+}
+
+void create_runtime_screen() {
+    lv_obj_t *screen = active_screen();
 
     content_label = lv_label_create(screen);
     lv_obj_set_size(content_label, 336, 270);
@@ -1352,15 +1356,6 @@ bool start(std::uint8_t brightness_percent) {
             runtime::DevicePreferences::default_volume_percent}.valid()) {
         return false;
     }
-    if (clock_path_points == nullptr) {
-        clock_path_points = static_cast<lv_point_precise_t *>(
-            heap_caps_calloc(
-                kMaximumClockPathPointCount, sizeof(lv_point_precise_t),
-                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (clock_path_points == nullptr) {
-            return false;
-        }
-    }
     lv_display_t *display = bsp_display_start();
     if (display == nullptr || bsp_display_backlight_off() != ESP_OK) {
         return false;
@@ -1369,7 +1364,7 @@ bool start(std::uint8_t brightness_percent) {
     if (!bsp_display_lock(1000)) {
         return false;
     }
-    create_screen();
+    create_startup_screen();
     show_state(InteractionState::booting);
     lv_refr_now(display);
     bsp_display_unlock();
@@ -1378,15 +1373,37 @@ bool start(std::uint8_t brightness_percent) {
     if (wake_error != ESP_OK) {
         return false;
     }
-    // Send one more complete frame after panel-on. The CO5300 can accept the
-    // first command and stay black until a later pixel transfer.
+    // Send one more complete startup frame after panel-on. Do this before the
+    // hidden runtime views are built so the user sees the splash at the first
+    // reliable CO5300 pixel transfer.
     if (!bsp_display_lock(1000)) {
         return false;
     }
     lv_obj_invalidate(active_screen());
     lv_refr_now(display);
     bsp_display_unlock();
-    return bsp_display_brightness_set(brightness_percent) == ESP_OK;
+    if (bsp_display_brightness_set(brightness_percent) != ESP_OK) {
+        return false;
+    }
+
+    if (clock_path_points == nullptr) {
+        clock_path_points = static_cast<lv_point_precise_t *>(
+            heap_caps_calloc(
+                kMaximumClockPathPointCount, sizeof(lv_point_precise_t),
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (clock_path_points == nullptr) {
+            (void)bsp_display_backlight_off();
+            return false;
+        }
+    }
+    if (!bsp_display_lock(1000)) {
+        (void)bsp_display_backlight_off();
+        return false;
+    }
+    create_runtime_screen();
+    show_state(InteractionState::booting);
+    bsp_display_unlock();
+    return true;
 }
 
 bool set_clock_style(const ClockStyle &style) {

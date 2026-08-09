@@ -59,7 +59,10 @@ press from 30 through 700 ms changes between ChatESP and Clock. A shorter
 electrical pulse or a longer press has no app action. The button is not a sleep
 wake source. Its boot-strapping function stays available for firmware
 recovery. Firmware uses the EXIO4 level only to detect a held key at start.
-During operation, it uses AXP2101 PWRON edge events. On the connected V2 board,
+It rejects that level when the PMU start status contains a completed release or
+short-press event. This is necessary because EXIO4 can stay active after a
+battery-powered release. During operation, it uses AXP2101 PWRON edge events.
+On the connected V2 board,
 EXIO4 stayed active after key release during battery operation. Firmware rejects
 an edge sample that also contains a USB power-source event.
 The long-hold control is AXP2101 `PWROFF_EN` register `0x22`, bit 1. Firmware
@@ -87,6 +90,14 @@ VBUS prevents the low-battery request so the device can start and charge. The
 active runtime reads the gauge at most once every 30 seconds or after a VBUS
 event. It does not read the gauge after sleep starts. Production system-off
 also stops the processor, so no firmware polling occurs in that state.
+
+The production profile does not run the optional full-PSRAM start test. It uses
+a speed-optimized bootloader. Development keeps the PSRAM start test so normal
+firmware work still checks the fixed memory part. The UI sends the reliable
+two-frame splash before it builds hidden Clock, plot, and control views. Saved
+memory loading also occurs after the splash is visible. These start changes do
+not change system-off current or steady active settings. Measure PWR-to-pixels
+time and complete interaction energy on the board.
 
 USB can keep the ESP32 powered after the PMIC accepts system-off. Production
 must stay in its completed sleep state and repeat the request at a one-second
@@ -163,6 +174,10 @@ The connected V2 board must pass these checks for this control change:
   private transmit-buffer allocation failure or block the LVGL task;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
   normal hold threshold;
+- a short battery-powered PWR cold start shows `CHAT ESP`, then `READY`, and
+  does not show `LISTENING`;
+- a held battery-powered PWR cold start uses saved production settings before
+  it sends a cloud request;
 - a short top-button press changes between portrait ChatESP and Clock;
 - an electrical top-button pulse shorter than 30 ms does not change mode;
 - a long top-button press and a top-button press during development soft sleep

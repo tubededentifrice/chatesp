@@ -524,6 +524,10 @@ public:
         if (settings_result != ESP_OK) {
             return settings_result;
         }
+        // Apply durable production settings before a startup button command
+        // can enter recording. The idle refresh remains responsible for later
+        // BLE updates, but a cold held wake must already have its service key.
+        refresh_settings();
         // Reserve the internal I2S DMA path before Wi-Fi and Bluetooth use
         // the remaining internal memory.
         const esp_err_t audio_result = capture_.initialize();

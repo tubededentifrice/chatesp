@@ -8,6 +8,29 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VoiceResourceOrderTests(unittest.TestCase):
+    def test_saved_settings_apply_before_startup_input_is_queued(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        start = runtime[
+            runtime.index(
+                "esp_err_t start(bool startup_button_down, std::uint32_t startup_at_ms)"
+            ) : runtime.index("void action_button_edge(")
+        ]
+
+        self.assertLess(
+            start.index("settings_store_.initialize()"),
+            start.index("refresh_settings();"),
+        )
+        self.assertLess(
+            start.index("refresh_settings();"),
+            start.index("capture_.initialize()"),
+        )
+        self.assertLess(
+            start.index("refresh_settings();"),
+            start.index("if (startup_button_down)"),
+        )
+
     def test_speech_start_event_follows_successful_audio_start(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"

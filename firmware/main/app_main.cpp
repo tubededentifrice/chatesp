@@ -134,15 +134,6 @@ extern "C" void app_main() {
     const chatesp::runtime::DevicePreferences device_preferences =
         device_preferences_store.preferences();
 
-    static chatesp::DeviceMemoryStore device_memory_store;
-    const esp_err_t memory_result = device_memory_store.initialize();
-    if (memory_result != ESP_OK) {
-        ESP_LOGW(
-            kTag,
-            "Saved memories are unavailable (category %s)",
-            esp_err_to_name(memory_result));
-    }
-
     if (!chatesp::ui::start(device_preferences.brightness_percent)) {
         ESP_LOGE(kTag, "Display start failed");
         return;
@@ -153,6 +144,17 @@ extern "C" void app_main() {
         static_cast<unsigned>(device_preferences.brightness_percent));
     chatesp::crash_diagnostics::mark(
         chatesp::runtime::CrashEvent::display_ready);
+
+    // Saved memories are not needed to draw the startup view. Load them only
+    // after the reliable splash is visible so flash work does not delay it.
+    static chatesp::DeviceMemoryStore device_memory_store;
+    const esp_err_t memory_result = device_memory_store.initialize();
+    if (memory_result != ESP_OK) {
+        ESP_LOGW(
+            kTag,
+            "Saved memories are unavailable (category %s)",
+            esp_err_to_name(memory_result));
+    }
 
     static chatesp::VoiceRuntime runtime;
     const esp_err_t runtime_result = runtime.start(

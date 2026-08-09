@@ -122,9 +122,14 @@ esp_err_t repair_legacy_power_key_policy() {
 }
 
 esp_err_t prepare_power_key_events(
-    bool *startup_press_event, bool *startup_vbus_remove_event) {
+    bool *startup_press_event,
+    bool *startup_release_event,
+    bool *startup_short_press_event,
+    bool *startup_vbus_remove_event) {
     ESP_RETURN_ON_FALSE(
         startup_press_event != nullptr &&
+            startup_release_event != nullptr &&
+            startup_short_press_event != nullptr &&
             startup_vbus_remove_event != nullptr,
         ESP_ERR_INVALID_ARG,
         kTag,
@@ -148,6 +153,10 @@ esp_err_t prepare_power_key_events(
     }
     *startup_press_event =
         (status & kAxp2101PowerKeyNegativeEdge) != 0;
+    *startup_release_event =
+        (status & kAxp2101PowerKeyPositiveEdge) != 0;
+    *startup_short_press_event =
+        (status & kAxp2101PowerKeyShortPress) != 0;
     *startup_vbus_remove_event =
         (status & kAxp2101VbusRemoveEvent) != 0;
     // IRQ status bits are write-one-to-clear. Clear only observed events so an
@@ -235,10 +244,13 @@ esp_err_t initialize() {
         kTag,
         "PWR legacy policy repair failed");
     bool startup_press_event = false;
+    bool startup_release_event = false;
+    bool startup_short_press_event = false;
     bool startup_vbus_remove_event = false;
     ESP_RETURN_ON_ERROR(
         prepare_power_key_events(
-            &startup_press_event, &startup_vbus_remove_event),
+            &startup_press_event, &startup_release_event,
+            &startup_short_press_event, &startup_vbus_remove_event),
         kTag,
         "PWR event setup failed");
 
@@ -247,12 +259,13 @@ esp_err_t initialize() {
         read_action_button(&level_pressed),
         kTag,
         "PWR button start read failed");
-    const bool pressed = level_pressed &&
-        (!startup_vbus_remove_event || startup_press_event);
+    const bool pressed = startup_power_button_pressed(
+        level_pressed, startup_press_event, startup_release_event,
+        startup_short_press_event, startup_vbus_remove_event);
     if (level_pressed && !pressed) {
         ESP_LOGW(
             kTag,
-            "Ignored PWR level after USB removal without a PWR edge");
+            "Ignored a completed or ambiguous startup PWR level");
     }
     // AXP2101 state can survive an ESP reset. Restore the emergency long-hold
     // shutdown at an idle start, or suppress it when startup sampled a hold.

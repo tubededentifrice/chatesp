@@ -289,6 +289,27 @@ void test_power_button_filter_rejects_usb_source_transitions() {
     TEST_ASSERT_FALSE(button.update(false, false, false, 500).pressed);
 }
 
+void test_startup_power_button_ignores_a_completed_battery_wake() {
+    TEST_ASSERT_FALSE(chatesp::startup_power_button_pressed(
+        true, true, true, true, false));
+    TEST_ASSERT_FALSE(chatesp::startup_power_button_pressed(
+        true, true, true, false, false));
+}
+
+void test_startup_power_button_keeps_a_held_battery_wake() {
+    TEST_ASSERT_TRUE(chatesp::startup_power_button_pressed(
+        true, true, false, false, false));
+    TEST_ASSERT_TRUE(chatesp::startup_power_button_pressed(
+        true, false, false, false, false));
+}
+
+void test_startup_power_button_rejects_a_usb_removal_latch() {
+    TEST_ASSERT_FALSE(chatesp::startup_power_button_pressed(
+        true, false, false, false, true));
+    TEST_ASSERT_TRUE(chatesp::startup_power_button_pressed(
+        true, true, false, false, true));
+}
+
 void test_power_button_filter_accepts_pmu_edges() {
     chatesp::PowerButtonFilter button{30};
     button.reset(false, 100);
@@ -678,6 +699,9 @@ int main(int, char **) {
     RUN_TEST(test_button_hold_preempts_active_work);
     RUN_TEST(test_button_debouncer_rejects_bounce_and_handles_wrap);
     RUN_TEST(test_power_button_filter_rejects_usb_source_transitions);
+    RUN_TEST(test_startup_power_button_ignores_a_completed_battery_wake);
+    RUN_TEST(test_startup_power_button_keeps_a_held_battery_wake);
+    RUN_TEST(test_startup_power_button_rejects_a_usb_removal_latch);
     RUN_TEST(test_power_button_filter_accepts_pmu_edges);
     RUN_TEST(test_power_button_filter_confirms_only_a_pmu_short_press);
     RUN_TEST(test_power_button_filter_quarantines_adjacent_usb_press_noise);
