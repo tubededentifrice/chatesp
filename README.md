@@ -32,7 +32,7 @@ ChatESP.*
 - **Short follow-up chat:** Continue the same conversation for 30 seconds. The
   device then clears the thread and sleeps.
 - **Travel Clock:** Use the large AMOLED as a landscape 24-hour clock with a
-  rounded seconds path.
+  one-pixel seconds line.
 - **Touch controls:** Pull down the top handle to change brightness or volume.
   You can also change both values by voice.
 - **User-controlled memory:** Ask ChatESP to save, remove, list, or compact up

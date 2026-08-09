@@ -242,6 +242,8 @@ bool UtcClock::current_local_time(
     output.minute = static_cast<std::uint8_t>(
         (seconds_in_day % 3'600U) / 60U);
     output.second = static_cast<std::uint8_t>(seconds_in_day % 60U);
+    output.millisecond = static_cast<std::uint16_t>(
+        (now_ms - observed_at_ms_) % 1'000U);
     return true;
 }
 

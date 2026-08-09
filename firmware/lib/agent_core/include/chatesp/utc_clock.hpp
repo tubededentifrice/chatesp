@@ -14,6 +14,7 @@ struct LocalTimeOfDay {
     std::uint8_t hour = 0;
     std::uint8_t minute = 0;
     std::uint8_t second = 0;
+    std::uint16_t millisecond = 0;
 };
 
 // Keeps UTC from the app or a trusted HTTP response and advances it with

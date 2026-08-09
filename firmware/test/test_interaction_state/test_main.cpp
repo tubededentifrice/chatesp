@@ -542,32 +542,42 @@ void test_clock_time_acquisition_has_a_bounded_network_window() {
         true, false, 200, 100));
 }
 
-void test_clock_snake_fills_and_drains_around_the_minute() {
-    chatesp::ClockSnakeSpan span = chatesp::clock_snake_span(2, 0);
-    TEST_ASSERT_EQUAL_UINT8(0, span.first);
-    TEST_ASSERT_EQUAL_UINT8(1, span.count);
-    TEST_ASSERT_TRUE(chatesp::clock_snake_section_visible(0, span));
-    TEST_ASSERT_FALSE(chatesp::clock_snake_section_visible(1, span));
+void test_clock_path_changes_one_pixel_at_a_time() {
+    constexpr std::uint16_t point_count = 1'500;
+    chatesp::ClockPathSpan span =
+        chatesp::clock_path_span(2, 0, point_count);
+    TEST_ASSERT_EQUAL_UINT16(0, span.first);
+    TEST_ASSERT_EQUAL_UINT16(0, span.count);
 
-    span = chatesp::clock_snake_span(2, 59);
-    TEST_ASSERT_EQUAL_UINT8(60, span.count);
-    TEST_ASSERT_TRUE(chatesp::clock_snake_section_visible(59, span));
+    span = chatesp::clock_path_span(2, 40, point_count);
+    TEST_ASSERT_EQUAL_UINT16(1, span.count);
+    TEST_ASSERT_TRUE(chatesp::clock_path_point_visible(0, span));
+    TEST_ASSERT_FALSE(chatesp::clock_path_point_visible(1, span));
 
-    span = chatesp::clock_snake_span(3, 0);
-    TEST_ASSERT_EQUAL_UINT8(1, span.first);
-    TEST_ASSERT_EQUAL_UINT8(59, span.count);
-    TEST_ASSERT_FALSE(chatesp::clock_snake_section_visible(0, span));
-    TEST_ASSERT_TRUE(chatesp::clock_snake_section_visible(59, span));
+    span = chatesp::clock_path_span(2, 59'999, point_count);
+    TEST_ASSERT_EQUAL_UINT16(point_count - 1, span.count);
+    TEST_ASSERT_TRUE(chatesp::clock_path_point_visible(
+        point_count - 2, span));
 
-    span = chatesp::clock_snake_span(3, 59);
-    TEST_ASSERT_EQUAL_UINT8(60, span.first);
-    TEST_ASSERT_EQUAL_UINT8(0, span.count);
+    span = chatesp::clock_path_span(3, 0, point_count);
+    TEST_ASSERT_EQUAL_UINT16(0, span.first);
+    TEST_ASSERT_EQUAL_UINT16(point_count, span.count);
+
+    span = chatesp::clock_path_span(3, 40, point_count);
+    TEST_ASSERT_EQUAL_UINT16(1, span.first);
+    TEST_ASSERT_EQUAL_UINT16(point_count - 1, span.count);
+    TEST_ASSERT_FALSE(chatesp::clock_path_point_visible(0, span));
+    TEST_ASSERT_TRUE(chatesp::clock_path_point_visible(1, span));
+
+    span = chatesp::clock_path_span(3, 60'000, point_count);
+    TEST_ASSERT_EQUAL_UINT16(point_count - 1, span.first);
+    TEST_ASSERT_EQUAL_UINT16(1, span.count);
 }
 
 void test_clock_configuration_and_time_text_are_bounded() {
     TEST_ASSERT_TRUE(chatesp::ClockStyle{}.valid());
     chatesp::ClockStyle invalid;
-    invalid.seconds_width_px = 21;
+    invalid.edge_inset_px = 25;
     TEST_ASSERT_FALSE(invalid.valid());
 
     const auto available = chatesp::clock_time_text(
@@ -581,6 +591,9 @@ void test_clock_configuration_and_time_text_are_bounded() {
     const auto invalid_time = chatesp::clock_time_text(
         true, chatesp::ClockTime{24, 0, 0});
     TEST_ASSERT_EQUAL_STRING("--:--", invalid_time.data());
+    const auto invalid_millisecond = chatesp::clock_time_text(
+        true, chatesp::ClockTime{12, 0, 0, 1'000});
+    TEST_ASSERT_EQUAL_STRING("--:--", invalid_millisecond.data());
 }
 
 void test_pairing_code_always_uses_chat_orientation() {
@@ -641,7 +654,7 @@ int main(int, char **) {
     RUN_TEST(test_quick_controls_defer_flash_work_until_input_is_idle);
     RUN_TEST(test_mode_button_accepts_only_a_short_complete_press);
     RUN_TEST(test_clock_time_acquisition_has_a_bounded_network_window);
-    RUN_TEST(test_clock_snake_fills_and_drains_around_the_minute);
+    RUN_TEST(test_clock_path_changes_one_pixel_at_a_time);
     RUN_TEST(test_clock_configuration_and_time_text_are_bounded);
     RUN_TEST(test_pairing_code_always_uses_chat_orientation);
     return UNITY_END();

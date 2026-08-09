@@ -137,21 +137,21 @@ void render_chat(std::ostringstream &output, const DisplayView &view) {
 
 void render_clock(std::ostringstream &output, const Snapshot &snapshot) {
     const ClockTime time = snapshot.clock_time;
-    const ClockSnakeSpan span = snapshot.clock_time_available
-        ? clock_snake_span(time.minute, time.second)
-        : ClockSnakeSpan{};
-    output << "<path d=\"M224 10 H390 Q438 10 438 58 V310 "
-              "Q438 358 390 358 H58 Q10 358 10 310 V58 Q10 10 58 10 Z\" "
-              "pathLength=\"60\" fill=\"none\" stroke=\"#242424\" "
-              "stroke-width=\"12\" stroke-linecap=\"round\"/>";
+    const ClockPathSpan span = snapshot.clock_time_available
+        ? clock_path_span(
+              time.minute,
+              static_cast<std::uint32_t>(time.second) * 1'000U +
+                  time.millisecond,
+              60'000)
+        : ClockPathSpan{};
     if (span.count != 0) {
         output << "<path d=\"M224 10 H390 Q438 10 438 58 V310 "
                   "Q438 358 390 358 H58 Q10 358 10 310 V58 Q10 10 58 10 Z\" "
-                  "pathLength=\"60\" fill=\"none\" stroke=\"white\" "
-                  "stroke-width=\"12\" stroke-linecap=\"round\" "
+                  "pathLength=\"60000\" fill=\"none\" stroke=\"white\" "
+                  "stroke-width=\"1\" "
                   "stroke-dasharray=\""
                << static_cast<unsigned>(span.count) << ' '
-               << static_cast<unsigned>(60U - span.count)
+               << static_cast<unsigned>(60'000U - span.count)
                << "\" stroke-dashoffset=\"-"
                << static_cast<unsigned>(span.first) << "\"/>";
     }

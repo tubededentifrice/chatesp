@@ -11,6 +11,7 @@
 #include "bsp/esp-bsp.h"
 #include "chatesp/device_preferences.hpp"
 #include "chatesp/quick_controls.hpp"
+#include "esp_heap_caps.h"
 #include "lvgl.h"
 #include "recording_spectrum_view.hpp"
 
@@ -66,9 +67,8 @@ struct ControlSlider {
     std::uint8_t minimum_percent = 0;
     std::uint8_t value_percent = 0;
 };
-constexpr std::size_t kClockSnakePointsPerSecond = 2;
-constexpr std::size_t kClockSnakePointCount =
-    60 * kClockSnakePointsPerSecond;
+constexpr std::size_t kMaximumClockPathPointCount = 1'600;
+constexpr std::uint32_t kClockPathRefreshMs = 16;
 constexpr std::int32_t kClockWidth = image::kDisplayHeight;
 constexpr std::int32_t kClockHeight = image::kDisplayWidth;
 constexpr double kPi = 3.14159265358979323846;
@@ -99,14 +99,11 @@ ControlSlider *active_control = nullptr;
 lv_display_t *display_handle = nullptr;
 lv_obj_t *clock_root = nullptr;
 lv_obj_t *clock_time_label = nullptr;
+lv_timer_t *clock_path_timer = nullptr;
 
-struct ClockPoint {
-    std::int16_t x = 0;
-    std::int16_t y = 0;
-};
-
-std::array<ClockPoint, kClockSnakePointCount> clock_snake_points{};
-ClockSnakeSpan shown_clock_snake{};
+lv_point_precise_t *clock_path_points = nullptr;
+std::uint16_t clock_path_point_count = 0;
+ClockPathSpan shown_clock_path{};
 
 image::Rgb565Frame image_frame;
 lv_image_dsc_t image_descriptor{};
@@ -134,6 +131,8 @@ ClockStyle clock_style{};
 std::uint8_t shown_clock_hour = 0xff;
 std::uint8_t shown_clock_minute = 0xff;
 std::uint8_t shown_clock_second = 0xff;
+std::uint16_t shown_clock_millisecond = 0;
+std::uint32_t shown_clock_tick = 0;
 bool shown_clock_available = false;
 bool clock_face_initialized = false;
 std::array<char, agent::Limits::max_plot_title_bytes + 1> plot_title_buffer{};
@@ -419,7 +418,11 @@ void rounded_clock_point(double distance, double &x, double &y) {
     y = top;
 }
 
-void layout_clock_snake() {
+void layout_clock_path() {
+    if (clock_path_points == nullptr) {
+        clock_path_point_count = 0;
+        return;
+    }
     const double inset = clock_style.edge_inset_px;
     const double radius = clock_style.corner_radius_px;
     const double horizontal =
@@ -428,31 +431,62 @@ void layout_clock_snake() {
         static_cast<double>(kClockHeight) - 2.0 * inset - 2.0 * radius;
     const double perimeter =
         2.0 * horizontal + 2.0 * vertical + 2.0 * kPi * radius;
-    for (std::size_t index = 0; index < clock_snake_points.size(); ++index) {
+    const std::size_t sample_count = static_cast<std::size_t>(
+        std::ceil(perimeter * 2.0));
+    clock_path_point_count = 0;
+    for (std::size_t index = 0;
+         index < sample_count &&
+         clock_path_point_count < kMaximumClockPathPointCount;
+         ++index) {
         double x = 0.0;
         double y = 0.0;
         rounded_clock_point(
-            (static_cast<double>(index) + 0.5) * perimeter /
-                static_cast<double>(clock_snake_points.size()),
+            static_cast<double>(index) * perimeter /
+                static_cast<double>(sample_count),
             x, y);
-        clock_snake_points[index] = ClockPoint{
-            static_cast<std::int16_t>(std::lround(x)),
-            static_cast<std::int16_t>(std::lround(y)),
+        const lv_point_precise_t candidate{
+            static_cast<lv_value_precise_t>(std::lround(x)),
+            static_cast<lv_value_precise_t>(std::lround(y)),
         };
+        if (clock_path_point_count != 0) {
+            const lv_point_precise_t &previous =
+                clock_path_points[clock_path_point_count - 1];
+            if (candidate.x == previous.x && candidate.y == previous.y) {
+                continue;
+            }
+        }
+        clock_path_points[clock_path_point_count++] = candidate;
     }
 }
 
-void draw_clock_block(
-    lv_layer_t *layer, const lv_area_t &root,
-    lv_draw_rect_dsc_t &descriptor, std::int32_t x, std::int32_t y,
-    std::int32_t width, std::int32_t height) {
-    const lv_area_t area{
-        root.x1 + x,
-        root.y1 + y,
-        root.x1 + x + width - 1,
-        root.y1 + y + height - 1,
-    };
-    lv_draw_rect(layer, &descriptor, &area);
+ClockPathSpan current_clock_path_span() {
+    if (!shown_clock_available || clock_path_point_count == 0) {
+        return {};
+    }
+    const std::uint32_t elapsed_ms =
+        static_cast<std::uint32_t>(shown_clock_second) * 1'000U +
+        shown_clock_millisecond + lv_tick_elaps(shown_clock_tick);
+    const std::uint8_t minute = static_cast<std::uint8_t>(
+        (static_cast<std::uint32_t>(shown_clock_minute) +
+         elapsed_ms / 60'000U) % 60U);
+    return clock_path_span(
+        minute, elapsed_ms % 60'000U, clock_path_point_count);
+}
+
+bool same_clock_path(ClockPathSpan left, ClockPathSpan right) {
+    return left.first == right.first && left.count == right.count;
+}
+
+void clock_path_timer_callback(lv_timer_t *) {
+    if (!clock_mode || clock_root == nullptr || !shown_clock_available) {
+        return;
+    }
+    const ClockPathSpan next = current_clock_path_span();
+    if (same_clock_path(next, shown_clock_path)) {
+        return;
+    }
+    shown_clock_path = next;
+    lv_obj_invalidate(clock_root);
 }
 
 void draw_clock(lv_event_t *event) {
@@ -464,27 +498,41 @@ void draw_clock(lv_event_t *event) {
     if (layer == nullptr || object == nullptr) {
         return;
     }
-    lv_area_t root;
-    lv_obj_get_coords(object, &root);
-
-    lv_draw_rect_dsc_t descriptor;
-    lv_draw_rect_dsc_init(&descriptor);
-    descriptor.base.layer = layer;
-    descriptor.bg_opa = LV_OPA_COVER;
-    descriptor.radius = LV_RADIUS_CIRCLE;
-    descriptor.bg_color = lv_color_hex(clock_style.seconds_rgb);
-    const std::int32_t point_size = clock_style.seconds_width_px;
-    for (std::size_t index = 0; index < clock_snake_points.size(); ++index) {
-        const std::uint8_t section = static_cast<std::uint8_t>(
-            index / kClockSnakePointsPerSecond);
-        if (!clock_snake_section_visible(section, shown_clock_snake)) {
-            continue;
-        }
-        const ClockPoint point = clock_snake_points[index];
-        draw_clock_block(
-            layer, root, descriptor, point.x - point_size / 2,
-            point.y - point_size / 2, point_size, point_size);
+    if (shown_clock_path.count == 0 || clock_path_point_count == 0) {
+        return;
     }
+
+    lv_draw_line_dsc_t descriptor;
+    lv_draw_line_dsc_init(&descriptor);
+    descriptor.base.layer = layer;
+    descriptor.color = lv_color_hex(clock_style.seconds_rgb);
+    descriptor.opa = LV_OPA_COVER;
+    descriptor.width = 1;
+    descriptor.round_start = 1;
+    descriptor.round_end = 1;
+    if (shown_clock_path.count == 1) {
+        lv_area_t root;
+        lv_obj_get_coords(object, &root);
+        const lv_point_precise_t point =
+            clock_path_points[shown_clock_path.first];
+        const lv_area_t pixel{
+            root.x1 + static_cast<std::int32_t>(point.x),
+            root.y1 + static_cast<std::int32_t>(point.y),
+            root.x1 + static_cast<std::int32_t>(point.x),
+            root.y1 + static_cast<std::int32_t>(point.y),
+        };
+        lv_draw_rect_dsc_t pixel_descriptor;
+        lv_draw_rect_dsc_init(&pixel_descriptor);
+        pixel_descriptor.base.layer = layer;
+        pixel_descriptor.bg_color = descriptor.color;
+        pixel_descriptor.bg_opa = descriptor.opa;
+        lv_draw_rect(layer, &pixel_descriptor, &pixel);
+        return;
+    } else {
+        descriptor.points = clock_path_points + shown_clock_path.first;
+        descriptor.point_cnt = shown_clock_path.count;
+    }
+    lv_draw_line(layer, &descriptor);
 }
 
 void apply_clock_style() {
@@ -498,7 +546,8 @@ void apply_clock_style() {
             clock_time_label, lv_color_hex(clock_style.time_rgb),
             LV_PART_MAIN);
     }
-    layout_clock_snake();
+    layout_clock_path();
+    shown_clock_path = current_clock_path_span();
     lv_obj_invalidate(clock_root);
 }
 
@@ -522,6 +571,9 @@ void create_clock_face(lv_obj_t *screen) {
     lv_obj_center(clock_time_label);
 
     apply_clock_style();
+    clock_path_timer = lv_timer_create(
+        clock_path_timer_callback, kClockPathRefreshMs, nullptr);
+    lv_timer_pause(clock_path_timer);
     set_hidden(clock_root, true);
 }
 
@@ -1285,6 +1337,15 @@ bool start(std::uint8_t brightness_percent) {
             runtime::DevicePreferences::default_volume_percent}.valid()) {
         return false;
     }
+    if (clock_path_points == nullptr) {
+        clock_path_points = static_cast<lv_point_precise_t *>(
+            heap_caps_calloc(
+                kMaximumClockPathPointCount, sizeof(lv_point_precise_t),
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (clock_path_points == nullptr) {
+            return false;
+        }
+    }
     lv_display_t *display = bsp_display_start();
     if (display == nullptr || bsp_display_backlight_off() != ESP_OK) {
         return false;
@@ -1333,6 +1394,9 @@ void show_app_mode(AppMode mode, InteractionState chat_state) {
     if (mode == AppMode::clock) {
         hide_fullscreen_visual();
         clock_mode = true;
+        if (clock_path_timer != nullptr) {
+            lv_timer_resume(clock_path_timer);
+        }
         apply_display_orientation();
         lv_obj_set_size(clock_root, kClockWidth, kClockHeight);
         if (!clock_face_initialized) {
@@ -1347,11 +1411,15 @@ void show_app_mode(AppMode mode, InteractionState chat_state) {
     }
 
     clock_mode = false;
+    if (clock_path_timer != nullptr) {
+        lv_timer_pause(clock_path_timer);
+    }
     set_hidden(clock_root, true);
     apply_display_orientation();
     shown_clock_minute = 0xff;
     shown_clock_hour = 0xff;
     shown_clock_second = 0xff;
+    shown_clock_millisecond = 0;
     shown_clock_available = false;
     clock_face_initialized = false;
     show_state(chat_state);
@@ -1361,28 +1429,29 @@ void show_clock_time(bool available, ClockTime time) {
     if (clock_root == nullptr || (available && !time.valid())) {
         return;
     }
-    if (clock_face_initialized && available == shown_clock_available &&
-        (!available || (time.minute == shown_clock_minute &&
-                        time.second == shown_clock_second &&
-                        time.hour == shown_clock_hour))) {
-        return;
-    }
+    const bool text_changed =
+        !clock_face_initialized || available != shown_clock_available ||
+        (available && (time.minute != shown_clock_minute ||
+                       time.hour != shown_clock_hour));
+    const ClockPathSpan previous_path = shown_clock_path;
     shown_clock_available = available;
     clock_face_initialized = true;
     shown_clock_minute = available ? time.minute : 0xff;
     shown_clock_second = available ? time.second : 0xff;
     shown_clock_hour = available ? time.hour : 0xff;
+    shown_clock_millisecond = available ? time.millisecond : 0;
+    shown_clock_tick = lv_tick_get();
 
-    clock_time_buffer = clock_time_text(available, time);
-    if (clock_time_label != nullptr) {
+    if (text_changed && clock_time_label != nullptr) {
+        clock_time_buffer = clock_time_text(available, time);
         lv_label_set_text_static(clock_time_label, clock_time_buffer.data());
         lv_obj_center(clock_time_label);
     }
 
-    shown_clock_snake = available
-        ? clock_snake_span(time.minute, time.second)
-        : ClockSnakeSpan{};
-    lv_obj_invalidate(clock_root);
+    shown_clock_path = current_clock_path_span();
+    if (text_changed || !same_clock_path(previous_path, shown_clock_path)) {
+        lv_obj_invalidate(clock_root);
+    }
 }
 
 bool enable_quick_controls(

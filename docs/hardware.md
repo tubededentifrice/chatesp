@@ -144,9 +144,11 @@ The connected V2 board must pass these checks for this control change:
 - a BLE pairing code uses the portrait ChatESP orientation with the buttons on
   the right, a pairing request wakes the AMOLED, and Clock returns to its prior
   orientation when the code closes;
-- Clock shows only large white 24-hour time and a white seconds path on black;
+- Clock shows only large white 24-hour time and a one-pixel white seconds line
+  on black;
 - the seconds path follows the rounded screen shape, starts at 12 o'clock,
-  fills on even minutes, and drains on odd minutes;
+  changes by one display pixel at a time, fills on even minutes, and drains on
+  odd minutes;
 - Clock gets time from authenticated phone context or NTP, gets the UTC offset
   from the phone or the bounded IP fallback, and continues from monotonic time
   while the ChatESP device stays powered;

@@ -56,12 +56,14 @@ adapter owns the GPIO0 pin value.
 Clock uses LVGL software rotation to turn the UI 90 degrees counterclockwise.
 The 448-by-368 layout puts the USB port at the bottom. A large, anti-aliased
 Lato face shows 24-hour local time with tabular digits. A rounded white path
-follows an inset rounded rectangle. Its 60 bounded sections fill clockwise on
-even minutes and drain clockwise on odd minutes. The path starts at 12
-o'clock. The clock style is one validated value with background, time,
-seconds, radius, inset, and path-width fields. This keeps later phone
-customization separate from the drawing code. The same quick-control panel
-stays available in the rotated layout.
+follows an inset rounded rectangle. The path is a plain, one-pixel line. Its
+endpoint advances by one distinct display pixel at a time on even minutes. It
+removes one pixel at a time in the same direction on odd minutes. A 16 ms timer
+keeps each pixel change independent from the one-second time update. The path
+starts at 12 o'clock. The clock style is one validated value with background,
+time, seconds, radius, and inset fields. This keeps later phone customization
+separate from the drawing code. The same quick-control panel stays available
+in the rotated layout.
 
 The top edge of the touch display has a small control handle. A tap or a
 48-pixel downward swipe from the top 32 pixels opens a black control panel.

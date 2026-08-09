@@ -448,6 +448,7 @@ void test_utc_clock_exposes_phone_local_time_with_seconds() {
     TEST_ASSERT_EQUAL_UINT8(19, local.hour);
     TEST_ASSERT_EQUAL_UINT8(1, local.minute);
     TEST_ASSERT_EQUAL_UINT8(1, local.second);
+    TEST_ASSERT_EQUAL_UINT16(999, local.millisecond);
 }
 
 void test_utc_clock_rejects_invalid_offset_without_changing_time() {
@@ -475,6 +476,7 @@ void test_utc_clock_local_seconds_handle_millisecond_wrap() {
     TEST_ASSERT_EQUAL_UINT8(23, local.hour);
     TEST_ASSERT_EQUAL_UINT8(59, local.minute);
     TEST_ASSERT_EQUAL_UINT8(59, local.second);
+    TEST_ASSERT_EQUAL_UINT16(0, local.millisecond);
 }
 
 void test_ip_location_parser_keeps_only_coarse_context() {

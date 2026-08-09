@@ -31,14 +31,12 @@ struct ClockStyle {
     std::uint32_t seconds_rgb = 0xffffff;
     std::uint16_t corner_radius_px = 48;
     std::uint8_t edge_inset_px = 10;
-    std::uint8_t seconds_width_px = 12;
 
     [[nodiscard]] constexpr bool valid() const {
         return background_rgb <= 0xffffff && time_rgb <= 0xffffff &&
             seconds_rgb <= 0xffffff && corner_radius_px >= 16 &&
             corner_radius_px <= 120 && edge_inset_px >= 4 &&
-            edge_inset_px <= 24 && seconds_width_px >= 4 &&
-            seconds_width_px <= 20;
+            edge_inset_px <= 24;
     }
 };
 
@@ -46,33 +44,38 @@ struct ClockTime {
     std::uint8_t hour = 0;
     std::uint8_t minute = 0;
     std::uint8_t second = 0;
+    std::uint16_t millisecond = 0;
 
     [[nodiscard]] constexpr bool valid() const {
-        return hour <= 23 && minute <= 59 && second <= 59;
+        return hour <= 23 && minute <= 59 && second <= 59 &&
+            millisecond <= 999;
     }
 };
 
-struct ClockSnakeSpan {
-    std::uint8_t first = 0;
-    std::uint8_t count = 0;
+struct ClockPathSpan {
+    std::uint16_t first = 0;
+    std::uint16_t count = 0;
 };
 
-// Use one perimeter section for each second. Even minutes fill clockwise from
-// 12 o'clock. Odd minutes drain in the same direction.
-[[nodiscard]] constexpr ClockSnakeSpan clock_snake_span(
-    std::uint8_t minute, std::uint8_t second) {
-    const std::uint8_t bounded_second = second > 59 ? 59 : second;
-    const std::uint8_t changed = static_cast<std::uint8_t>(bounded_second + 1);
+// Use one step for each distinct perimeter pixel. Even minutes fill clockwise
+// from 12 o'clock. Odd minutes remove pixels in the same direction.
+[[nodiscard]] constexpr ClockPathSpan clock_path_span(
+    std::uint8_t minute, std::uint32_t millisecond_in_minute,
+    std::uint16_t point_count) {
+    const std::uint32_t bounded_millisecond =
+        millisecond_in_minute > 59'999 ? 59'999 : millisecond_in_minute;
+    const std::uint16_t changed = static_cast<std::uint16_t>(
+        bounded_millisecond * point_count / 60'000U);
     return (minute & 1U) == 0U
-        ? ClockSnakeSpan{0, changed}
-        : ClockSnakeSpan{
-              changed, static_cast<std::uint8_t>(60U - changed)};
+        ? ClockPathSpan{0, changed}
+        : ClockPathSpan{
+              changed, static_cast<std::uint16_t>(point_count - changed)};
 }
 
-[[nodiscard]] constexpr bool clock_snake_section_visible(
-    std::uint8_t section, ClockSnakeSpan span) {
-    return section >= span.first &&
-        section < static_cast<std::uint8_t>(span.first + span.count);
+[[nodiscard]] constexpr bool clock_path_point_visible(
+    std::uint16_t point, ClockPathSpan span) {
+    return point >= span.first &&
+        point < static_cast<std::uint32_t>(span.first) + span.count;
 }
 
 [[nodiscard]] constexpr std::array<char, 6> clock_time_text(

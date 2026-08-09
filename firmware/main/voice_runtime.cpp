@@ -1263,7 +1263,9 @@ private:
         with_display([available, local]() {
             ui::show_clock_time(
                 available,
-                ClockTime{local.hour, local.minute, local.second});
+                ClockTime{
+                    local.hour, local.minute, local.second,
+                    local.millisecond});
         });
     }
 
