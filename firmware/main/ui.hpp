@@ -81,7 +81,6 @@ esp_err_t sleep(bool keep_panel_ready);
 esp_err_t wake(
     InteractionState state, std::uint8_t brightness_percent,
     AppMode mode = AppMode::chat);
-esp_err_t reassert_panel(std::uint8_t brightness_percent);
 esp_err_t set_brightness(std::uint8_t brightness_percent);
 
 }  // namespace chatesp::ui

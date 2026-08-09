@@ -1907,26 +1907,23 @@ esp_err_t wake(
     hide_fullscreen_visual();
     set_content({}, kMaximumAnswerBytes);
     show_app_mode(mode, state);
-    lv_refr_now(nullptr);
-    bsp_display_unlock();
-    const esp_err_t wake_error =
-        bsp_display_brightness_set(brightness_percent);
+    // A command acknowledgement does not prove that the CO5300 output stage
+    // is active. Replay its bounded initialization table on each deliberate
+    // wake. Keep the LVGL lock so its task cannot start a transfer while the
+    // command table changes the panel state.
+    const esp_err_t wake_error = bsp_display_recover(brightness_percent);
     if (wake_error != ESP_OK) {
+        bsp_display_unlock();
         return wake_error;
     }
-    // Redraw once after panel-on. The CO5300 can acknowledge an off-screen
-    // flush without making it visible until the next transfer.
-    if (!bsp_display_lock(25)) {
-        return ESP_ERR_TIMEOUT;
-    }
+    // Send one complete frame after panel-on. The sleep overlay left a black
+    // frame in panel memory, so the recovery does not expose stale content.
     lv_obj_invalidate(active_screen());
-    lv_refr_now(nullptr);
+    lv_refr_now(display_handle);
+    const esp_err_t brightness_error =
+        bsp_display_brightness_set(brightness_percent);
     bsp_display_unlock();
-    return bsp_display_brightness_set(brightness_percent);
-}
-
-esp_err_t reassert_panel(std::uint8_t brightness_percent) {
-    return set_brightness(brightness_percent);
+    return brightness_error;
 }
 
 esp_err_t set_brightness(std::uint8_t brightness_percent) {

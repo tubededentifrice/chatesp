@@ -12,10 +12,12 @@ later brightness and display-on commands while its pixels stay black. Keeping
 the initialized panel at its current brightness avoids this false-success wake
 state. Black AMOLED pixels emit no visible light. USB stays available, so the
 next upload can reset and flash the board without a manual button sequence. A
-PWR-button press removes the black frame and redraws the display. The top mode
-button does not wake it and has no effect while it sleeps. The ChatESP footer
-shows a small centered `DEV` marker. Production firmware does not create this
-marker.
+PWR-button press removes the black frame and redraws the display. The wake path
+also replays the bounded CO5300 initialization table, restores brightness, and
+sends one complete frame. It does not reset the panel or touch controller. The
+top mode button does not wake it and has no effect while it sleeps. The ChatESP
+footer shows a small centered `DEV` marker. Production firmware does not create
+this marker.
 
 Build and upload development mode with one command:
 

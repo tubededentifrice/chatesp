@@ -24,7 +24,11 @@ button queue can accept input. It does not use a minimum splash timer. An
 in-session display wake shows the current interaction state instead.
 Development soft sleep keeps the CO5300 initialized at its current brightness
 and covers the screen with one full black frame. Wake removes this frame and
-does not depend on a zero-to-nonzero brightness transition.
+does not depend on a zero-to-nonzero brightness transition. Each deliberate
+in-session wake also replays the bounded CO5300 initialization table, restores
+the selected brightness, and sends one complete frame. It does not reset the
+panel or CST820 touch controller. This recovers a panel that accepts commands
+but keeps its output stage black.
 
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short message that identifies the failed operation. The

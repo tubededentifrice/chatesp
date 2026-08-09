@@ -81,6 +81,20 @@ esp_err_t bsp_display_brightness_init(void);
 esp_err_t bsp_display_brightness_set(int brightness_percent);
 
 /**
+ * @brief Restore the initialized panel state after an in-session wake
+ *
+ * This replays the panel initialization commands without resetting the panel
+ * or touch controller. It then restores the requested brightness.
+ *
+ * @param[in] brightness_percent Brightness in [%]
+ * @return
+ *      - ESP_OK                On success
+ *      - ESP_ERR_INVALID_ARG   Parameter error
+ *      - ESP_ERR_INVALID_STATE Display is not initialized
+ */
+esp_err_t bsp_display_recover(int brightness_percent);
+
+/**
  * @brief Turn on display backlight
  *
  * Brightness is controlled with PWM signal to a pin controlling backlight.

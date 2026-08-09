@@ -26,6 +26,12 @@ creates a CO5300 panel. It probes both touch types, but it does not select an
 SH8601 display. The ChatESP board adapter must add the original-board SH8601
 path before original-board support is complete.
 
+The V2 adapter configures the LCD and CST820 reset GPIO values as not connected.
+An in-session display wake does not reset either controller. Firmware replays
+the bounded CO5300 initialization table while LVGL is locked, restores the
+selected brightness, and sends one complete frame. A brightness or display-on
+command acknowledgement alone is not wake proof.
+
 The LVGL draw and software-rotation buffers are DMA-capable and use internal
 memory. The board allocates them during display start. Do not use a normal
 buffer that makes the SPI driver allocate an equivalent temporary DMA buffer
@@ -178,6 +184,8 @@ The connected V2 board must pass these checks for this control change:
 - the splash changes to `READY` as soon as the runtime can accept input, with
   no added minimum delay;
 - an in-session display wake shows the current state and not the boot splash;
+- an in-session display wake after each soft sleep or USB-held production
+  system-off restores pixels without a panel or touch-controller reset;
 - a held bottom PWR press shows `LISTENING`, and release shows `TRANSCRIBING`;
 - the `LISTENING` view shows responsive low-to-high frequency bars and does
   not show one total-volume bar;

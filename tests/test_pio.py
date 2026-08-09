@@ -382,6 +382,39 @@ class PlatformioWrapperTests(unittest.TestCase):
         self.assertIn("panel_brightness_is_zero", board_source)
         self.assertIn("waking_from_zero", board_source)
 
+    def test_display_wake_reinitializes_without_controller_reset(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        board_source = (
+            root
+            / "firmware"
+            / "components"
+            / "chatesp_board"
+            / "esp32_s3_touch_amoled_1_8.c"
+        ).read_text(encoding="utf-8")
+        recover_start = board_source.index("esp_err_t bsp_display_recover")
+        recover_end = board_source.index(
+            "esp_err_t bsp_display_backlight_off", recover_start
+        )
+        recover_source = board_source[recover_start:recover_end]
+        self.assertIn("esp_lcd_panel_init(panel_handle)", recover_source)
+        self.assertNotIn("esp_lcd_panel_reset", recover_source)
+        self.assertNotIn("esp_lcd_touch", recover_source)
+        self.assertIn("panel_brightness_is_zero = true", recover_source)
+
+        ui_source = (root / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        wake_start = ui_source.index("esp_err_t wake(")
+        wake_end = ui_source.index("esp_err_t set_brightness", wake_start)
+        wake_source = ui_source[wake_start:wake_end]
+        self.assertLess(
+            wake_source.index("bsp_display_recover(brightness_percent)"),
+            wake_source.index("lv_refr_now(display_handle)"),
+        )
+        self.assertIn(
+            "bsp_display_brightness_set(brightness_percent)", wake_source
+        )
+
     def test_device_policy_rejects_an_unsafe_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
