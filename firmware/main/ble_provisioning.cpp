@@ -1850,6 +1850,11 @@ bool advertising_recovery_requested() {
     return s_advertise_recovery_requested.load(std::memory_order_acquire);
 }
 
+bool secure_link_connected() {
+    return s_running.load(std::memory_order_acquire) &&
+        s_http_proxy_secure.load(std::memory_order_acquire);
+}
+
 bool http_proxy_available() {
     if (!s_running.load(std::memory_order_acquire) ||
         !s_http_proxy_subscribed.load(std::memory_order_acquire) ||

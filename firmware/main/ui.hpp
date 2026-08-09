@@ -12,11 +12,12 @@
 
 namespace chatesp::ui {
 
-enum class WifiIndicator : std::uint8_t {
+enum class RadioIndicator : std::uint8_t {
     setup,
     off,
-    connecting,
-    online,
+    wifi_connecting,
+    wifi_online,
+    ble_online,
     failed,
 };
 
@@ -67,7 +68,7 @@ void show_wifi_progress(std::string_view detail);
 void show_model_progress(std::string_view detail);
 void show_ble_passkey(std::uint32_t passkey, bool visible);
 void show_footer(
-    WifiIndicator wifi, bool battery_available,
+    RadioIndicator radio, std::uint8_t signal_band, bool battery_available,
     std::uint8_t battery_percent, bool battery_charging);
 [[nodiscard]] bool show_fullscreen_image(image::Rgb565Frame &&frame);
 [[nodiscard]] bool show_fullscreen_plot(const agent::PlotData &plot);

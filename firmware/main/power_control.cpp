@@ -400,7 +400,8 @@ std::optional<BatteryStatus> battery_status() {
     const bool charging =
         read_axp2101(kAxp2101Status2, &status2) == ESP_OK &&
         axp2101_status_is_charging(status2);
-    return BatteryStatus{percent, charging};
+    return BatteryStatus{
+        percent, charging, axp2101_status_has_external_power(status)};
 }
 
 std::optional<std::uint8_t> battery_percent() {

@@ -1217,7 +1217,7 @@ void create_screen() {
     lv_obj_set_style_text_align(
         battery_status_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_align(battery_status_label, LV_ALIGN_BOTTOM_RIGHT, -30, -20);
-    show_footer(WifiIndicator::off, false, 0, false);
+    show_footer(RadioIndicator::off, 0, false, 0, false);
 
     image_overlay = lv_image_create(screen);
     lv_obj_set_size(
@@ -1613,28 +1613,37 @@ void show_ble_passkey(std::uint32_t passkey, bool visible) {
 }
 
 void show_footer(
-    WifiIndicator wifi, bool battery_available,
+    RadioIndicator radio, std::uint8_t signal_band, bool battery_available,
     std::uint8_t battery_percent, bool battery_charging) {
-    const char *wifi_text = LV_SYMBOL_WIFI " OFF";
-    switch (wifi) {
-        case WifiIndicator::setup:
-            wifi_text = LV_SYMBOL_SETTINGS " SETUP";
+    const char *radio_text = LV_SYMBOL_WIFI " OFF";
+    switch (radio) {
+        case RadioIndicator::setup:
+            radio_text = LV_SYMBOL_SETTINGS " SETUP";
             break;
-        case WifiIndicator::off:
-            wifi_text = LV_SYMBOL_WIFI " OFF";
+        case RadioIndicator::off:
+            radio_text = LV_SYMBOL_WIFI " OFF";
             break;
-        case WifiIndicator::connecting:
-            wifi_text = LV_SYMBOL_WIFI " CONNECTING";
+        case RadioIndicator::wifi_connecting:
+            radio_text = LV_SYMBOL_WIFI " CONNECTING";
             break;
-        case WifiIndicator::online:
-            wifi_text = LV_SYMBOL_WIFI " ONLINE";
+        case RadioIndicator::wifi_online:
+            radio_text = signal_band == 1
+                ? LV_SYMBOL_WIFI " |||"
+                : (signal_band == 2
+                       ? LV_SYMBOL_WIFI " ||"
+                       : (signal_band == 3
+                              ? LV_SYMBOL_WIFI " |"
+                              : LV_SYMBOL_WIFI " ?"));
             break;
-        case WifiIndicator::failed:
-            wifi_text = LV_SYMBOL_WARNING " RETRY";
+        case RadioIndicator::ble_online:
+            radio_text = LV_SYMBOL_BLUETOOTH;
+            break;
+        case RadioIndicator::failed:
+            radio_text = LV_SYMBOL_WARNING " RETRY";
             break;
     }
     copy_bounded(
-        wifi_text,
+        radio_text,
         wifi_status_buffer.data(),
         wifi_status_buffer.size(),
         kMaximumWifiStatusBytes);

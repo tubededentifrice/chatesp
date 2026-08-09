@@ -81,6 +81,13 @@ active. This value does not include the board RTC, battery protection, battery
 self-discharge, or board leakage. Measure complete board current on battery
 hardware before a battery-life claim.
 
+ChatESP requests AXP2101 system-off at or below 5 percent when the PMIC does
+not report good VBUS. This limit applies to development and production. Good
+VBUS prevents the low-battery request so the device can start and charge. The
+active runtime reads the gauge at most once every 30 seconds or after a VBUS
+event. It does not read the gauge after sleep starts. Production system-off
+also stops the processor, so no firmware polling occurs in that state.
+
 USB can keep the ESP32 powered after the PMIC accepts system-off. Production
 must stay in its completed sleep state and repeat the request at a one-second
 interval. It must not restore the display, radios, or normal runtime only
@@ -181,9 +188,13 @@ The connected V2 board must pass these checks for this control change:
   press starts `LISTENING` at the normal threshold;
 - 30 seconds after the final voice interaction, ChatESP sleeps, Wi-Fi stops,
   and the prior thread is not available;
-- the footer shows Wi-Fi connection state and a valid battery percentage, or a
-  clear unavailable value. While the battery charges, its icon and percentage
-  are green and a charge mark is visible;
+- the footer shows the active Wi-Fi or secure BLE icon. Connected Wi-Fi shows
+  one through three signal bars. The footer shows a valid battery percentage
+  or a clear unavailable value. While the battery charges, its icon and
+  percentage are green and a charge mark is visible;
+- at 6 percent on battery power, the device stays on. At 5 percent, it requests
+  system-off in development and production. Good VBUS prevents this request;
+- after sleep starts, the firmware does not read the battery gauge;
 - model text grows on the display before the complete answer is available;
 - smart quotation marks, long dashes, bullets, and ellipses in model text have
   the correct visible glyphs;

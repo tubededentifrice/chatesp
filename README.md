@@ -36,6 +36,9 @@ ChatESP.*
   one-pixel seconds line.
 - **Touch controls:** Pull down the top handle to change brightness or volume.
   You can also change both values by voice.
+- **Clear radio and power state:** The footer shows the active Wi-Fi or secure
+  BLE link, three Wi-Fi signal levels, battery charge state, and battery
+  percentage. Battery operation stops at 5 percent to protect the cell.
 - **User-controlled memory:** Ask ChatESP to save, remove, list, or compact up
   to ten short facts.
 - **Optional iOS setup:** Provision any number of devices over authenticated,

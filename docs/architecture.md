@@ -200,7 +200,9 @@ The station scans all 2.4 GHz channels and selects the strongest matching
 access point. It rejects access points below -75 dBm and retries the strongest
 candidate before it starts the existing 10-second background retry. It then
 uses modem power saving. Voice work uses the active Wi-Fi power mode. It stays
-connected only during the active session.
+connected only during the active session. The footer shows the active secure
+BLE link instead of Wi-Fi off. Connected Wi-Fi uses three RSSI bands. The exact
+RSSI does not enter a log path.
 ChatESP mode uses a 30-second idle timer in development and production. Clock
 mode resets that idle gate and stays on. A short PWR-button press can still
 request sleep in either mode. Sleep stops BLE and Wi-Fi. The app reports the
@@ -211,6 +213,10 @@ production stays in the completed sleep state and repeats the system-off
 request once per second. A bottom PWR press cancels this state and wakes the
 app. If USB is removed, the next request turns the main rails off. Production
 does not restore the full runtime only because USB held the power rail on.
+While the display is active, the runtime reads the battery at most once every
+30 seconds or after a power-source event. At or below 5 percent, it requests
+system-off when VBUS is not good. This protection uses system-off in development
+and production. The runtime does not read the battery after sleep starts.
 
 Each turn first uses a short required-tool route. The route is direct answer,
 web search, image search, restricted Python, memory management, or one
@@ -323,10 +329,12 @@ boot and creates a new thread.
   maximum tool-round count.
 - `conversation`: system prompt, short in-memory history, tool loop, and thread
   lifetime.
-- `ui`: terminal layout, rotated Clock face, streamed text, Wi-Fi and battery
-  footer, and state-specific motion. The battery footer becomes green and adds
-  a charge mark while battery current flows in the charge direction. It also
-  owns the bounded top control panel and touch gesture presentation.
+- `ui`: terminal layout, rotated Clock face, streamed text, radio and battery
+  footer, and state-specific motion. The radio footer shows the active Wi-Fi or
+  secure BLE link and three Wi-Fi signal levels. The battery footer becomes
+  green and adds a charge mark while battery current flows in the charge
+  direction. It also owns the bounded top control panel and touch gesture
+  presentation.
 - `provisioning`: versioned BLE packets, authenticated encrypted transfer,
   acknowledgement, and NVS persistence.
 - `device preferences`: a small versioned brightness and volume record. It is

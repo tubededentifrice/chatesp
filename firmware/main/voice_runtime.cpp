@@ -70,6 +70,7 @@ constexpr std::uint32_t kDisplaySleepRetryMs = 100;
 constexpr std::uint32_t kFooterRefreshMs = 100;
 constexpr std::uint32_t kRuntimeHeartbeatMs = 5'000;
 constexpr std::uint32_t kBatteryRefreshMs = 30'000;
+constexpr std::uint32_t kSignalRefreshMs = 2'000;
 constexpr std::uint32_t kAnswerStreamRefreshMs = 60;
 constexpr std::uint32_t kPoweroffGraceMs = 250;
 constexpr std::uint32_t kInteractionTimeoutMs = 180'000;
@@ -1358,31 +1359,37 @@ private:
         with_display([]() { ui::hide_fullscreen_visual(); });
     }
 
-    static ui::WifiIndicator wifi_indicator(
-        network::NetworkState state, bool configured) {
+    static ui::RadioIndicator radio_indicator(
+        network::NetworkState state, bool configured,
+        bool ble_connected) {
+        if (state == network::NetworkState::off && ble_connected) {
+            return ui::RadioIndicator::ble_online;
+        }
         if (!configured) {
-            return ui::WifiIndicator::setup;
+            return ui::RadioIndicator::setup;
         }
         switch (state) {
             case network::NetworkState::off:
-                return ui::WifiIndicator::off;
+                return ui::RadioIndicator::off;
             case network::NetworkState::connecting:
-                return ui::WifiIndicator::connecting;
+                return ui::RadioIndicator::wifi_connecting;
             case network::NetworkState::connected:
-                return ui::WifiIndicator::online;
+                return ui::RadioIndicator::wifi_online;
             case network::NetworkState::failed:
-                return ui::WifiIndicator::failed;
+                return ui::RadioIndicator::failed;
         }
-        return ui::WifiIndicator::failed;
+        return ui::RadioIndicator::failed;
     }
 
-    void draw_footer(ui::WifiIndicator wifi) {
+    void draw_footer(
+        ui::RadioIndicator radio, std::uint8_t signal_band) {
         if (!display_available_.load(std::memory_order_acquire)) {
             return;
         }
-        if (!with_display([this, wifi]() {
+        if (!with_display([this, radio, signal_band]() {
             ui::show_footer(
-                wifi,
+                radio,
+                signal_band,
                 battery_status_.has_value(),
                 battery_status_.has_value()
                     ? battery_status_->percent
@@ -1392,12 +1399,16 @@ private:
         })) {
             return;
         }
-        shown_wifi_ = wifi;
+        shown_radio_ = radio;
+        shown_signal_band_ = signal_band;
         shown_battery_status_ = battery_status_;
         footer_shown_ = true;
     }
 
-    void refresh_footer(std::uint32_t now_ms, bool force) {
+    void refresh_battery(std::uint32_t now_ms, bool force) {
+        if (!display_available_.load(std::memory_order_acquire)) {
+            return;
+        }
         const std::uint32_t source_revision =
             power::power_source_revision();
         const bool battery_due = force || !battery_checked_ ||
@@ -1410,12 +1421,36 @@ private:
             battery_checked_ = true;
             battery_checked_at_ms_ = now_ms;
             battery_power_source_revision_ = source_revision;
+            if (battery_status_.has_value() &&
+                power::low_battery_requires_shutdown(*battery_status_) &&
+                !low_battery_poweroff_pending_) {
+                low_battery_poweroff_pending_ = true;
+                ESP_LOGW(kTag, "Low battery system-off requested");
+                interaction_.cancel_for_sleep();
+            }
         }
-        const ui::WifiIndicator wifi = wifi_indicator(
-            network_.state(), settings_.has_wifi_credentials());
-        if (force || !footer_shown_ || wifi != shown_wifi_ ||
+    }
+
+    void refresh_footer(std::uint32_t now_ms, bool force) {
+        refresh_battery(now_ms, force);
+        const ui::RadioIndicator radio = radio_indicator(
+            network_.state(), settings_.has_wifi_credentials(),
+            ble_provisioning::secure_link_connected());
+        const bool signal_due = force || radio != radio_indicator_ ||
+            now_ms - signal_checked_at_ms_ >= kSignalRefreshMs;
+        if (signal_due) {
+            radio_indicator_ = radio;
+            signal_checked_at_ms_ = now_ms;
+            if (radio == ui::RadioIndicator::wifi_online) {
+                signal_band_ = network_.rssi_band();
+            } else {
+                signal_band_ = 0;
+            }
+        }
+        if (force || !footer_shown_ || radio != shown_radio_ ||
+            signal_band_ != shown_signal_band_ ||
             battery_status_ != shown_battery_status_) {
-            draw_footer(wifi);
+            draw_footer(radio, signal_band_);
         }
     }
 
@@ -1557,7 +1592,9 @@ private:
             refresh_footer(monotonic_ms(), true);
             // Allocate the BLE controller before Wi-Fi takes DMA-capable
             // internal RAM. Secure pairing also needs this headroom.
-            ensure_ble_started();
+            if (interaction_.state() != InteractionState::sleep_pending) {
+                ensure_ble_started();
+            }
         }
 
         std::uint32_t heartbeat_at_ms = monotonic_ms();
@@ -1651,11 +1688,16 @@ private:
                 retry_display_wake(now_ms);
             }
             retry_display_sleep(now_ms);
-            if (app_mode_.load(std::memory_order_acquire) == AppMode::chat &&
+            if (display_available_.load(std::memory_order_acquire) &&
                 !voice_priority_.load(std::memory_order_acquire) &&
                 now_ms - footer_checked_at_ms_ >= kFooterRefreshMs) {
                 footer_checked_at_ms_ = now_ms;
-                refresh_footer(now_ms, false);
+                if (app_mode_.load(std::memory_order_acquire) ==
+                    AppMode::chat) {
+                    refresh_footer(now_ms, false);
+                } else {
+                    refresh_battery(now_ms, false);
+                }
             }
             if (!recording &&
                 interaction_.state() == InteractionState::idle &&
@@ -1799,6 +1841,7 @@ private:
     }
 
     void wake_for_button(std::uint32_t now_ms) {
+        low_battery_poweroff_pending_ = false;
         display_available_.store(true, std::memory_order_release);
         display_sleep_pending_ = false;
         poweroff_gate_.recover();
@@ -2005,7 +2048,7 @@ private:
         agent::Error error = agent::Error::none;
         if (!use_phone_proxy) {
             if (!network_.connected()) {
-                draw_footer(ui::WifiIndicator::connecting);
+                draw_footer(ui::RadioIndicator::wifi_connecting, 0);
             }
             error = network_.connect(
                 settings_.wifi(), request_cancellation);
@@ -2393,11 +2436,14 @@ private:
         stop_ble();
 
         if (kDevelopmentMode) {
-            crash_diagnostics::mark(runtime::CrashEvent::soft_sleep_begin);
-            if (!poweroff_gate_.mark_soft_sleep()) {
-                display_available_.store(true, std::memory_order_release);
+            if (!low_battery_poweroff_pending_) {
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::soft_sleep_begin);
+                if (!poweroff_gate_.mark_soft_sleep()) {
+                    display_available_.store(true, std::memory_order_release);
+                }
+                return;
             }
-            return;
         }
         // The cancel window has ended. Zero brightness only when system-off
         // is now the next device state. An in-session wake must not depend on
@@ -2545,6 +2591,7 @@ private:
     }
 
     void recover_poweroff(std::uint32_t now_ms) {
+        low_battery_poweroff_pending_ = false;
         device_control_.cancel_power_off();
         display_available_.store(true, std::memory_order_release);
         display_sleep_pending_ = false;
@@ -2651,6 +2698,7 @@ private:
     std::uint32_t footer_checked_at_ms_ = 0;
     std::uint32_t battery_checked_at_ms_ = 0;
     std::uint32_t battery_power_source_revision_ = 0;
+    std::uint32_t signal_checked_at_ms_ = 0;
     std::uint32_t stream_text_refreshed_at_ms_ = 0;
     std::uint32_t applied_revision_ = 0;
     std::uint32_t mode_display_attempted_at_ms_ = 0;
@@ -2669,6 +2717,7 @@ private:
     bool display_wake_pending_ = false;
     bool display_sleep_pending_ = false;
     bool battery_checked_ = false;
+    bool low_battery_poweroff_pending_ = false;
     bool footer_shown_ = false;
     bool stream_text_shown_ = false;
     bool request_active_ = false;
@@ -2677,7 +2726,10 @@ private:
     bool clock_network_stop_pending_ = false;
     std::uint32_t clock_network_stop_started_at_ms_ = 0;
     bool mode_display_pending_ = false;
-    ui::WifiIndicator shown_wifi_ = ui::WifiIndicator::off;
+    ui::RadioIndicator radio_indicator_ = ui::RadioIndicator::off;
+    ui::RadioIndicator shown_radio_ = ui::RadioIndicator::off;
+    std::uint8_t signal_band_ = 0;
+    std::uint8_t shown_signal_band_ = 0;
     std::optional<power::BatteryStatus> battery_status_;
     std::optional<power::BatteryStatus> shown_battery_status_;
 };

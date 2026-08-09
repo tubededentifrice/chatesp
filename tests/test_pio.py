@@ -159,6 +159,7 @@ class PlatformioWrapperTests(unittest.TestCase):
         )
         self.assertIn("display_sleep_result = ui::sleep(true)", runtime)
         self.assertIn("if (kDevelopmentMode)", runtime)
+        self.assertIn("if (!low_battery_poweroff_pending_)", runtime)
         self.assertIn("sleep_overlay", ui)
         self.assertIn("keep_panel_ready\n        ? ESP_OK", ui)
 

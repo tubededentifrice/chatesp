@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "chatesp/radio_signal.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -423,10 +424,7 @@ std::uint8_t NetworkManager::rssi_band() const {
     if (esp_wifi_sta_get_ap_info(&access_point) != ESP_OK) {
         return 0;
     }
-    if (access_point.rssi >= -65) {
-        return 1;
-    }
-    return access_point.rssi >= -75 ? 2 : 3;
+    return radio::signal_band_from_rssi(access_point.rssi);
 }
 
 void NetworkManager::event_handler(

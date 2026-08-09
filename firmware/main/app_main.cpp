@@ -7,6 +7,7 @@
 #include "device_memory_store.hpp"
 #include "device_preferences_store.hpp"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,6 +41,27 @@ void show_start_error(const char *message) {
 void request_failure_sleep() {
     (void)chatesp::ui::sleep(false);
     (void)chatesp::power::power_off();
+}
+
+void enforce_startup_battery_limit() {
+    const auto status = chatesp::power::battery_status();
+    if (!status.has_value() ||
+        !chatesp::power::low_battery_requires_shutdown(*status)) {
+        return;
+    }
+    ESP_LOGW(kTag, "Low battery system-off requested at start");
+    while (true) {
+        const esp_err_t result = chatesp::power::power_off();
+        if (result != ESP_OK) {
+            ESP_LOGE(kTag, "Low battery system-off request failed");
+        }
+        vTaskDelay(pdMS_TO_TICKS(kSystemOffRetryMs));
+        const auto next_status = chatesp::power::battery_status();
+        if (next_status.has_value() &&
+            !chatesp::power::low_battery_requires_shutdown(*next_status)) {
+            esp_restart();
+        }
+    }
 }
 
 void wait_for_system_off_or_wake(chatesp::VoiceRuntime &runtime) {
@@ -95,6 +117,7 @@ extern "C" void app_main() {
     }
     chatesp::crash_diagnostics::mark(
         chatesp::runtime::CrashEvent::power_ready);
+    enforce_startup_battery_limit();
     const bool startup_button_down =
         chatesp::power::action_button_is_pressed();
     const std::uint32_t startup_button_at_ms = monotonic_ms();
