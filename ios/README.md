@@ -54,8 +54,10 @@ path for ChatESP cloud requests. The app accepts only bounded HTTPS request
 envelopes. It uses an ephemeral URL session, rejects non-HTTPS redirects, and
 follows no more than the device-specified two-redirect limit. It sends bulk
 response data with Core Bluetooth write-without-response flow control. It
-confirms response boundary frames. If this proxy is not ready, the firmware
-uses its configured Wi-Fi path.
+confirms response boundary frames. It forwards bounded `audio/pcm` data while
+a declared-length HTTPS body arrives. It keeps other responses bounded before
+transfer. If this proxy is not ready, the firmware uses its configured Wi-Fi
+path.
 
 If the app lost its local revision record, current firmware can return the
 active revision and fingerprint in a flagged error.

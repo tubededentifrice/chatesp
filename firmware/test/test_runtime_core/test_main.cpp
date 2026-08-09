@@ -31,8 +31,14 @@ public:
         return true;
     }
 
-    std::array<std::array<char, 161>, 4> values{};
-    std::array<std::size_t, 4> sizes{};
+    std::array<
+        std::array<
+            char,
+            chatesp::runtime::SpeechSegmenter::kMaximumSegmentBytes + 1>,
+        chatesp::runtime::SpeechSegmenter::kMaximumSegments> values{};
+    std::array<
+        std::size_t,
+        chatesp::runtime::SpeechSegmenter::kMaximumSegments> sizes{};
     std::size_t count = 0;
     bool accept = true;
 };
@@ -395,6 +401,8 @@ void test_pcm_start_policy_streams_only_with_safe_headroom() {
     chatesp::runtime::AdaptivePcmStartPolicy playback_rate;
     playback_rate.observe(2'048, 2'000);
     playback_rate.observe(9'600, 2'200);
+    TEST_ASSERT_FALSE(playback_rate.decided());
+    playback_rate.observe(24'000, 2'500);
     TEST_ASSERT_TRUE(playback_rate.decided());
     TEST_ASSERT_FALSE(playback_rate.streams_early());
     TEST_ASSERT_EQUAL_INT(
@@ -404,19 +412,24 @@ void test_pcm_start_policy_streams_only_with_safe_headroom() {
     chatesp::runtime::AdaptivePcmStartPolicy below_headroom;
     below_headroom.observe(2'048, 3'000);
     below_headroom.observe(9'600, 3'134);
+    below_headroom.observe(24'000, 3'417);
     TEST_ASSERT_FALSE(below_headroom.streams_early());
 
     chatesp::runtime::AdaptivePcmStartPolicy above_headroom;
     above_headroom.observe(2'048, 4'000);
-    above_headroom.observe(9'600, 4'133);
+    above_headroom.observe(9'600, 4'150);
+    TEST_ASSERT_FALSE(above_headroom.decided());
+    above_headroom.observe(24'000, 4'400);
     TEST_ASSERT_TRUE(above_headroom.streams_early());
 }
 
-void test_pcm_start_policy_keeps_a_slow_decision_until_complete() {
+void test_pcm_start_policy_keeps_a_steady_slow_decision_until_complete() {
     chatesp::runtime::AdaptivePcmStartPolicy policy;
     policy.observe(2'048, 1'000);
     policy.observe(9'600, 2'000);
-    policy.observe(100'000, 2'001);
+    TEST_ASSERT_FALSE(policy.decided());
+    policy.observe(24'000, 3'000);
+    policy.observe(100'000, 3'001);
 
     TEST_ASSERT_FALSE(policy.streams_early());
     TEST_ASSERT_EQUAL_INT(
@@ -508,27 +521,40 @@ void test_speech_segmenter_accepts_cumulative_split_updates() {
     const char complete[] = "Hello world. Next?";
     TEST_ASSERT_TRUE(
         segmenter.update(complete, sizeof(complete) - 1, output));
-    TEST_ASSERT_EQUAL_size_t(2, output.count);
+    TEST_ASSERT_EQUAL_size_t(1, output.count);
     TEST_ASSERT_EQUAL_STRING("Hello world.", output.values[0].data());
-    TEST_ASSERT_EQUAL_STRING("Next?", output.values[1].data());
     TEST_ASSERT_TRUE(segmenter.finish(output));
     TEST_ASSERT_EQUAL_size_t(2, output.count);
+    TEST_ASSERT_EQUAL_STRING("Next?", output.values[1].data());
 }
 
-void test_speech_segmenter_uses_clause_and_hard_limits() {
+void test_speech_segmenter_sends_one_complete_remainder() {
+    chatesp::runtime::SpeechSegmenter segmenter;
+    SegmentCollector output;
+    const char text[] =
+        "First sentence. Second sentence! Third sentence? Final clause.";
+    TEST_ASSERT_TRUE(segmenter.update(text, sizeof(text) - 1, output));
+    TEST_ASSERT_EQUAL_size_t(1, output.count);
+    TEST_ASSERT_EQUAL_STRING("First sentence.", output.values[0].data());
+    TEST_ASSERT_TRUE(segmenter.finish(output));
+    TEST_ASSERT_EQUAL_size_t(2, output.count);
+    TEST_ASSERT_EQUAL_STRING(
+        "Second sentence! Third sentence? Final clause.",
+        output.values[1].data());
+}
+
+void test_speech_segmenter_bounds_a_long_first_sentence() {
     chatesp::runtime::SpeechSegmenter segmenter;
     SegmentCollector output;
     std::array<char, 181> text{};
     text.fill('a');
-    text[96] = ',';
-    text[160] = ' ';
+    text[150] = ' ';
     TEST_ASSERT_TRUE(segmenter.update(text.data(), 180, output));
+    TEST_ASSERT_EQUAL_size_t(1, output.count);
+    TEST_ASSERT_EQUAL_size_t(150, output.sizes[0]);
     TEST_ASSERT_TRUE(segmenter.finish(output));
     TEST_ASSERT_EQUAL_size_t(2, output.count);
-    TEST_ASSERT_EQUAL_size_t(97, output.sizes[0]);
-    TEST_ASSERT_LESS_OR_EQUAL_size_t(
-        chatesp::runtime::SpeechSegmenter::kMaximumSegmentBytes,
-        output.sizes[1]);
+    TEST_ASSERT_EQUAL_size_t(29, output.sizes[1]);
 }
 
 void test_speech_segmenter_bounds_segments_and_spoken_bytes() {
@@ -543,10 +569,12 @@ void test_speech_segmenter_bounds_segments_and_spoken_bytes() {
     }
     TEST_ASSERT_TRUE(segmenter.update(text.data(), 640, output));
     TEST_ASSERT_TRUE(segmenter.finish(output));
-    TEST_ASSERT_EQUAL_size_t(4, output.count);
+    TEST_ASSERT_EQUAL_size_t(2, output.count);
     TEST_ASSERT_EQUAL_size_t(640, segmenter.emitted_bytes());
     TEST_ASSERT_TRUE(segmenter.update(text.data(), 641, output));
-    TEST_ASSERT_EQUAL_size_t(4, output.count);
+    TEST_ASSERT_EQUAL_size_t(2, output.count);
+    TEST_ASSERT_EQUAL_size_t(160, output.sizes[0]);
+    TEST_ASSERT_EQUAL_size_t(480, output.sizes[1]);
 }
 
 void test_speech_segmenter_propagates_sink_failure() {
@@ -575,6 +603,7 @@ void test_speech_segmenter_keeps_utf8_code_points_complete() {
     text[163] = 'k';
     text[164] = '!';
     TEST_ASSERT_TRUE(segmenter.update(text.data(), 165, output));
+    TEST_ASSERT_TRUE(segmenter.finish(output));
     TEST_ASSERT_EQUAL_size_t(2, output.count);
     TEST_ASSERT_EQUAL_size_t(158, output.sizes[0]);
     TEST_ASSERT_EQUAL_HEX8(0xE2, output.values[1][0]);
@@ -586,32 +615,34 @@ void test_speech_queue_orders_segments_and_applies_backpressure() {
     chatesp::runtime::SpeechSegmentQueue queue;
     TEST_ASSERT_TRUE(queue.push_speech_segment("one", 3));
     TEST_ASSERT_TRUE(queue.push_speech_segment("two", 3));
-    TEST_ASSERT_TRUE(queue.push_speech_segment("three", 5));
-    TEST_ASSERT_TRUE(queue.push_speech_segment("four", 4));
     TEST_ASSERT_TRUE(queue.full());
-    TEST_ASSERT_FALSE(queue.push_speech_segment("five", 4));
+    TEST_ASSERT_FALSE(queue.push_speech_segment("three", 5));
 
-    std::array<char, 161> output{};
+    std::array<
+        char,
+        chatesp::runtime::SpeechSegmentQueue::kSegmentBytes + 1> output{};
     std::size_t size = 0;
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(chatesp::runtime::SpeechQueueResult::ready),
-        static_cast<int>(queue.pop(output.data(), 160, size)));
+        static_cast<int>(queue.pop(output.data(), output.size() - 1, size)));
     TEST_ASSERT_EQUAL_STRING("one", output.data());
-    TEST_ASSERT_TRUE(queue.push_speech_segment("five", 4));
+    TEST_ASSERT_TRUE(queue.push_speech_segment("three", 5));
 }
 
 void test_speech_queue_finish_cancel_and_reset_are_bounded() {
     chatesp::runtime::SpeechSegmentQueue queue;
-    std::array<char, 161> output{};
+    std::array<
+        char,
+        chatesp::runtime::SpeechSegmentQueue::kSegmentBytes + 1> output{};
     std::size_t size = 0;
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(chatesp::runtime::SpeechQueueResult::empty),
-        static_cast<int>(queue.pop(output.data(), 160, size)));
+        static_cast<int>(queue.pop(output.data(), output.size() - 1, size)));
     TEST_ASSERT_TRUE(queue.push_speech_segment("private", 7));
     queue.discard_pending_and_finish();
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(chatesp::runtime::SpeechQueueResult::finished),
-        static_cast<int>(queue.pop(output.data(), 160, size)));
+        static_cast<int>(queue.pop(output.data(), output.size() - 1, size)));
     queue.reset();
     TEST_ASSERT_TRUE(queue.push_speech_segment("again", 5));
     queue.cancel();
@@ -619,7 +650,7 @@ void test_speech_queue_finish_cancel_and_reset_are_bounded() {
     TEST_ASSERT_TRUE(queue.empty());
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(chatesp::runtime::SpeechQueueResult::cancelled),
-        static_cast<int>(queue.pop(output.data(), 160, size)));
+        static_cast<int>(queue.pop(output.data(), output.size() - 1, size)));
 }
 
 void test_turn_timing_contains_only_phase_durations() {
@@ -664,7 +695,8 @@ int main(int, char **) {
     RUN_TEST(test_byte_ring_can_remove_an_unplayed_tail);
     RUN_TEST(test_pcm_start_policy_waits_for_its_prebuffer);
     RUN_TEST(test_pcm_start_policy_streams_only_with_safe_headroom);
-    RUN_TEST(test_pcm_start_policy_keeps_a_slow_decision_until_complete);
+    RUN_TEST(
+        test_pcm_start_policy_keeps_a_steady_slow_decision_until_complete);
     RUN_TEST(test_pcm_start_policy_handles_millisecond_wrap);
     RUN_TEST(test_poweroff_gate_routes_a_cold_wake_press);
     RUN_TEST(test_poweroff_gate_cancels_a_sleep_boundary);
@@ -672,7 +704,8 @@ int main(int, char **) {
     RUN_TEST(test_async_shutdown_gate_bounds_one_worker_lifecycle);
     RUN_TEST(test_interaction_deadline_is_bounded_and_handles_wrap);
     RUN_TEST(test_speech_segmenter_accepts_cumulative_split_updates);
-    RUN_TEST(test_speech_segmenter_uses_clause_and_hard_limits);
+    RUN_TEST(test_speech_segmenter_sends_one_complete_remainder);
+    RUN_TEST(test_speech_segmenter_bounds_a_long_first_sentence);
     RUN_TEST(test_speech_segmenter_bounds_segments_and_spoken_bytes);
     RUN_TEST(test_speech_segmenter_propagates_sink_failure);
     RUN_TEST(test_speech_segmenter_keeps_utf8_code_points_complete);

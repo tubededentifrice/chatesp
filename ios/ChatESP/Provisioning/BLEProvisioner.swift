@@ -299,6 +299,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var phoneProxyRequestID: UInt32?
     private var phoneProxyResponseData = Data()
     private var phoneProxyResponseOffset = 0
+    private var phoneProxyResponseExpectedSize: Int?
+    private var phoneProxyDownloadComplete = false
+    private var phoneProxyPendingErrorCode: UInt8?
     private var phoneProxyResponseEndSent = false
     private var phoneProxyErrorOnly = false
     private var phoneProxyPendingFrame: Data?
@@ -749,6 +752,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
         phoneProxyRequestID = nil
         phoneProxyResponseData.removeAll(keepingCapacity: false)
         phoneProxyResponseOffset = 0
+        phoneProxyResponseExpectedSize = nil
+        phoneProxyDownloadComplete = false
+        phoneProxyPendingErrorCode = nil
         phoneProxyResponseEndSent = false
         phoneProxyErrorOnly = false
         phoneProxyPendingFrame = nil
@@ -819,28 +825,56 @@ final class BLEProvisioner: NSObject, ObservableObject {
                     return
                 }
                 let expectedLength = response.expectedContentLength
+                let contentType = response.value(
+                    forHTTPHeaderField: "Content-Type") ?? ""
                 if expectedLength > Int64(proxyRequest.maximumResponseSize) {
                     self.sendPhoneProxyError(
                         requestID: proxyRequest.requestID, code: 2)
                     return
                 }
-                var data = Data()
-                if expectedLength > 0 {
-                    data.reserveCapacity(Int(expectedLength))
-                }
-                for try await byte in bytes {
-                    guard data.count < proxyRequest.maximumResponseSize else {
-                        session.invalidateAndCancel()
-                        self.sendPhoneProxyError(
-                            requestID: proxyRequest.requestID, code: 2)
-                        return
+                if let contentLength =
+                    PhoneProxyProtocolV1.streamablePCMResponseLength(
+                        contentType: contentType,
+                        expectedLength,
+                        maximumResponseSize:
+                            proxyRequest.maximumResponseSize) {
+                    try self.beginPhoneProxyResponse(
+                        requestID: proxyRequest.requestID,
+                        response: response,
+                        contentLength: contentLength)
+                    var chunk = Data()
+                    chunk.reserveCapacity(
+                        PhoneProxyProtocolV1.streamingChunkSize)
+                    for try await byte in bytes {
+                        chunk.append(byte)
+                        if chunk.count ==
+                            PhoneProxyProtocolV1.streamingChunkSize {
+                            try self.appendPhoneProxyResponse(chunk)
+                            chunk.removeAll(keepingCapacity: true)
+                            await Task.yield()
+                        }
                     }
-                    data.append(byte)
+                    if !chunk.isEmpty {
+                        try self.appendPhoneProxyResponse(chunk)
+                    }
+                    try self.completePhoneProxyResponseDownload()
+                } else {
+                    var data = Data()
+                    for try await byte in bytes {
+                        guard data.count <
+                                proxyRequest.maximumResponseSize else {
+                            session.invalidateAndCancel()
+                            self.sendPhoneProxyError(
+                                requestID: proxyRequest.requestID, code: 2)
+                            return
+                        }
+                        data.append(byte)
+                    }
+                    try self.sendPhoneProxyResponse(
+                        requestID: proxyRequest.requestID,
+                        response: response,
+                        data: data)
                 }
-                try self.sendPhoneProxyResponse(
-                    requestID: proxyRequest.requestID,
-                    response: response,
-                    data: data)
             } catch is CancellationError {
                 if self.phoneProxyRequestID == proxyRequest.requestID,
                    self.isDeviceConnected {
@@ -862,33 +896,78 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private func sendPhoneProxyResponse(
         requestID: UInt32, response: HTTPURLResponse, data: Data
     ) throws {
+        try beginPhoneProxyResponse(
+            requestID: requestID,
+            response: response,
+            contentLength: data.count)
+        try appendPhoneProxyResponse(data)
+        try completePhoneProxyResponseDownload()
+    }
+
+    private func beginPhoneProxyResponse(
+        requestID: UInt32,
+        response: HTTPURLResponse,
+        contentLength: Int
+    ) throws {
+        guard phoneProxyRequestID == requestID,
+              phoneProxyResponseExpectedSize == nil,
+              contentLength >= 0 else {
+            throw PhoneProxyError.invalidResponse
+        }
         let contentType = response.value(
             forHTTPHeaderField: "Content-Type") ?? ""
         let date = response.value(forHTTPHeaderField: "Date") ?? ""
         let head = try PhoneProxyProtocolV1.responseHead(
             requestID: requestID,
             status: response.statusCode,
-            contentLength: data.count,
+            contentLength: contentLength,
             contentType: contentType,
             date: date)
-        phoneProxyResponseData = data
+        phoneProxyResponseData.removeAll(keepingCapacity: false)
+        if contentLength > 0 {
+            phoneProxyResponseData.reserveCapacity(contentLength)
+        }
         phoneProxyResponseOffset = 0
+        phoneProxyResponseExpectedSize = contentLength
+        phoneProxyDownloadComplete = false
+        phoneProxyPendingErrorCode = nil
         phoneProxyResponseEndSent = false
         phoneProxyErrorOnly = false
         queuePhoneProxyFrame(head)
+    }
+
+    private func appendPhoneProxyResponse(_ data: Data) throws {
+        guard let expectedSize = phoneProxyResponseExpectedSize,
+              phoneProxyResponseData.count <= expectedSize,
+              data.count <= expectedSize - phoneProxyResponseData.count else {
+            throw PhoneProxyError.invalidResponse
+        }
+        phoneProxyResponseData.append(data)
+        if phoneProxyPendingFrame == nil {
+            sendNextPhoneProxyResponseFrame()
+        }
+    }
+
+    private func completePhoneProxyResponseDownload() throws {
+        guard let expectedSize = phoneProxyResponseExpectedSize,
+              phoneProxyResponseData.count == expectedSize else {
+            throw PhoneProxyError.invalidResponse
+        }
+        phoneProxyDownloadComplete = true
+        if phoneProxyPendingFrame == nil {
+            sendNextPhoneProxyResponseFrame()
+        }
     }
 
     private func sendPhoneProxyError(requestID: UInt32, code: UInt8) {
         guard phoneProxyRequestID == nil ||
                 phoneProxyRequestID == requestID else { return }
         phoneProxyRequestID = requestID
-        phoneProxyResponseData.removeAll(keepingCapacity: false)
-        phoneProxyResponseOffset = 0
-        phoneProxyResponseEndSent = true
-        phoneProxyErrorOnly = true
-        queuePhoneProxyFrame(
-            PhoneProxyProtocolV1.responseError(
-                requestID: requestID, code: code))
+        phoneProxyPendingErrorCode = code
+        phoneProxyDownloadComplete = true
+        if phoneProxyPendingFrame == nil {
+            sendNextPhoneProxyResponseFrame()
+        }
     }
 
     private func queuePhoneProxyFrame(_ frame: Data) {
@@ -947,6 +1026,14 @@ final class BLEProvisioner: NSObject, ObservableObject {
             finishPhoneProxyResponse()
             return
         }
+        if let errorCode = phoneProxyPendingErrorCode {
+            phoneProxyPendingErrorCode = nil
+            phoneProxyErrorOnly = true
+            queuePhoneProxyFrame(
+                PhoneProxyProtocolV1.responseError(
+                    requestID: requestID, code: errorCode))
+            return
+        }
         if phoneProxyResponseOffset < phoneProxyResponseData.count {
             let capacity = selected.maximumWriteValueLength(
                 for: .withoutResponse) - PhoneProxyProtocolV1.dataHeaderSize
@@ -967,12 +1054,16 @@ final class BLEProvisioner: NSObject, ObservableObject {
             queuePhoneProxyFrame(frame)
             return
         }
+        if !phoneProxyDownloadComplete {
+            return
+        }
         if !phoneProxyResponseEndSent {
             phoneProxyResponseEndSent = true
             queuePhoneProxyFrame(
                 PhoneProxyProtocolV1.responseEnd(
                     requestID: requestID,
-                    size: phoneProxyResponseData.count))
+                    size: phoneProxyResponseExpectedSize ??
+                        phoneProxyResponseData.count))
             return
         }
         trace("phone_proxy_request_complete")
@@ -986,6 +1077,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
         phoneProxyRequestID = nil
         phoneProxyResponseData.removeAll(keepingCapacity: false)
         phoneProxyResponseOffset = 0
+        phoneProxyResponseExpectedSize = nil
+        phoneProxyDownloadComplete = false
+        phoneProxyPendingErrorCode = nil
         phoneProxyResponseEndSent = false
         phoneProxyErrorOnly = false
         phoneProxyPendingFrame = nil

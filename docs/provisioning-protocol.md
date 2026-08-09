@@ -167,6 +167,10 @@ cannot contain a control byte.
 The app uses an ephemeral URL session. It does not use the URL cache or shared
 cookies. It applies the same URL rules to each redirect and follows no more
 than the request limit. It buffers no more than the declared response limit.
+For an `audio/pcm` response with a valid `Content-Length`, it sends the response
+head at once and forwards bounded data chunks while the HTTPS body arrives. It
+checks that the final byte count equals the declared length. It keeps the
+bounded complete-response path for an unknown length or another content type.
 
 The response-head frame uses type `0x11`:
 

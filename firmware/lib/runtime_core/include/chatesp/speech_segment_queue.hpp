@@ -18,7 +18,7 @@ enum class SpeechQueueResult : std::uint8_t {
     invalid,
 };
 
-// This class owns and wipes four bounded text slots. The caller serializes
+// This class owns and wipes two bounded text slots. The caller serializes
 // access when a producer and a consumer use it on different tasks.
 class SpeechSegmentQueue final : public SpeechSegmentSink {
 public:

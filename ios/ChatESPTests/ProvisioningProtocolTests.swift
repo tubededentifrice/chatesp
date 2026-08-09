@@ -832,4 +832,28 @@ final class ProvisioningProtocolTests: XCTestCase {
         let end = PhoneProxyProtocolV1.responseEnd(requestID: 9, size: 7)
         XCTAssertEqual(end.readBigEndianUInt32(at: 10), 7)
     }
+
+    func testPhoneProxyStreamsOnlyBoundedPCMWithKnownLength() {
+        XCTAssertEqual(
+            PhoneProxyProtocolV1.streamablePCMResponseLength(
+                contentType: "audio/pcm; rate=24000",
+                96_000,
+                maximumResponseSize: 2_160_000),
+            96_000)
+        XCTAssertNil(
+            PhoneProxyProtocolV1.streamablePCMResponseLength(
+                contentType: "audio/pcm",
+                -1,
+                maximumResponseSize: 2_160_000))
+        XCTAssertNil(
+            PhoneProxyProtocolV1.streamablePCMResponseLength(
+                contentType: "audio/pcm",
+                2_160_001,
+                maximumResponseSize: 2_160_000))
+        XCTAssertNil(
+            PhoneProxyProtocolV1.streamablePCMResponseLength(
+                contentType: "application/json",
+                96_000,
+                maximumResponseSize: 2_160_000))
+    }
 }

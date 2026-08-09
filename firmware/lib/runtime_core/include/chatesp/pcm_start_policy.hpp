@@ -12,21 +12,27 @@ enum class PcmStartDecision : std::uint8_t {
     start_complete,
 };
 
-// This policy makes one early-start decision after a 200 ms PCM prebuffer.
-// A slow decision is final for the response, so later bursts cannot cause an
-// underrun after a long initial transfer.
+// This policy starts a fast response after a 200 ms PCM prebuffer. A response
+// with a slow first burst gets one later decision with a 500 ms safety buffer.
+// A response that is still slower than playback stays buffered to avoid an
+// audible underrun.
 class AdaptivePcmStartPolicy {
 public:
-    static constexpr std::size_t kPrebufferBytes = 9'600;
+    static constexpr std::size_t kFastPrebufferBytes = 9'600;
+    static constexpr std::size_t kSteadyPrebufferBytes = 24'000;
+    static constexpr std::size_t kPrebufferBytes = kSteadyPrebufferBytes;
     static constexpr std::uint32_t kPlaybackBytesPerSecond = 48'000;
-    static constexpr std::uint32_t kMinimumIngressBytesPerSecond =
+    static constexpr std::uint32_t kFastIngressBytesPerSecond =
         kPlaybackBytesPerSecond * 3 / 2;
+    static constexpr std::uint32_t kSteadyIngressBytesPerSecond =
+        kPlaybackBytesPerSecond * 6 / 5;
     static_assert(
-        kPrebufferBytes % 2 == 0,
-        "The PCM prebuffer must contain complete samples");
+        kFastPrebufferBytes % 2 == 0 && kSteadyPrebufferBytes % 2 == 0,
+        "PCM prebuffers must contain complete samples");
     static_assert(
-        kMinimumIngressBytesPerSecond > kPlaybackBytesPerSecond,
-        "The ingress rate must have playback headroom");
+        kFastIngressBytesPerSecond > kSteadyIngressBytesPerSecond &&
+            kSteadyIngressBytesPerSecond > kPlaybackBytesPerSecond,
+        "PCM ingress rates must keep playback headroom");
 
     void reset();
     void observe(std::size_t total_bytes, std::uint32_t now_ms);

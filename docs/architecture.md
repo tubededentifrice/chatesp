@@ -106,8 +106,9 @@ When an authenticated iPhone subscribes to the phone proxy, the runtime keeps
 BLE active and keeps Wi-Fi off. It sends each bounded HTTPS request envelope to
 the app with notifications. The app uses an ephemeral URL session and returns
 bounded response data with write-without-response flow control. It uses
-confirmed writes for the response boundaries. This path keeps the saved bond
-active and makes the phone the device network path.
+confirmed writes for the response boundaries. For bounded PCM with a declared
+length, it forwards BLE data while the HTTPS body arrives. This path keeps the
+saved bond active and makes the phone the device network path.
 
 If the secure phone proxy is not ready, the runtime waits for it for at most two
 seconds. It then stops BLE, protects its restart block, and starts Wi-Fi. This
@@ -221,21 +222,24 @@ Unicode General Punctuation glyphs. Common model punctuation, such as smart
 quotation marks, long dashes, bullets, and ellipses, appears as text instead of
 a missing-glyph box.
 
-The answer stream forms a segment at a question mark, exclamation mark,
-newline, or safe period. After 96 bytes, a comma, semicolon, or colon is also a
-safe boundary. A 160-byte hard limit splits at a complete UTF-8 word. The
-speech path accepts at most four segments and 640 bytes. It wipes each segment
-after use.
+The answer stream starts the first speech request at a question mark,
+exclamation mark, newline, or safe period. A 160-byte limit splits a long first
+sentence at a complete UTF-8 word. The stream then keeps all remaining spoken
+text until the final answer is valid. It sends that text in one second request.
+The speech path accepts at most two requests and 640 bytes. It wipes each text
+buffer after use.
 
-One TTS worker sends each complete segment to OpenRouter in FIFO order. One
+One TTS worker sends the first request, then the complete remainder. One
 playback task and codec session stay active for the full sequence. The playback
 task uses one fixed 16 KiB PSRAM stack so limited internal RAM cannot prevent
-speech from starting. PCM goes into one bounded 2.16 MB PSRAM ring. After a
-9,600-byte sample, playback starts early only when ingress has safe headroom
-above the 48,000-byte-per-second playback rate. A slow first segment buffers
-completely. The next TTS request can fill the ring while prior PCM plays. A
-response can retry only before PCM playback starts. A button press cancels
-model, search, image, TTS, and playback work and erases transient buffers.
+speech from starting. PCM goes into one bounded 2.16 MB PSRAM ring. A fast
+transfer can start after a 9,600-byte sample. A slower initial transfer gets a
+second rate check with 24,000 buffered bytes. It starts when ingress has safe
+headroom above the 48,000-byte-per-second playback rate. A transfer that is
+still too slow buffers completely. The second TTS request can fill the ring
+while prior PCM plays. A request can retry while none of its own PCM has
+reached playback. A button press cancels model, search, image, TTS, and
+playback work and erases transient buffers.
 
 HTTPS uses four bounded lanes: OpenRouter control, OpenRouter audio, Brave
 search, and optional image download. Each lane keeps one client handle for one

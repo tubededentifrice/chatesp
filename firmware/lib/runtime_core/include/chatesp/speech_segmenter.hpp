@@ -14,9 +14,9 @@ public:
 
 class SpeechSegmenter {
 public:
-    static constexpr std::size_t kSoftBoundaryBytes = 96;
-    static constexpr std::size_t kMaximumSegmentBytes = 160;
-    static constexpr std::size_t kMaximumSegments = 4;
+    static constexpr std::size_t kFirstRequestBytes = 160;
+    static constexpr std::size_t kMaximumSegmentBytes = 640;
+    static constexpr std::size_t kMaximumSegments = 2;
     static constexpr std::size_t kMaximumSpeechBytes = 640;
 
     ~SpeechSegmenter();
@@ -36,11 +36,13 @@ public:
 
 private:
     bool consume(char value, SpeechSegmentSink &sink);
+    bool emit_first_request(SpeechSegmentSink &sink);
     bool emit_prefix(std::size_t size, SpeechSegmentSink &sink);
+    void trim_incomplete_code_point(char excluded_value);
     void discard_pending();
     [[nodiscard]] bool capped() const;
 
-    std::array<char, kMaximumSegmentBytes + 1> pending_{};
+    std::array<char, kMaximumSpeechBytes + 1> pending_{};
     std::size_t pending_size_ = 0;
     std::size_t published_size_ = 0;
     std::size_t emitted_bytes_ = 0;

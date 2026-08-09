@@ -75,7 +75,7 @@ agent::Error StreamingPcmResponseSink::begin(
             return start_error;
         }
     }
-    if (response_active_ || producer_done_) {
+    if (!response_prepared_ || response_active_ || producer_done_) {
         return agent::Error::limit_exceeded;
     }
     if (content_length > 0 &&
@@ -116,6 +116,9 @@ agent::Error StreamingPcmResponseSink::start_session() {
     response_length_ = -1;
     response_active_ = false;
     first_response_complete_ = false;
+    response_prepared_ = false;
+    played_bytes_.store(0, std::memory_order_release);
+    response_start_offset_.store(0, std::memory_order_release);
     session_active_ = true;
     const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
         playback_task_entry, "tts_playback", kPlaybackStackBytes, this,
@@ -212,10 +215,45 @@ agent::Error StreamingPcmResponseSink::finish() {
         return agent::Error::model_failed;
     }
     response_active_ = false;
+    response_prepared_ = false;
     first_response_complete_ = true;
     unlock();
     xEventGroupSetBits(events_, kDataReadyBit);
     return agent::Error::none;
+}
+
+agent::Error StreamingPcmResponseSink::prepare_response() {
+    if (response_active_ || producer_done_ || cancellation_.cancelled()) {
+        return cancellation_.cancelled() ? agent::Error::cancelled
+                                         : agent::Error::invalid_argument;
+    }
+    if (!session_active_) {
+        const agent::Error start_error = start_session();
+        if (start_error != agent::Error::none) {
+            return start_error;
+        }
+    }
+    if (!lock()) {
+        return agent::Error::model_failed;
+    }
+    if (worker_done_) {
+        const agent::Error result = worker_result_ == agent::Error::none
+            ? agent::Error::model_failed
+            : worker_result_;
+        unlock();
+        return result;
+    }
+    const std::size_t response_start =
+        played_bytes_.load(std::memory_order_acquire) + ring_.size();
+    response_start_offset_.store(response_start, std::memory_order_release);
+    response_prepared_ = true;
+    unlock();
+    return agent::Error::none;
+}
+
+bool StreamingPcmResponseSink::current_segment_started() const {
+    return played_bytes_.load(std::memory_order_acquire) >
+        response_start_offset_.load(std::memory_order_acquire);
 }
 
 agent::Error StreamingPcmResponseSink::finish_sequence() {
@@ -249,7 +287,7 @@ void StreamingPcmResponseSink::abort() {
     }
     // A retry can replace a response only before playback starts. Once PCM is
     // audible, stop the sequence so the listener cannot hear duplicate data.
-    if (response_active_ && !output_started() && lock()) {
+    if (response_active_ && !current_segment_started() && lock()) {
         const bool removed = ring_.unwrite(response_bytes_);
         if (removed) {
             total_bytes_ -= response_bytes_;
@@ -337,6 +375,8 @@ void StreamingPcmResponseSink::playback_task() {
                 playback_chunk_, kPlaybackChunkBytes);
             unlock();
             if (read_size != 0) {
+                played_bytes_.fetch_add(
+                    read_size, std::memory_order_acq_rel);
                 xEventGroupSetBits(events_, kSpaceReadyBit);
                 const agent::Error write_error =
                     output_.write(playback_chunk_, read_size);
@@ -460,8 +500,11 @@ void StreamingPcmResponseSink::stop_and_cleanup() {
     worker_done_ = false;
     session_active_ = false;
     response_active_ = false;
+    response_prepared_ = false;
     first_response_complete_ = false;
     output_started_.store(false, std::memory_order_release);
+    played_bytes_.store(0, std::memory_order_release);
+    response_start_offset_.store(0, std::memory_order_release);
 }
 
 bool StreamingPcmResponseSink::lock() {

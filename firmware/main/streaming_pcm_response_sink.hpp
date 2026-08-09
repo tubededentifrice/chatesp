@@ -43,14 +43,13 @@ public:
         const std::uint8_t *data, std::size_t size) override;
     agent::Error finish() override;
     void abort() override;
+    agent::Error prepare_response();
     agent::Error finish_sequence();
 
     [[nodiscard]] bool output_started() const {
         return output_started_.load(std::memory_order_acquire);
     }
-    [[nodiscard]] bool current_segment_started() const {
-        return output_started();
-    }
+    [[nodiscard]] bool current_segment_started() const;
 
 private:
     static void playback_task_entry(void *context);
@@ -86,8 +85,11 @@ private:
     bool worker_done_ = false;
     bool session_active_ = false;
     bool response_active_ = false;
+    bool response_prepared_ = false;
     bool first_response_complete_ = false;
     std::atomic<bool> output_started_{false};
+    std::atomic<std::size_t> played_bytes_{0};
+    std::atomic<std::size_t> response_start_offset_{0};
 };
 
 }  // namespace cloud

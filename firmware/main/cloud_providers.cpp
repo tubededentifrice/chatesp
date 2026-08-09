@@ -643,9 +643,14 @@ agent::Error OpenRouterSpeechProvider::speak(
         request.response = {
             kPcmTypes, 1, agent::Limits::max_tts_pcm_bytes};
         request.timeouts = agent::speech_policy();
-        error = execute_with_retry(
-            transport_, request, response_sink, cancellation,
-            [&response_sink]() { return response_sink.output_started(); });
+        error = response_sink.prepare_response();
+        if (error == agent::Error::none) {
+            error = execute_with_retry(
+                transport_, request, response_sink, cancellation,
+                [&response_sink]() {
+                    return response_sink.current_segment_started();
+                });
+        }
         if (error == agent::Error::none) {
             error = response_sink.finish_sequence();
         }
@@ -706,11 +711,14 @@ agent::Error OpenRouterSpeechProvider::speak_segments(
             request.response = {
                 kPcmTypes, 1, agent::Limits::max_tts_pcm_bytes};
             request.timeouts = agent::speech_policy();
-            error = execute_with_retry(
-                transport_, request, response_sink, cancellation,
-                [&response_sink]() {
-                    return response_sink.current_segment_started();
-                });
+            error = response_sink.prepare_response();
+            if (error == agent::Error::none) {
+                error = execute_with_retry(
+                    transport_, request, response_sink, cancellation,
+                    [&response_sink]() {
+                        return response_sink.current_segment_started();
+                    });
+            }
         }
         secure_wipe(body.data(), body.capacity());
         ++segment_count;

@@ -5,12 +5,12 @@ namespace runtime {
 namespace {
 
 bool safely_faster_than_playback(
-    std::size_t bytes, std::uint32_t elapsed_ms) {
+    std::size_t bytes, std::uint32_t elapsed_ms,
+    std::uint32_t minimum_bytes_per_second) {
     const std::uint64_t scaled_bytes =
         static_cast<std::uint64_t>(bytes) * 1'000ULL;
     const std::uint64_t required_bytes =
-        static_cast<std::uint64_t>(
-            AdaptivePcmStartPolicy::kMinimumIngressBytesPerSecond) *
+        static_cast<std::uint64_t>(minimum_bytes_per_second) *
         (elapsed_ms == 0 ? 1ULL : elapsed_ms);
     return scaled_bytes > required_bytes;
 }
@@ -35,12 +35,21 @@ void AdaptivePcmStartPolicy::observe(
         first_byte_at_ms_ = now_ms;
         saw_first_byte_ = true;
     }
-    if (total_bytes_ < kPrebufferBytes) {
+    if (total_bytes_ < kFastPrebufferBytes) {
         return;
     }
-    streams_early_ = safely_faster_than_playback(
-        total_bytes_, now_ms - first_byte_at_ms_);
-    decided_ = true;
+    const std::uint32_t elapsed_ms = now_ms - first_byte_at_ms_;
+    if (safely_faster_than_playback(
+            total_bytes_, elapsed_ms, kFastIngressBytesPerSecond)) {
+        streams_early_ = true;
+        decided_ = true;
+        return;
+    }
+    if (total_bytes_ >= kSteadyPrebufferBytes) {
+        streams_early_ = safely_faster_than_playback(
+            total_bytes_, elapsed_ms, kSteadyIngressBytesPerSecond);
+        decided_ = true;
+    }
 }
 
 PcmStartDecision AdaptivePcmStartPolicy::decision(

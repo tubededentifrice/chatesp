@@ -25,8 +25,9 @@ ChatESP.*
 
 - **One-button voice:** Hold the bottom PWR button to record. Release it to
   submit. There is no wake word and no background microphone stream.
-- **Fast spoken replies:** Text appears while the model works. Complete
-  sentences go to speech as soon as they are ready.
+- **Fast spoken replies:** Text appears while the model works. The first
+  sentence starts speech early. One second request contains the complete
+  remaining spoken answer.
 - **Useful tools:** Search the web, find and show images, run bounded
   calculations, draw line plots, and control the device by voice.
 - **Short follow-up chat:** Continue the same conversation for 30 seconds. The
@@ -59,7 +60,8 @@ photos.*
 1. Hold the bottom PWR button and ask a question.
 2. Release the button. ChatESP transcribes the request and selects the direct,
    web, image, device-control, calculation, or memory route.
-3. Read the streamed answer and hear each complete sentence.
+3. Read the streamed answer and hear the first sentence, then the remaining
+   answer without a new request for each sentence.
 4. Ask a follow-up within 30 seconds, or let ChatESP clear the thread and
    sleep.
 

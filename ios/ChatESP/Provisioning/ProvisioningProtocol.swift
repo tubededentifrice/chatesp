@@ -761,6 +761,7 @@ enum PhoneProxyProtocolV1 {
     static let maximumURLSize = 768
     static let maximumEnvelopeSize = 1_100_000
     static let maximumResponseSize = 2_160_000
+    static let streamingChunkSize = 4_096
 
     enum FrameType: UInt8 {
         case requestStart = 1
@@ -813,6 +814,25 @@ enum PhoneProxyProtocolV1 {
             return nil
         }
         return components.url
+    }
+
+    static func streamablePCMResponseLength(
+        contentType: String,
+        _ expectedContentLength: Int64,
+        maximumResponseSize: Int
+    ) -> Int? {
+        let mediaType = contentType
+            .split(separator: ";", maxSplits: 1)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard mediaType == "audio/pcm",
+              expectedContentLength >= 0,
+              expectedContentLength <= Int64(maximumResponseSize),
+              expectedContentLength <= Int64(Int.max) else {
+            return nil
+        }
+        return Int(expectedContentLength)
     }
 
     static func validHeaderName(_ data: Data) -> Bool {

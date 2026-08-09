@@ -64,9 +64,9 @@ bool SpeechSegmenter::consume(char value, SpeechSegmentSink &sink) {
         return true;
     }
 
-    if (pending_size_ != 0 && ascii_space(value) &&
+    if (emitted_segments_ == 0 && pending_size_ != 0 && ascii_space(value) &&
         pending_[pending_size_ - 1] == '.') {
-        if (!emit_prefix(pending_size_, sink)) {
+        if (!emit_first_request(sink)) {
             return false;
         }
         if (capped()) {
@@ -76,7 +76,7 @@ bool SpeechSegmenter::consume(char value, SpeechSegmentSink &sink) {
     if (pending_size_ == 0 && ascii_space(value)) {
         return true;
     }
-    if (pending_size_ == kMaximumSegmentBytes) {
+    if (emitted_segments_ == 0 && pending_size_ == kFirstRequestBytes) {
         std::size_t split = pending_size_;
         for (std::size_t index = pending_size_; index > 0; --index) {
             if (ascii_space(pending_[index - 1])) {
@@ -100,21 +100,22 @@ bool SpeechSegmenter::consume(char value, SpeechSegmentSink &sink) {
             return false;
         }
     }
-    if (pending_size_ >= kMaximumSegmentBytes) {
-        return false;
+    if (emitted_bytes_ + pending_size_ >= kMaximumSpeechBytes) {
+        trim_incomplete_code_point(value);
+        return true;
     }
     pending_[pending_size_++] = value;
     pending_[pending_size_] = '\0';
 
-    const bool sentence_boundary =
-        value == '?' || value == '!' || value == '\n';
-    const bool clause_boundary =
-        pending_size_ >= kSoftBoundaryBytes &&
-        (value == ',' || value == ';' || value == ':');
-    if (sentence_boundary || clause_boundary) {
-        return emit_prefix(pending_size_, sink);
+    if (emitted_segments_ == 0 &&
+        (value == '?' || value == '!' || value == '\n')) {
+        return emit_first_request(sink);
     }
     return true;
+}
+
+bool SpeechSegmenter::emit_first_request(SpeechSegmentSink &sink) {
+    return emitted_segments_ != 0 || emit_prefix(pending_size_, sink);
 }
 
 bool SpeechSegmenter::emit_prefix(
@@ -161,6 +162,21 @@ bool SpeechSegmenter::emit_prefix(
 void SpeechSegmenter::discard_pending() {
     secure_wipe(pending_.data(), pending_.size());
     pending_size_ = 0;
+}
+
+void SpeechSegmenter::trim_incomplete_code_point(char excluded_value) {
+    if (!utf8_continuation(excluded_value)) {
+        return;
+    }
+    while (pending_size_ != 0 &&
+           utf8_continuation(pending_[pending_size_ - 1])) {
+        --pending_size_;
+    }
+    if (pending_size_ != 0) {
+        --pending_size_;
+    }
+    secure_wipe(
+        pending_.data() + pending_size_, pending_.size() - pending_size_);
 }
 
 bool SpeechSegmenter::capped() const {

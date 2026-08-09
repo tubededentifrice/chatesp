@@ -167,16 +167,20 @@ The connected V2 board must pass these checks for this control change:
   the correct visible glyphs;
 - on a held cold start, Wi-Fi setup starts only after 100 ms of valid audio and
   does not stop microphone capture;
-- speech starts from the first complete sentence while later answer text and
-  TTS segments continue. Segment order is correct and the codec stays active;
+- speech starts from the first complete sentence. One second TTS request has
+  the complete remaining spoken answer. Request order is correct and the codec
+  stays active;
 - an image request reserves speech playback resources before JPEG work starts,
   and a JPEG allocation failure does not stop speech;
 - a speech failure shows a clear operation and reason. It does not show an
   internal numeric error category;
 - an English answer uses the selected English voice, a French answer uses the
   selected French voice, and the internal language tag is not visible or spoken;
-- a fast PCM transfer starts after the 200 ms prebuffer. A slow first segment
-  buffers before playback so that audio stays clear;
+- a fast PCM transfer starts after the 200 ms prebuffer. A slower initial
+  transfer gets one 500 ms safety-buffer check. A transfer below the safe
+  playback rate buffers completely so that audio stays clear;
+- the iPhone proxy forwards declared-length PCM while the HTTPS body arrives.
+  Playback does not wait for the complete phone response buffer;
 - a new held press returns to `LISTENING` within 250 ms and stops model, TTS,
   playback, search, and image work.
 - device status reports the current brightness and volume and reports a battery

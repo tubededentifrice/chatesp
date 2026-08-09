@@ -9,6 +9,18 @@
 
 namespace chatesp {
 
+static_assert(
+    runtime::SpeechSegmentQueue::kSegmentBytes ==
+        agent::Limits::max_tts_segment_bytes,
+    "The speech queue and provider request limits must match");
+static_assert(
+    runtime::SpeechSegmentQueue::kCapacity == agent::Limits::max_tts_segments,
+    "The speech queue and provider request counts must match");
+static_assert(
+    runtime::SpeechSegmenter::kFirstRequestBytes ==
+        agent::Limits::max_tts_first_request_bytes,
+    "The first speech request limits must match");
+
 class SpeechSegmentChannel final
     : public runtime::SpeechSegmentSink,
       public agent::SpeechProvider::SegmentSource {

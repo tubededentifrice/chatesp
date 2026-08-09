@@ -13,8 +13,9 @@ struct Limits {
     static constexpr std::size_t max_transcript_bytes = 2'048;
     static constexpr std::size_t max_answer_bytes = 1'280;
     static constexpr std::size_t max_tts_input_bytes = 640;
-    static constexpr std::size_t max_tts_segment_bytes = 160;
-    static constexpr std::size_t max_tts_segments = 4;
+    static constexpr std::size_t max_tts_first_request_bytes = 160;
+    static constexpr std::size_t max_tts_segment_bytes = max_tts_input_bytes;
+    static constexpr std::size_t max_tts_segments = 2;
     static constexpr std::size_t max_message_bytes = 4'096;
     static constexpr std::size_t max_history_messages = 12;
     static constexpr std::size_t max_chat_request_bytes = 32'768;
