@@ -97,11 +97,11 @@ void test_voice_flow_sleeps_after_chat_idle_timeout() {
 void test_mode_and_pairing_orientation() {
     Simulator simulator;
     check(simulator.ready(), "ready transition failed");
-    check(simulator.mode_button(79), "short electrical pulse must be valid");
+    check(simulator.mode_button(29), "short electrical pulse must be valid");
     check(
         simulator.snapshot().mode == AppMode::chat,
         "short electrical pulse must not change mode");
-    check(simulator.mode_button(80), "minimum top-button press must work");
+    check(simulator.mode_button(30), "minimum top-button press must work");
     check(
         simulator.snapshot().orientation == DisplayOrientation::clock,
         "Clock must use landscape orientation");
@@ -131,6 +131,19 @@ void test_mode_and_pairing_orientation() {
     check(
         !simulator.show_pairing_code(1'000'000),
         "pairing code must have six digits at most");
+}
+
+void test_fast_mode_button_press_exits_clock() {
+    Simulator simulator;
+    check(simulator.ready(), "ready transition failed");
+    check(simulator.mode_button(100), "Clock entry must work");
+    check(
+        simulator.snapshot().mode == AppMode::clock,
+        "top-button press must enter Clock");
+    check(simulator.mode_button(30), "fast ChatESP return must work");
+    check(
+        simulator.snapshot().mode == AppMode::chat,
+        "fast top-button press must return to ChatESP");
 }
 
 void test_mode_button_press_wins_at_chat_idle_boundary() {
@@ -510,6 +523,7 @@ int main() {
     test_short_press_sleeps_and_clears_private_text();
     test_voice_flow_sleeps_after_chat_idle_timeout();
     test_mode_and_pairing_orientation();
+    test_fast_mode_button_press_exits_clock();
     test_mode_button_press_wins_at_chat_idle_boundary();
     test_touch_controls_are_bounded();
     test_status_is_private_and_svg_is_explicit();

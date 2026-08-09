@@ -54,7 +54,7 @@ action button:
 The app disables the AXP2101 automatic long-hold shutdown while the PWR button
 is pressed. This lets a recording continue for more than six seconds. It
 restores hardware long-hold shutdown when the button is released. The top BOOT
-button is active-low GPIO0. After boot, a debounced press from 80 through 700
+button is active-low GPIO0. After boot, a debounced press from 30 through 700
 ms changes between ChatESP and Clock. A shorter electrical pulse or a longer
 press has no app action. The button is not a sleep wake source. Its
 boot-strapping function stays available for firmware recovery. Firmware uses
@@ -136,7 +136,7 @@ The connected V2 board must pass these checks for this control change:
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
   normal hold threshold;
 - a short top-button press changes between portrait ChatESP and Clock;
-- an electrical top-button pulse shorter than 80 ms does not change mode;
+- an electrical top-button pulse shorter than 30 ms does not change mode;
 - a long top-button press and a top-button press during development soft sleep
   do not change application state;
 - Clock rotates 90 degrees counterclockwise, has the USB port at the bottom,

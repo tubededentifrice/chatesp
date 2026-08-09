@@ -6,6 +6,9 @@
 
 namespace chatesp {
 
+constexpr std::uint32_t kModeButtonMinimumPressMs = 30;
+constexpr std::uint32_t kModeButtonMaximumPressMs = 700;
+
 enum class AppMode : std::uint8_t {
     chat,
     clock,
@@ -94,8 +97,8 @@ struct ClockPathSpan {
 class ShortPressGesture {
 public:
     explicit constexpr ShortPressGesture(
-        std::uint32_t maximum_press_ms = 700,
-        std::uint32_t minimum_press_ms = 80)
+        std::uint32_t maximum_press_ms = kModeButtonMaximumPressMs,
+        std::uint32_t minimum_press_ms = kModeButtonMinimumPressMs)
         : maximum_press_ms_(maximum_press_ms),
           minimum_press_ms_(minimum_press_ms) {}
 
@@ -117,8 +120,8 @@ public:
     void cancel() { pressed_ = false; }
 
 private:
-    std::uint32_t maximum_press_ms_ = 700;
-    std::uint32_t minimum_press_ms_ = 80;
+    std::uint32_t maximum_press_ms_ = kModeButtonMaximumPressMs;
+    std::uint32_t minimum_press_ms_ = kModeButtonMinimumPressMs;
     std::uint32_t pressed_at_ms_ = 0;
     bool pressed_ = false;
 };

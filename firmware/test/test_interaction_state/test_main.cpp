@@ -512,14 +512,14 @@ void test_quick_controls_defer_flash_work_until_input_is_idle() {
 }
 
 void test_mode_button_accepts_only_a_short_complete_press() {
-    chatesp::ShortPressGesture button{700, 80};
+    chatesp::ShortPressGesture button;
     TEST_ASSERT_FALSE(button.release(10));
     button.press(100);
     TEST_ASSERT_TRUE(button.release(800));
     button.press(900);
-    TEST_ASSERT_FALSE(button.release(979));
+    TEST_ASSERT_FALSE(button.release(929));
     button.press(1'000);
-    TEST_ASSERT_TRUE(button.release(1'080));
+    TEST_ASSERT_TRUE(button.release(1'030));
     button.press(2'000);
     TEST_ASSERT_FALSE(button.release(2'701));
     button.press(std::numeric_limits<std::uint32_t>::max() - 99);

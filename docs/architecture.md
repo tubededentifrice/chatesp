@@ -43,7 +43,7 @@ always uses the normal ChatESP orientation, including when Clock is active. It
 restores the Clock orientation when it closes. A voice button press always
 hides the passkey view.
 
-A debounced top GPIO0 press from 80 through 700 ms changes between ChatESP and
+A debounced top GPIO0 press from 30 through 700 ms changes between ChatESP and
 Clock. A shorter electrical pulse or a longer press has no app action. A
 top-button press has no effect during soft sleep, and GPIO0 is not a production
 wake source. This short BOOT-button press is the only action that enters Clock.
