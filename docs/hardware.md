@@ -176,6 +176,8 @@ The connected V2 board must pass these checks for this control change:
   normal hold threshold;
 - a short battery-powered PWR cold start shows `CHAT ESP`, then `READY`, and
   does not show `LISTENING`;
+- a production cold start with saved settings reaches
+  `settings_apply_complete` and does not reset after `settings_apply_begin`;
 - a held battery-powered PWR cold start uses saved production settings before
   it sends a cloud request;
 - a short top-button press changes between portrait ChatESP and Clock;

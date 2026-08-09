@@ -524,10 +524,6 @@ public:
         if (settings_result != ESP_OK) {
             return settings_result;
         }
-        // Apply durable production settings before a startup button command
-        // can enter recording. The idle refresh remains responsible for later
-        // BLE updates, but a cold held wake must already have its service key.
-        refresh_settings();
         // Reserve the internal I2S DMA path before Wi-Fi and Bluetooth use
         // the remaining internal memory.
         const esp_err_t audio_result = capture_.initialize();
@@ -1579,6 +1575,10 @@ private:
     }
 
     void run() {
+        // Apply durable production settings on the larger runtime stack before
+        // this task processes a startup button command. The main task does not
+        // have enough stack for the complete settings record.
+        refresh_settings();
         // Replace the full-boot splash when this task can accept input. Do not
         // add a splash timer because it would delay hold-to-talk.
         interaction_.ready(monotonic_ms());

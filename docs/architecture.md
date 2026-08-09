@@ -205,7 +205,9 @@ memory that a later BLE restart needs.
 Production reads and applies the last valid NVS settings record before it can
 process a startup button command. A held cold wake therefore has its saved
 service key, model choices, and Wi-Fi values before recording starts. The
-500-millisecond idle check applies later BLE settings changes.
+voice-runtime task applies this record as its first operation. This keeps the
+complete settings record off the smaller main startup stack. The 500-millisecond
+idle check applies later BLE settings changes.
 
 The station scans all 2.4 GHz channels and selects the strongest matching
 access point. It rejects access points below -75 dBm and retries the strongest

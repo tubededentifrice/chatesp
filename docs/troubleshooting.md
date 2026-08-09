@@ -106,6 +106,10 @@ queues a startup button command. One short battery wake must show `READY`. A
 continued hold must show `LISTENING` at the normal threshold and must use the
 saved service key.
 
+Apply the record on the voice-runtime task, before its first startup command.
+Do not apply it on the main startup task. The complete record can overflow the
+smaller main stack and cause a reset loop after `settings_apply_begin`.
+
 ### The iPhone misses a short advertising window
 
 The selected-device reconnect scan runs for 30 seconds. A failed scan has only

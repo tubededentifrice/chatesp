@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VoiceResourceOrderTests(unittest.TestCase):
-    def test_saved_settings_apply_before_startup_input_is_queued(self) -> None:
+    def test_saved_settings_apply_before_startup_input_is_processed(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
@@ -18,17 +18,22 @@ class VoiceResourceOrderTests(unittest.TestCase):
             ) : runtime.index("void action_button_edge(")
         ]
 
+        run = runtime[
+            runtime.index("void run()") : runtime.index("void process_command(")
+        ]
+
         self.assertLess(
             start.index("settings_store_.initialize()"),
-            start.index("refresh_settings();"),
+            start.index("xTaskCreatePinnedToCore(\n            task_entry"),
+        )
+        self.assertNotIn("refresh_settings();", start)
+        self.assertLess(
+            run.index("refresh_settings();"),
+            run.index("interaction_.ready("),
         )
         self.assertLess(
-            start.index("refresh_settings();"),
-            start.index("capture_.initialize()"),
-        )
-        self.assertLess(
-            start.index("refresh_settings();"),
-            start.index("if (startup_button_down)"),
+            run.index("refresh_settings();"),
+            run.index("if (button_pressed_.load("),
         )
 
     def test_speech_start_event_follows_successful_audio_start(self) -> None:

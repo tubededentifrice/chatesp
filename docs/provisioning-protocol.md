@@ -76,9 +76,10 @@ the phone reconnect after a cold start or a development firmware upload. The
 device still needs one new pairing after an older development image loses its
 RAM-only bond. A development build keeps BLE-provisioned settings in RAM.
 At a production cold start, the firmware reads and applies the last valid NVS
-settings record before it processes a startup PWR-button command. A wake hold
-does not wait for a new iPhone settings transfer before it can use the saved
-service key.
+settings record on the voice-runtime task before it processes a startup
+PWR-button command. A wake hold does not wait for a new iPhone settings
+transfer before it can use the saved service key. The smaller main startup
+task does not apply the complete record.
 
 One transfer contains one complete settings packet. The maximum packet size is
 1,024 bytes. iOS sends one control frame and then ordered data frames. It waits
