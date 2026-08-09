@@ -163,6 +163,8 @@ The connected V2 board must pass these checks for this control change:
 - the footer shows Wi-Fi connection state and a valid battery percentage, or a
   clear unavailable value;
 - model text grows on the display before the complete answer is available;
+- smart quotation marks, long dashes, bullets, and ellipses in model text have
+  the correct visible glyphs;
 - on a held cold start, Wi-Fi setup starts only after 100 ms of valid audio and
   does not stop microphone capture;
 - speech starts from the first complete sentence while later answer text and

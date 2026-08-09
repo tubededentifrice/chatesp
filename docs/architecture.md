@@ -214,6 +214,11 @@ answer. A missing tag uses English for compatibility. An invalid language tag
 stops the answer before it can reach the user. Only the final validated answer
 enters chat history.
 
+The 18-pixel answer font contains Latin Extended characters and the supported
+Unicode General Punctuation glyphs. Common model punctuation, such as smart
+quotation marks, long dashes, bullets, and ellipses, appears as text instead of
+a missing-glyph box.
+
 The answer stream forms a segment at a question mark, exclamation mark,
 newline, or safe period. After 96 bytes, a comma, semicolon, or colon is also a
 safe boundary. A 160-byte hard limit splits at a complete UTF-8 word. The
