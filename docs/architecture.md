@@ -13,15 +13,18 @@ the complete black frame is ready. It sends a second complete frame and repeats
 the selected brightness command after panel-on. This recovers a CO5300 that
 accepts the first commands but does not show the first pixel transfer. The
 startup path builds hidden runtime views only after this reliable splash
-transfer. It loads saved memories after the splash is visible. Production also
-skips the optional full-PSRAM start test and uses a speed-optimized bootloader.
-These changes do not change system-off or steady active power policy. The
-runtime replaces the splash as soon as its task and button queue can accept
-input. It does not use a minimum splash timer. An in-session display wake shows
-the current interaction state instead. Development soft sleep keeps the CO5300
-initialized at its current brightness and covers the screen with one full black
-frame. Wake removes this frame and does not depend on a zero-to-nonzero
-brightness transition.
+transfer. It loads saved memories after the splash is visible. The rounded
+Clock path uses double-precision geometry and a dedicated point buffer.
+Firmware allocates and builds them only on the first Clock entry, so this
+unrelated work does not delay voice-runtime readiness.
+Production also skips the optional full-PSRAM start test and uses a
+speed-optimized bootloader. These changes do not change system-off or steady
+active power policy. The runtime replaces the splash as soon as its task and
+button queue can accept input. It does not use a minimum splash timer. An
+in-session display wake shows the current interaction state instead.
+Development soft sleep keeps the CO5300 initialized at its current brightness
+and covers the screen with one full black frame. Wake removes this frame and
+does not depend on a zero-to-nonzero brightness transition.
 
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short message that identifies the failed operation. The
@@ -36,9 +39,13 @@ The bottom PWR-button duration selects the action. A press shorter than the
 recording threshold requests sleep. A held press cancels active work or speech
 and starts audio capture. Release ends the capture and submits it. A held wake
 continues into audio capture. The exact threshold is a tested configuration
-value. At start, the power module uses the IO-expander level to detect a held
-PWR key. A completed AXP2101 release or short-press event overrides a latched
-IO-expander level. Thus, a short battery wake does not become a voice hold.
+value. AXP2101 register `0x27` uses its minimum 128-millisecond PWR-on
+recognition time. Thus, a system-off press starts the power rails without a
+short-versus-hold classification delay. This reversible setting does not keep
+the processor or another switched rail on during system-off. At start, the
+power module uses the IO-expander level to detect a held PWR key. A completed
+AXP2101 release or short-press event overrides a latched IO-expander level.
+Thus, a short battery wake does not become a voice hold.
 During operation, it uses debounced AXP2101 PWR-key edge events. It
 rejects a PWR-key event when the same PMU sample contains a USB power-source
 event. A USB power-source change does not start or submit a recording.
@@ -208,6 +215,15 @@ service key, model choices, and Wi-Fi values before recording starts. The
 voice-runtime task applies this record as its first operation. This keeps the
 complete settings record off the smaller main startup stack. The 500-millisecond
 idle check applies later BLE settings changes.
+
+The production image uses 80 MHz QIO flash, a 240 MHz CPU, a
+speed-optimized bootloader, and no optional full-PSRAM start test. It keeps
+application-image validation and the startup low-battery gate. These checks
+protect recovery and the battery. The firmware reads the AXP2101 PWR-on setting
+on each start. If necessary, it programs and reads back the 128-millisecond
+value. The setting stays through normal system-off. A complete PMIC power loss
+can restore its factory PWR-on time for the first start after power returns.
+That start applies the fast value again.
 
 The station scans all 2.4 GHz channels and selects the strongest matching
 access point. It rejects access points below -75 dBm and retries the strongest

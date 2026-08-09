@@ -425,8 +425,14 @@ void rounded_clock_point(double distance, double &x, double &y) {
 
 void layout_clock_path() {
     if (clock_path_points == nullptr) {
-        clock_path_point_count = 0;
-        return;
+        clock_path_points = static_cast<lv_point_precise_t *>(
+            heap_caps_calloc(
+                kMaximumClockPathPointCount, sizeof(lv_point_precise_t),
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (clock_path_points == nullptr) {
+            clock_path_point_count = 0;
+            return;
+        }
     }
     const double radius = clock_style.corner_radius_px;
     const double horizontal =
@@ -539,7 +545,7 @@ void draw_clock(lv_event_t *event) {
     lv_draw_line(layer, &descriptor);
 }
 
-void apply_clock_style() {
+void apply_clock_style(bool layout_path) {
     if (clock_root == nullptr) {
         return;
     }
@@ -550,7 +556,11 @@ void apply_clock_style() {
             clock_time_label, lv_color_hex(clock_style.time_rgb),
             LV_PART_MAIN);
     }
-    layout_clock_path();
+    if (layout_path) {
+        layout_clock_path();
+    } else {
+        clock_path_point_count = 0;
+    }
     shown_clock_path = current_clock_path_span();
     lv_obj_invalidate(clock_root);
 }
@@ -574,7 +584,9 @@ void create_clock_face(lv_obj_t *screen) {
     lv_obj_set_style_text_opa(clock_time_label, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_center(clock_time_label);
 
-    apply_clock_style();
+    // The rounded Clock path uses double-precision trigonometry. It is not
+    // needed for voice wake. Build it only when Clock first opens.
+    apply_clock_style(false);
     clock_path_timer = lv_timer_create(
         clock_path_timer_callback, kClockPathRefreshMs, nullptr);
     lv_timer_pause(clock_path_timer);
@@ -1386,16 +1398,6 @@ bool start(std::uint8_t brightness_percent) {
         return false;
     }
 
-    if (clock_path_points == nullptr) {
-        clock_path_points = static_cast<lv_point_precise_t *>(
-            heap_caps_calloc(
-                kMaximumClockPathPointCount, sizeof(lv_point_precise_t),
-                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (clock_path_points == nullptr) {
-            (void)bsp_display_backlight_off();
-            return false;
-        }
-    }
     if (!bsp_display_lock(1000)) {
         (void)bsp_display_backlight_off();
         return false;
@@ -1411,7 +1413,7 @@ bool set_clock_style(const ClockStyle &style) {
         return false;
     }
     clock_style = style;
-    apply_clock_style();
+    apply_clock_style(clock_mode);
     if (clock_root != nullptr) {
         lv_obj_invalidate(clock_root);
     }
@@ -1426,6 +1428,9 @@ void show_app_mode(AppMode mode, InteractionState chat_state) {
     if (mode == AppMode::clock) {
         hide_fullscreen_visual();
         clock_mode = true;
+        if (clock_path_point_count == 0) {
+            apply_clock_style(true);
+        }
         if (clock_path_timer != nullptr) {
             lv_timer_resume(clock_path_timer);
         }

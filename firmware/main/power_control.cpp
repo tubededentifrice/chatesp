@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "bsp/esp-bsp.h"
+#include "chatesp/axp2101_power_key.hpp"
 #include "chatesp/button_debouncer.hpp"
 #include "crash_diagnostics.hpp"
 #include "driver/i2c_master.h"
@@ -19,6 +20,7 @@ constexpr char kTag[] = "power";
 constexpr std::uint16_t kAxp2101Address = 0x34;
 constexpr std::uint8_t kAxp2101CommonConfig = 0x10;
 constexpr std::uint8_t kAxp2101PowerOffEnable = 0x22;
+constexpr std::uint8_t kAxp2101PowerKeyTiming = 0x27;
 constexpr std::uint8_t kAxp2101Status1 = 0x00;
 constexpr std::uint8_t kAxp2101Status2 = 0x01;
 constexpr std::uint8_t kAxp2101IrqEnable2 = 0x41;
@@ -119,6 +121,35 @@ esp_err_t repair_legacy_power_key_policy() {
         ESP_LOGW(kTag, "Repaired the prior PWR 16-second shutdown policy");
     }
     return error;
+}
+
+esp_err_t configure_fast_power_on() {
+    std::uint8_t current = 0;
+    esp_err_t error = read_axp2101(kAxp2101PowerKeyTiming, &current);
+    if (error != ESP_OK) {
+        return error;
+    }
+    const std::uint8_t next = axp2101_fast_power_on_config(current);
+    if (next == current) {
+        return ESP_OK;
+    }
+    error = write_axp2101(kAxp2101PowerKeyTiming, next);
+    if (error != ESP_OK) {
+        return error;
+    }
+    std::uint8_t verified = 0;
+    error = read_axp2101(kAxp2101PowerKeyTiming, &verified);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (verified != next) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    ESP_LOGI(
+        kTag,
+        "Set PWR-on recognition to %u ms",
+        static_cast<unsigned>(kAxp2101FastPowerOnMs));
+    return ESP_OK;
 }
 
 esp_err_t prepare_power_key_events(
@@ -243,6 +274,10 @@ esp_err_t initialize() {
         repair_legacy_power_key_policy(),
         kTag,
         "PWR legacy policy repair failed");
+    ESP_RETURN_ON_ERROR(
+        configure_fast_power_on(),
+        kTag,
+        "PWR-on timing setup failed");
     bool startup_press_event = false;
     bool startup_release_event = false;
     bool startup_short_press_event = false;

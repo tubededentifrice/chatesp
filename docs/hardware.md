@@ -68,6 +68,12 @@ an edge sample that also contains a USB power-source event.
 The long-hold control is AXP2101 `PWROFF_EN` register `0x22`, bit 1. Firmware
 also clears register `0x10`, bit 2 at start. An earlier firmware revision used
 that unrelated bit and enabled the PMIC 16-second PWR shutdown path.
+AXP2101 register `0x27`, bits 1:0, selects the PWR-on recognition time.
+Firmware sets and reads back `00`, which is 128 ms. It preserves the IRQ and
+power-off timing fields in the same register. The PMIC starts its switched
+rails after this interval. It does not wait to classify the press as short or
+long. If the user continues to hold PWR, firmware enters `LISTENING` at the
+normal 350 ms recording threshold.
 
 ## Power behavior
 
@@ -95,9 +101,17 @@ The production profile does not run the optional full-PSRAM start test. It uses
 a speed-optimized bootloader. Development keeps the PSRAM start test so normal
 firmware work still checks the fixed memory part. The UI sends the reliable
 two-frame splash before it builds hidden Clock, plot, and control views. Saved
-memory loading also occurs after the splash is visible. These start changes do
-not change system-off current or steady active settings. Measure PWR-to-pixels
-time and complete interaction energy on the board.
+memory loading also occurs after the splash is visible. It defers the rounded
+Clock path buffer and calculation until the first Clock entry. Thus, Clock
+geometry does not delay voice-runtime readiness. These start changes do not
+change system-off current or steady active settings. Measure PWR-to-pixels time
+and complete interaction energy on the board.
+
+The 128 ms PWR-on setting is a reversible PMIC register change. It stays set
+through normal AXP2101 system-off and does not enable a processor timer, poll,
+or switched rail while off. Thus, it does not add system-off current. A complete
+PMIC power loss can restore the factory PWR-on time until the next firmware
+start writes the fast value again.
 
 USB can keep the ESP32 powered after the PMIC accepts system-off. Production
 must stay in its completed sleep state and repeat the request at a one-second
@@ -174,6 +188,10 @@ The connected V2 board must pass these checks for this control change:
   private transmit-buffer allocation failure or block the LVGL task;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
   normal hold threshold;
+- from production system-off, each PWR press starts the power rails after the
+  128 ms recognition interval, without a short-versus-hold result;
+- after the fast PWR-on setting is applied, production system-off current is
+  not higher than the prior measured value;
 - a short battery-powered PWR cold start shows `CHAT ESP`, then `READY`, and
   does not show `LISTENING`;
 - a production cold start with saved settings reaches

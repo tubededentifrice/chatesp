@@ -40,12 +40,6 @@ class StartupLifecycleTests(unittest.TestCase):
             start.index("bsp_display_brightness_set(brightness_percent)"),
             start.index("create_runtime_screen();"),
         )
-        allocation_failure = start[
-            start.index("if (clock_path_points == nullptr)") : start.index(
-                "create_runtime_screen();"
-            )
-        ]
-        self.assertIn("(void)bsp_display_backlight_off();", allocation_failure)
 
     def test_saved_memories_load_after_the_splash_is_visible(self) -> None:
         app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(
@@ -56,6 +50,35 @@ class StartupLifecycleTests(unittest.TestCase):
             app.index("chatesp::ui::start("),
             app.index("device_memory_store.initialize()"),
         )
+
+    def test_clock_path_layout_is_deferred_until_clock_opens(self) -> None:
+        ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        create_clock = ui[
+            ui.index("void create_clock_face(") : ui.index(
+                "void bring_clock_overlays_forward("
+            )
+        ]
+        show_mode = ui[
+            ui.index("void show_app_mode(") : ui.index(
+                "void show_clock_time("
+            )
+        ]
+        start = ui[
+            ui.index("bool start(") : ui.index("bool set_clock_style(")
+        ]
+        layout = ui[
+            ui.index("void layout_clock_path(") : ui.index(
+                "ClockPathSpan current_clock_path_span("
+            )
+        ]
+
+        self.assertIn("apply_clock_style(false);", create_clock)
+        self.assertNotIn("layout_clock_path();", create_clock)
+        self.assertIn("apply_clock_style(true);", show_mode)
+        self.assertNotIn("heap_caps_calloc(", start)
+        self.assertIn("heap_caps_calloc(", layout)
 
 
 if __name__ == "__main__":

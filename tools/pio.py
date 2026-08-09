@@ -113,6 +113,36 @@ def remove_aliased_watch_builds(
     return removed
 
 
+def remove_stale_version_watch_builds(
+    project: Path, arguments: list[str], expected_version: str
+) -> list[str]:
+    """Remove device build data that embeds an old Git application version."""
+    removed: list[str] = []
+    for profile in sorted(requested_watch_environments(arguments)):
+        build_dir = project / ".pio" / "build" / profile
+        description = build_dir / "project_description.json"
+        try:
+            data = json.loads(description.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("project_version") != expected_version:
+            shutil.rmtree(build_dir)
+            removed.append(profile)
+    return removed
+
+
+def current_project_version(root: Path) -> str:
+    """Return the Git version that ESP-IDF puts in the application image."""
+    result = subprocess.run(
+        ["git", "describe", "--always", "--tags", "--dirty"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
 def dependency_policy_digest(root: Path) -> str:
     """Return a digest of each file that controls dependency policy."""
     candidates = [
@@ -429,6 +459,12 @@ def main() -> int:
     ):
         print(
             f"Removed {profile} build data that used a non-canonical path."
+        )
+    for profile in remove_stale_version_watch_builds(
+        project, sys.argv[1:], current_project_version(root)
+    ):
+        print(
+            f"Removed {profile} build data that had an old application version."
         )
     verify_dependency_age(root, core_dir)
     if requires_idf_python(sys.argv[1:]):

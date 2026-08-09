@@ -5,6 +5,7 @@
 #include <unity.h>
 
 #include "chatesp/app_mode.hpp"
+#include "chatesp/axp2101_power_key.hpp"
 #include "chatesp/battery_status.hpp"
 #include "chatesp/ble_shutdown.hpp"
 #include "chatesp/button_debouncer.hpp"
@@ -308,6 +309,17 @@ void test_startup_power_button_rejects_a_usb_removal_latch() {
         true, false, false, false, true));
     TEST_ASSERT_TRUE(chatesp::startup_power_button_pressed(
         true, true, false, false, true));
+}
+
+void test_axp2101_fast_power_on_keeps_other_key_timings() {
+    TEST_ASSERT_EQUAL_HEX8(
+        0b0011'1100,
+        chatesp::power::axp2101_fast_power_on_config(0b0011'1111));
+    TEST_ASSERT_EQUAL_HEX8(
+        0b0000'0000,
+        chatesp::power::axp2101_fast_power_on_config(0b0000'0010));
+    TEST_ASSERT_EQUAL_UINT32(
+        128, chatesp::power::kAxp2101FastPowerOnMs);
 }
 
 void test_power_button_filter_accepts_pmu_edges() {
@@ -702,6 +714,7 @@ int main(int, char **) {
     RUN_TEST(test_startup_power_button_ignores_a_completed_battery_wake);
     RUN_TEST(test_startup_power_button_keeps_a_held_battery_wake);
     RUN_TEST(test_startup_power_button_rejects_a_usb_removal_latch);
+    RUN_TEST(test_axp2101_fast_power_on_keeps_other_key_timings);
     RUN_TEST(test_power_button_filter_accepts_pmu_edges);
     RUN_TEST(test_power_button_filter_confirms_only_a_pmu_short_press);
     RUN_TEST(test_power_button_filter_quarantines_adjacent_usb_press_noise);

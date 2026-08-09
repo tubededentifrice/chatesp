@@ -13,6 +13,7 @@ from tools.pio import (
     first_party_write_api_errors,
     invocation_policy_errors,
     remove_aliased_watch_builds,
+    remove_stale_version_watch_builds,
     prepare_profile_sdkconfigs,
     profile_sdkconfig_text,
     requested_watch_environments,
@@ -89,6 +90,40 @@ class PlatformioWrapperTests(unittest.TestCase):
             self.assertEqual([], removed)
             self.assertTrue(build.exists())
 
+    def test_stale_watch_build_version_is_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "firmware"
+            build = project / ".pio" / "build" / "watch_dev"
+            build.mkdir(parents=True)
+            (build / "project_description.json").write_text(
+                json.dumps({"project_version": "old1234"}),
+                encoding="utf-8",
+            )
+
+            removed = remove_stale_version_watch_builds(
+                project, ["run", "-e", "watch_dev"], "new5678"
+            )
+
+            self.assertEqual(["watch_dev"], removed)
+            self.assertFalse(build.exists())
+
+    def test_current_watch_build_version_is_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "firmware"
+            build = project / ".pio" / "build" / "watch_prod"
+            build.mkdir(parents=True)
+            (build / "project_description.json").write_text(
+                json.dumps({"project_version": "new5678"}),
+                encoding="utf-8",
+            )
+
+            removed = remove_stale_version_watch_builds(
+                project, ["run", "-e", "watch_prod"], "new5678"
+            )
+
+            self.assertEqual([], removed)
+            self.assertTrue(build.exists())
+
     def test_device_profiles_forbid_irreversible_writes(self) -> None:
         root = Path(__file__).resolve().parents[1]
         self.assertEqual(
@@ -122,6 +157,8 @@ class PlatformioWrapperTests(unittest.TestCase):
         self.assertIn("kAxp2101LongHoldShutdown = 1U << 1", source)
         self.assertIn("repair_legacy_power_key_policy", source)
         self.assertIn("set_hardware_hold_shutdown(!pressed)", source)
+        self.assertIn("kAxp2101PowerKeyTiming = 0x27", source)
+        self.assertIn("configure_fast_power_on()", source)
 
     def test_production_system_off_discharges_rails_and_stays_latched(
         self,
