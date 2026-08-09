@@ -18,6 +18,10 @@
 LV_FONT_DECLARE(chatesp_font_18);
 LV_FONT_DECLARE(chatesp_clock_font_180);
 
+#ifndef CHATESP_DEVELOPMENT_MODE
+#define CHATESP_DEVELOPMENT_MODE 0
+#endif
+
 namespace chatesp::ui {
 namespace {
 
@@ -1233,6 +1237,21 @@ void create_runtime_screen() {
     lv_obj_set_style_text_align(
         battery_status_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_align(battery_status_label, LV_ALIGN_BOTTOM_RIGHT, -30, -20);
+
+#if CHATESP_DEVELOPMENT_MODE
+    lv_obj_t *development_status_label = lv_label_create(screen);
+    lv_obj_set_width(development_status_label, 64);
+    set_static_text(development_status_label, "DEV");
+    lv_obj_set_style_text_color(
+        development_status_label, lv_color_hex(0x777777), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        development_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(
+        development_status_label, 1, LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        development_status_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(development_status_label, LV_ALIGN_BOTTOM_MID, 0, -20);
+#endif
     show_footer(RadioIndicator::off, 0, false, 0, false);
 
     image_overlay = lv_image_create(screen);

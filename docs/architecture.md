@@ -362,8 +362,9 @@ boot and creates a new thread.
   footer, and state-specific motion. The radio footer shows the active Wi-Fi or
   secure BLE link and three Wi-Fi signal levels. The battery footer becomes
   green and adds a charge mark while battery current flows in the charge
-  direction. It also owns the bounded top control panel and touch gesture
-  presentation.
+  direction. Development builds show a small `DEV` marker at the footer center.
+  Production builds omit this marker. The UI also owns the bounded top control
+  panel and touch gesture presentation.
 - `provisioning`: versioned BLE packets, authenticated encrypted transfer,
   acknowledgement, and NVS persistence.
 - `device preferences`: a small versioned brightness and volume record. It is

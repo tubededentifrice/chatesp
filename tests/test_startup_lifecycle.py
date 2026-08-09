@@ -80,6 +80,24 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertNotIn("heap_caps_calloc(", start)
         self.assertIn("heap_caps_calloc(", layout)
 
+    def test_development_marker_is_centered_and_build_guarded(self) -> None:
+        ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        runtime_start = ui.index("void create_runtime_screen(")
+        marker_start = ui.index(
+            "#if CHATESP_DEVELOPMENT_MODE\n"
+            "    lv_obj_t *development_status_label",
+            runtime_start,
+        )
+        marker_end = ui.index("    show_footer(", marker_start)
+        marker = ui[marker_start:marker_end]
+
+        self.assertIn('set_static_text(development_status_label, "DEV");', marker)
+        self.assertIn("LV_ALIGN_BOTTOM_MID, 0, -20", marker)
+        self.assertIn("&lv_font_montserrat_14", marker)
+        self.assertIn("#endif", marker)
+
 
 if __name__ == "__main__":
     unittest.main()

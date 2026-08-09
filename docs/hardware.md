@@ -227,6 +227,8 @@ The connected V2 board must pass these checks for this control change:
   one through three signal bars. The footer shows a valid battery percentage
   or a clear unavailable value. While the battery charges, its icon and
   percentage are green and a charge mark is visible;
+- development firmware shows a small `DEV` marker at the footer center, and
+  production firmware does not show the marker;
 - at 6 percent on battery power, the device stays on. At 5 percent, it requests
   system-off in development and production. Good VBUS prevents this request;
 - after sleep starts, the firmware does not read the battery gauge;

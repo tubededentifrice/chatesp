@@ -13,7 +13,9 @@ the initialized panel at its current brightness avoids this false-success wake
 state. Black AMOLED pixels emit no visible light. USB stays available, so the
 next upload can reset and flash the board without a manual button sequence. A
 PWR-button press removes the black frame and redraws the display. The top mode
-button does not wake it and has no effect while it sleeps.
+button does not wake it and has no effect while it sleeps. The ChatESP footer
+shows a small centered `DEV` marker. Production firmware does not create this
+marker.
 
 Build and upload development mode with one command:
 
