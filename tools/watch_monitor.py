@@ -17,6 +17,7 @@ import serial
 _MAXIMUM_SERIAL_LINE_CHARS = 4_096
 _USB_RESET_ASSERT_SECONDS = 0.15
 _USB_RESET_RECOVERY_SECONDS = 0.50
+_SYSTEM_OFF_LOG_MARKER = "Requesting AXP2101 system off"
 _MAC_ADDRESS = re.compile(
     r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])"
 )
@@ -169,13 +170,25 @@ def monitor(
     connection = open_safe_serial(port)
     redactor = SerialRedactor()
     latency = LatencySummary()
+    system_off_requested = False
+    system_off_disconnected = False
     try:
         deadline = time.monotonic() + duration_seconds
         while time.monotonic() < deadline:
-            data = connection.read(connection.in_waiting or 1)
+            try:
+                data = connection.read(connection.in_waiting or 1)
+            except (OSError, serial.SerialException):
+                if not system_off_requested:
+                    raise
+                system_off_disconnected = True
+                break
             if data:
                 output = redactor.feed(data.decode("utf-8", errors="replace"))
                 if output:
+                    system_off_requested = (
+                        system_off_requested
+                        or _SYSTEM_OFF_LOG_MARKER in output
+                    )
                     for line in output.splitlines():
                         latency.add_line(line)
                     sys.stdout.write(output)
@@ -186,7 +199,14 @@ def monitor(
             latency.add_line(output)
             sys.stdout.write(output)
             sys.stdout.flush()
-        close_safe_serial(connection)
+        if system_off_disconnected:
+            connection.close()
+        else:
+            try:
+                close_safe_serial(connection)
+            except (OSError, serial.SerialException):
+                if not system_off_requested:
+                    raise
     if latency_report:
         print(latency.report())
     return 0

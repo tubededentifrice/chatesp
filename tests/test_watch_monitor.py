@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import unittest
+from io import StringIO
+from unittest.mock import patch
+
+import serial
 from tools.watch_monitor import (
     LatencySummary,
     SerialRedactor,
     close_safe_serial,
     disable_hangup_reset,
+    monitor,
     open_safe_serial,
     redact_serial_text,
 )
@@ -33,6 +38,24 @@ class RecordingSerial:
 
     def fileno(self) -> int:
         return 7
+
+
+class DisconnectingSerial:
+    def __init__(self, lines: list[bytes]) -> None:
+        self.lines = lines
+        self.closed = False
+
+    @property
+    def in_waiting(self) -> int:
+        return 1
+
+    def read(self, _: int) -> bytes:
+        if self.lines:
+            return self.lines.pop(0)
+        raise serial.SerialException("device disconnected")
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class RecordingTermios:
@@ -105,6 +128,53 @@ class WatchMonitorTests(unittest.TestCase):
                 ("close", None),
             ],
         )
+
+    def test_production_system_off_disconnect_is_a_clean_monitor_end(self) -> None:
+        connection = DisconnectingSerial(
+            [b"I power: Requesting AXP2101 system off\r\n"]
+        )
+
+        with patch(
+            "tools.watch_monitor.open_safe_serial", return_value=connection
+        ), patch("tools.watch_monitor.close_safe_serial") as safe_close, patch(
+            "tools.watch_monitor.time.monotonic", side_effect=[0.0, 0.0, 0.5]
+        ), patch("tools.watch_monitor.sys.stdout", new_callable=StringIO):
+            result = monitor("LOCAL_PORT", 1.0)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(connection.closed)
+        safe_close.assert_not_called()
+
+    def test_unexpected_disconnect_is_still_an_error(self) -> None:
+        connection = DisconnectingSerial([])
+
+        with patch(
+            "tools.watch_monitor.open_safe_serial", return_value=connection
+        ), patch("tools.watch_monitor.close_safe_serial") as safe_close, patch(
+            "tools.watch_monitor.time.monotonic", side_effect=[0.0, 0.0]
+        ):
+            with self.assertRaises(serial.SerialException):
+                monitor("LOCAL_PORT", 1.0)
+
+        safe_close.assert_called_once_with(connection)
+
+    def test_system_off_disconnect_during_close_is_clean(self) -> None:
+        connection = DisconnectingSerial(
+            [b"I power: Requesting AXP2101 system off\r\n"]
+        )
+
+        with patch(
+            "tools.watch_monitor.open_safe_serial", return_value=connection
+        ), patch(
+            "tools.watch_monitor.close_safe_serial",
+            side_effect=serial.SerialException("device disconnected"),
+        ) as safe_close, patch(
+            "tools.watch_monitor.time.monotonic", side_effect=[0.0, 0.0, 2.0]
+        ), patch("tools.watch_monitor.sys.stdout", new_callable=StringIO):
+            result = monitor("LOCAL_PORT", 1.0)
+
+        self.assertEqual(result, 0)
+        safe_close.assert_called_once_with(connection)
 
     def test_local_network_identifiers_are_redacted(self) -> None:
         text = (
