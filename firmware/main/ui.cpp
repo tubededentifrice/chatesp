@@ -93,6 +93,7 @@ lv_obj_t *plot_y_range_label = nullptr;
 lv_chart_series_t *plot_series = nullptr;
 lv_obj_t *passkey_overlay = nullptr;
 lv_obj_t *passkey_label = nullptr;
+lv_obj_t *sleep_overlay = nullptr;
 lv_obj_t *controls_edge_target = nullptr;
 lv_obj_t *controls_edge_handle = nullptr;
 lv_obj_t *controls_backdrop = nullptr;
@@ -1330,6 +1331,17 @@ void create_screen() {
     lv_obj_align(passkey_hint, LV_ALIGN_CENTER, 0, 44);
     hide_passkey();
     create_clock_face(screen);
+
+    sleep_overlay = lv_obj_create(screen);
+    lv_obj_remove_style_all(sleep_overlay);
+    lv_obj_set_size(sleep_overlay, 368, 448);
+    lv_obj_set_style_bg_color(
+        sleep_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        sleep_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(sleep_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(sleep_overlay);
+    lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
 }  // namespace
@@ -1799,12 +1811,21 @@ void hide_fullscreen_visual() {
     hide_fullscreen_plot();
 }
 
-esp_err_t sleep() {
+esp_err_t sleep(bool keep_panel_ready) {
+    if (display_handle == nullptr || sleep_overlay == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!bsp_display_lock(25)) {
         return ESP_ERR_TIMEOUT;
     }
     close_controls(false);
-    const esp_err_t result = bsp_display_backlight_off();
+    lv_obj_remove_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(sleep_overlay);
+    lv_obj_invalidate(sleep_overlay);
+    lv_refr_now(display_handle);
+    const esp_err_t result = keep_panel_ready
+        ? ESP_OK
+        : bsp_display_backlight_off();
     bsp_display_unlock();
     return result;
 }
@@ -1820,6 +1841,7 @@ esp_err_t wake(
     if (!bsp_display_lock(25)) {
         return ESP_ERR_TIMEOUT;
     }
+    lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
     hide_fullscreen_visual();
     set_content({}, kMaximumAnswerBytes);
     show_app_mode(mode, state);

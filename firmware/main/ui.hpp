@@ -74,7 +74,9 @@ void show_footer(
 void hide_fullscreen_image();
 void hide_fullscreen_visual();
 
-esp_err_t sleep();
+// A soft sleep draws a black frame but keeps the panel ready. A system-off
+// sleep can also set brightness to zero after its cancel window has ended.
+esp_err_t sleep(bool keep_panel_ready);
 esp_err_t wake(
     InteractionState state, std::uint8_t brightness_percent,
     AppMode mode = AppMode::chat);

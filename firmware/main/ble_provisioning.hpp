@@ -31,6 +31,7 @@ esp_err_t stop(std::uint32_t timeout_ms);
 [[nodiscard]] bool running();
 [[nodiscard]] bool bond_available();
 [[nodiscard]] bool settings_confirmation_pending();
+[[nodiscard]] bool advertising_recovery_requested();
 
 constexpr std::size_t kMaximumHttpProxyFrameSize = 512;
 

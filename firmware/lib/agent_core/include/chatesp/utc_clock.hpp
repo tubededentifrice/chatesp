@@ -8,7 +8,7 @@
 namespace chatesp {
 namespace agent {
 
-using UtcMinuteText = FixedText<26>;
+using UtcMinuteText = FixedText<38>;
 
 struct LocalTimeOfDay {
     std::uint8_t hour = 0;
@@ -19,7 +19,8 @@ struct LocalTimeOfDay {
 
 // Keeps UTC from the app or a trusted HTTP response and advances it with
 // monotonic time. An app-provided offset makes the model-facing value local.
-// The model-facing value has minute precision and does not contain seconds.
+// The model-facing value has a weekday and minute precision. It does not
+// contain seconds.
 class UtcClock {
 public:
     [[nodiscard]] bool update_from_http_date(

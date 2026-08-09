@@ -513,6 +513,24 @@ void test_interaction_deadline_is_bounded_and_handles_wrap() {
     TEST_ASSERT_TRUE(deadline.expired(50));
 }
 
+void test_phone_proxy_keeps_a_saved_bond_through_a_long_recording() {
+    TEST_ASSERT_TRUE(chatesp::runtime::keep_ble_during_recording(
+        true, true, 1'000, 31'000, 2'000));
+    TEST_ASSERT_FALSE(chatesp::runtime::keep_ble_during_recording(
+        true, false, 1'000, 3'000, 2'000));
+    TEST_ASSERT_FALSE(chatesp::runtime::keep_ble_during_recording(
+        false, true, 1'000, 1'100, 2'000));
+}
+
+void test_phone_proxy_initial_recording_grace_handles_wrap() {
+    constexpr std::uint32_t started =
+        std::numeric_limits<std::uint32_t>::max() - 999;
+    TEST_ASSERT_TRUE(chatesp::runtime::keep_ble_during_recording(
+        true, false, started, 999, 2'000));
+    TEST_ASSERT_FALSE(chatesp::runtime::keep_ble_during_recording(
+        true, false, started, 1'000, 2'000));
+}
+
 void test_speech_segmenter_accepts_cumulative_split_updates() {
     chatesp::runtime::SpeechSegmenter segmenter;
     SegmentCollector output;
@@ -703,6 +721,8 @@ int main(int, char **) {
     RUN_TEST(test_poweroff_gate_keeps_development_sleep_out_of_poweroff);
     RUN_TEST(test_async_shutdown_gate_bounds_one_worker_lifecycle);
     RUN_TEST(test_interaction_deadline_is_bounded_and_handles_wrap);
+    RUN_TEST(test_phone_proxy_keeps_a_saved_bond_through_a_long_recording);
+    RUN_TEST(test_phone_proxy_initial_recording_grace_handles_wrap);
     RUN_TEST(test_speech_segmenter_accepts_cumulative_split_updates);
     RUN_TEST(test_speech_segmenter_sends_one_complete_remainder);
     RUN_TEST(test_speech_segmenter_bounds_a_long_first_sentence);

@@ -65,6 +65,18 @@ enum class CrashEvent : std::uint16_t {
     display_wake_begin,
     display_wake_complete,
     display_wake_failed,
+    pwr_poll_failed,
+    pwr_poll_recovered,
+    pwr_legacy_policy_repaired,
+    ble_connection_failed,
+    ble_advertise_failed,
+    ble_advertise_restarted,
+    ble_advertise_retry,
+    ble_advertise_recovery,
+    phone_proxy_wake_start,
+    phone_proxy_grace_begin,
+    phone_proxy_ready,
+    phone_proxy_fallback,
 };
 
 constexpr std::size_t kCrashTraceBootCount = 3;

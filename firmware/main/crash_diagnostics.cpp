@@ -86,6 +86,10 @@ const char *event_name(runtime::CrashEvent event) {
         case Event::pwr_release_accepted: return "pwr_release_accepted";
         case Event::pwr_release_unconfirmed:
             return "pwr_release_unconfirmed";
+        case Event::pwr_poll_failed: return "pwr_poll_failed";
+        case Event::pwr_poll_recovered: return "pwr_poll_recovered";
+        case Event::pwr_legacy_policy_repaired:
+            return "pwr_legacy_policy_repaired";
         case Event::sleep_button_request: return "sleep_button_request";
         case Event::sleep_model_request: return "sleep_model_request";
         case Event::soft_sleep_begin: return "soft_sleep_begin";
@@ -95,6 +99,19 @@ const char *event_name(runtime::CrashEvent event) {
         case Event::display_wake_begin: return "display_wake_begin";
         case Event::display_wake_complete: return "display_wake_complete";
         case Event::display_wake_failed: return "display_wake_failed";
+        case Event::ble_connection_failed: return "ble_connection_failed";
+        case Event::ble_advertise_failed: return "ble_advertise_failed";
+        case Event::ble_advertise_restarted:
+            return "ble_advertise_restarted";
+        case Event::ble_advertise_retry: return "ble_advertise_retry";
+        case Event::ble_advertise_recovery:
+            return "ble_advertise_recovery";
+        case Event::phone_proxy_wake_start:
+            return "phone_proxy_wake_start";
+        case Event::phone_proxy_grace_begin:
+            return "phone_proxy_grace_begin";
+        case Event::phone_proxy_ready: return "phone_proxy_ready";
+        case Event::phone_proxy_fallback: return "phone_proxy_fallback";
     }
     return "unknown";
 }

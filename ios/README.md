@@ -11,9 +11,9 @@ per-device provisioning revisions in one versioned preferences record. The
 app can migrate the prior single-device record. It restores the active
 ChatESP device after iOS restarts it for Bluetooth work. Scan, connect,
 reconnect-scan, frame, and confirmation operations have fixed time limits. A
-reconnect retry scans for the saved Core Bluetooth identifier before it starts
-a new connection. After one failed reconnect cycle, it waits 30 seconds before
-another bounded cycle. It does not require device removal when the selected
+reconnect retry scans for the saved Core Bluetooth identifier for 30 seconds
+before it starts a new connection. A failed scan has a one-second gap before
+the next bounded scan. It does not require device removal when the selected
 device wakes after a long sleep. While the device sleeps, the status says that
 it is asleep or unavailable instead of claiming an active connection attempt.
 Remove a device from the last row of its settings page to stop its BLE work and
@@ -40,12 +40,16 @@ section. The remove row is last and owns its confirmation dialog. The page has
 no manual provisioning controls.
 
 The app automatically sends one atomic settings packet over the authenticated
-and encrypted BLE service after connection or a settings change. Empty Wi-Fi,
-OpenRouter, and Brave values are valid. The firmware reports a clear runtime
-error if a feature needs missing Wi-Fi or OpenRouter credentials. An empty
-Brave key turns search off. Empty endpoint or model edits use the built-in
-defaults when the app sends settings. Invalid nonempty values remain local and
-the status section identifies the field that needs attention.
+and encrypted BLE service when the effective settings fingerprint changes.
+After a confirmed packet, it refreshes the same fingerprint at most once every
+10 minutes. An unchanged reconnect gives the phone proxy two seconds before an
+eligible refresh starts. A failed automatic transfer can retry after 30
+seconds while the link stays ready. A disconnect or settings change cancels
+the old schedule. Empty Wi-Fi, OpenRouter, and Brave values are valid. The firmware
+reports a clear runtime error if a feature needs missing Wi-Fi or OpenRouter
+credentials. An empty Brave key turns search off. Empty endpoint or model edits
+use the built-in defaults when the app sends settings. Invalid nonempty values
+remain local and the status section identifies the field that needs attention.
 Selecting another device cancels an active settings transfer before the app
 changes the Bluetooth peripheral.
 

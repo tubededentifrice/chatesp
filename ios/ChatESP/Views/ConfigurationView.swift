@@ -5,7 +5,7 @@ struct ConfigurationView: View {
     @EnvironmentObject private var provisioner: BLEProvisioner
     @StateObject private var modelCatalog = ModelCatalog()
     @State private var showingDiscovery = false
-    @State private var lastAutomaticSync: AutomaticSettingsSyncTarget?
+    @State private var lastAutomaticSync: AutomaticSettingsSyncRecord?
 
     var body: some View {
         NavigationStack {
@@ -64,8 +64,8 @@ struct ConfigurationView: View {
                 provisioner.restoreSelectedDevice(
                     identifier: store.activeDeviceIdentifier)
             }
-            .task(id: automaticSyncTrigger) {
-                await synchronizeSettingsIfNeeded(automaticSyncTrigger)
+            .task(id: automaticSyncTask) {
+                await synchronizeSettingsIfNeeded(automaticSyncTask)
             }
         }
     }
@@ -84,34 +84,60 @@ struct ConfigurationView: View {
             provisioning: provisioner.isProvisioning)
     }
 
-    private func synchronizeSettingsIfNeeded(
-        _ trigger: AutomaticSettingsSyncTrigger
-    ) async {
-        guard AutomaticSettingsSyncPolicy.shouldStart(
-            trigger: trigger,
-            lastAttempt: lastAutomaticSync
-        ) else {
-            if !trigger.connected {
-                lastAutomaticSync = nil
-            }
-            return
-        }
-        try? await Task.sleep(for: .milliseconds(350))
-        guard !Task.isCancelled,
-              trigger == automaticSyncTrigger,
-              let target = trigger.target else {
-            return
-        }
-        lastAutomaticSync = target
-        synchronizeSettings(for: target.deviceID)
+    private var automaticSyncTask: AutomaticSettingsSyncTask {
+        AutomaticSettingsSyncTask(
+            trigger: automaticSyncTrigger,
+            lastAttempt: lastAutomaticSync)
     }
 
-    private func synchronizeSettings(for deviceID: UUID) {
+    private func synchronizeSettingsIfNeeded(
+        _ task: AutomaticSettingsSyncTask
+    ) async {
+        guard let eligibilityDelay =
+                AutomaticSettingsSyncPolicy.waitUntilEligible(
+                    trigger: task.trigger,
+                    lastAttempt: task.lastAttempt) else {
+            return
+        }
+        if eligibilityDelay > .zero {
+            try? await Task.sleep(for: eligibilityDelay)
+        }
+        guard !Task.isCancelled,
+              task == automaticSyncTask else {
+            return
+        }
+        guard AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: task.trigger,
+            lastAttempt: task.lastAttempt
+        ) else { return }
+        guard let target = task.trigger.target else { return }
+        try? await Task.sleep(for: AutomaticSettingsSyncPolicy.startDelay(
+            target: target,
+            lastAttempt: task.lastAttempt))
+        guard !Task.isCancelled,
+              task == automaticSyncTask else {
+            return
+        }
+        lastAutomaticSync = AutomaticSettingsSyncRecord(
+            target: target,
+            attemptedAt: .now,
+            acknowledged: false)
+        synchronizeSettings(for: target)
+    }
+
+    private func synchronizeSettings(for target: AutomaticSettingsSyncTarget) {
         do {
             send(
-                try store.makePacket(for: deviceID),
-                deviceID: deviceID,
-                canRecoverRevision: true)
+                try store.makePacket(for: target.deviceID),
+                deviceID: target.deviceID,
+                canRecoverRevision: true
+            ) {
+                guard automaticSyncTrigger.target == target else { return }
+                lastAutomaticSync = AutomaticSettingsSyncRecord(
+                    target: target,
+                    attemptedAt: .now,
+                    acknowledged: true)
+            }
         } catch {
             store.show(error)
         }
@@ -120,7 +146,8 @@ struct ConfigurationView: View {
     private func send(
         _ packet: ProvisioningPacket,
         deviceID: UUID,
-        canRecoverRevision: Bool
+        canRecoverRevision: Bool,
+        onAcknowledged: @escaping () -> Void
     ) {
         provisioner.provision(packet: packet) { result in
             switch result {
@@ -136,9 +163,11 @@ struct ConfigurationView: View {
                         send(
                             recoveryPacket,
                             deviceID: deviceID,
-                            canRecoverRevision: false)
+                            canRecoverRevision: false,
+                            onAcknowledged: onAcknowledged)
                     } else {
                         try store.accept(acknowledgement, for: deviceID)
+                        onAcknowledged()
                     }
                 } catch {
                     store.show(error)

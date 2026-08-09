@@ -53,25 +53,30 @@ action button:
 
 The app disables the AXP2101 automatic long-hold shutdown while the PWR button
 is pressed. This lets a recording continue for more than six seconds. It
-restores hardware long-hold shutdown when the button is released. The top BOOT
-button is active-low GPIO0. After boot, a debounced press from 30 through 700
-ms changes between ChatESP and Clock. A shorter electrical pulse or a longer
-press has no app action. The button is not a sleep wake source. Its
-boot-strapping function stays available for firmware recovery. Firmware uses
-the EXIO4 level only to detect a held key at start.
+restores hardware long-hold shutdown when the button is released and at each
+idle start. The top BOOT button is active-low GPIO0. After boot, a debounced
+press from 30 through 700 ms changes between ChatESP and Clock. A shorter
+electrical pulse or a longer press has no app action. The button is not a sleep
+wake source. Its boot-strapping function stays available for firmware
+recovery. Firmware uses the EXIO4 level only to detect a held key at start.
 During operation, it uses AXP2101 PWRON edge events. On the connected V2 board,
 EXIO4 stayed active after key release during battery operation. Firmware rejects
 an edge sample that also contains a USB power-source event.
+The long-hold control is AXP2101 `PWROFF_EN` register `0x22`, bit 1. Firmware
+also clears register `0x10`, bit 2 at start. An earlier firmware revision used
+that unrelated bit and enabled the PMIC 16-second PWR shutdown path.
 
 ## Power behavior
 
 Before sleep, stop audio, radio work, display updates, touch, and unused
-peripherals. Set AMOLED brightness to zero, and request AXP2101 system-off in
-production. Development soft sleep keeps the CO5300 controller on at zero
-brightness. Repeated display-off and display-on commands can leave this panel
-black even when it accepts the display-on command. A PWR press then causes a
-cold production boot or a development display wake. Measure current on battery
-hardware before making a battery-life claim.
+peripherals. Development soft sleep draws a full black frame and keeps the
+CO5300 initialized at its current brightness. The panel can accept a successful
+brightness or display-on command after brightness zero while its pixels stay
+black. Therefore, an in-session wake must not use this zero-to-nonzero path.
+Production sets brightness to zero only after the sleep cancel window, then it
+requests AXP2101 system-off. A PWR press causes a cold production boot or
+removes the development black frame. Measure current on battery hardware before
+making a battery-life claim.
 
 The NimBLE shutdown completion wait has a one-second limit. A stalled shutdown
 must not block a development PWR-button wake or a production system-off
@@ -131,6 +136,11 @@ The connected V2 board must pass these checks for this control change:
   selected development or production sleep path;
 - a stalled BLE shutdown does not block a PWR-button wake from development
   soft sleep or a production system-off request;
+- a failed BLE connection with controller reason `0x3e` starts advertising
+  again and the selected iPhone can connect on its next scan;
+- a failed-connection callback during BLE shutdown does not start advertising;
+  a transient advertising failure retries and then requests a complete host
+  recovery if the retry limit ends;
 - after Wi-Fi and BLE start, repeated full-screen refreshes do not report a
   private transmit-buffer allocation failure or block the LVGL task;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the

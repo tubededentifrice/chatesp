@@ -17,13 +17,15 @@ namespace {
 constexpr char kTag[] = "power";
 constexpr std::uint16_t kAxp2101Address = 0x34;
 constexpr std::uint8_t kAxp2101CommonConfig = 0x10;
+constexpr std::uint8_t kAxp2101PowerOffEnable = 0x22;
 constexpr std::uint8_t kAxp2101Status1 = 0x00;
 constexpr std::uint8_t kAxp2101IrqEnable2 = 0x41;
 constexpr std::uint8_t kAxp2101IrqStatus2 = 0x49;
 constexpr std::uint8_t kAxp2101BatteryPercent = 0xA4;
 constexpr std::uint8_t kAxp2101BatteryPresent = 1U << 3;
 constexpr std::uint8_t kAxp2101SoftwareOff = 1U << 0;
-constexpr std::uint8_t kAxp2101PowerKeyShutdown = 1U << 2;
+constexpr std::uint8_t kAxp2101LegacyPowerKeyShutdown = 1U << 2;
+constexpr std::uint8_t kAxp2101LongHoldShutdown = 1U << 1;
 constexpr std::uint8_t kAxp2101PowerKeyPositiveEdge = 1U << 0;
 constexpr std::uint8_t kAxp2101PowerKeyNegativeEdge = 1U << 1;
 constexpr std::uint8_t kAxp2101PowerKeyLongPress = 1U << 2;
@@ -78,21 +80,41 @@ esp_err_t write_axp2101(std::uint8_t reg, std::uint8_t value) {
 }
 
 esp_err_t set_hardware_hold_shutdown(bool enabled) {
-    std::uint8_t common_config = 0;
-    esp_err_t error = read_axp2101(kAxp2101CommonConfig, &common_config);
+    std::uint8_t power_off_enable = 0;
+    esp_err_t error = read_axp2101(
+        kAxp2101PowerOffEnable, &power_off_enable);
     if (error != ESP_OK) {
         return error;
     }
     const std::uint8_t next = enabled
-        ? common_config | kAxp2101PowerKeyShutdown
-        : common_config & static_cast<std::uint8_t>(
-              ~kAxp2101PowerKeyShutdown);
-    error = write_axp2101(kAxp2101CommonConfig, next);
+        ? power_off_enable | kAxp2101LongHoldShutdown
+        : power_off_enable & static_cast<std::uint8_t>(
+              ~kAxp2101LongHoldShutdown);
+    error = write_axp2101(kAxp2101PowerOffEnable, next);
     if (error != ESP_OK) {
         return error;
     }
     hardware_hold_shutdown_suppressed = !enabled;
     return ESP_OK;
+}
+
+esp_err_t repair_legacy_power_key_policy() {
+    std::uint8_t common_config = 0;
+    esp_err_t error = read_axp2101(kAxp2101CommonConfig, &common_config);
+    if (error != ESP_OK ||
+        (common_config & kAxp2101LegacyPowerKeyShutdown) == 0) {
+        return error;
+    }
+    error = write_axp2101(
+        kAxp2101CommonConfig,
+        common_config & static_cast<std::uint8_t>(
+            ~kAxp2101LegacyPowerKeyShutdown));
+    if (error == ESP_OK) {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::pwr_legacy_policy_repaired);
+        ESP_LOGW(kTag, "Repaired the prior PWR 16-second shutdown policy");
+    }
+    return error;
 }
 
 esp_err_t prepare_power_key_events(
@@ -204,6 +226,10 @@ esp_err_t initialize() {
             bsp_i2c_get_handle(), &axp2101_config, &axp2101),
         kTag,
         "AXP2101 start failed");
+    ESP_RETURN_ON_ERROR(
+        repair_legacy_power_key_policy(),
+        kTag,
+        "PWR legacy policy repair failed");
     bool startup_press_event = false;
     bool startup_vbus_remove_event = false;
     ESP_RETURN_ON_ERROR(
@@ -224,16 +250,16 @@ esp_err_t initialize() {
             kTag,
             "Ignored PWR level after USB removal without a PWR edge");
     }
-    if (pressed) {
-        const esp_err_t policy_error = set_hardware_hold_shutdown(false);
-        if (policy_error != ESP_OK) {
-            ESP_LOGE(
-                kTag,
-                "PWR hold policy update failed (category %s)",
-                esp_err_to_name(policy_error));
-            hold_policy_error_reported = true;
-            hold_policy_error_reported_at_ms = monotonic_ms();
-        }
+    // AXP2101 state can survive an ESP reset. Restore the emergency long-hold
+    // shutdown at an idle start, or suppress it when startup sampled a hold.
+    const esp_err_t policy_error = set_hardware_hold_shutdown(!pressed);
+    if (policy_error != ESP_OK) {
+        ESP_LOGE(
+            kTag,
+            "PWR hold policy update failed (category %s)",
+            esp_err_to_name(policy_error));
+        hold_policy_error_reported = true;
+        hold_policy_error_reported_at_ms = monotonic_ms();
     }
     action_button.reset(pressed, monotonic_ms());
     action_button_stably_pressed = pressed;

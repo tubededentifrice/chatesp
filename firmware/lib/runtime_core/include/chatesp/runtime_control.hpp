@@ -60,6 +60,19 @@ private:
     std::uint32_t timeout_ms_ = 0;
 };
 
+inline bool keep_ble_during_recording(
+    bool ble_running,
+    bool saved_bond_available,
+    std::uint32_t recording_started_ms,
+    std::uint32_t now_ms,
+    std::uint32_t initial_grace_ms) {
+    if (!ble_running) {
+        return false;
+    }
+    return saved_bond_available ||
+        now_ms - recording_started_ms < initial_grace_ms;
+}
+
 class PoweroffGate {
 public:
     void begin_sleep() {

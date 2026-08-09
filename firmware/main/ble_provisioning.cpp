@@ -29,6 +29,7 @@
 #include "freertos/semphr.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "nimble/nimble_npl.h"
 #include "os/os_mbuf.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
@@ -52,6 +53,8 @@ constexpr std::uint32_t kStopTaskStackBytes = 4 * 1024;
 constexpr UBaseType_t kStopTaskPriority = 5;
 constexpr std::uint32_t kStopTaskReclaimDelayMs = 10;
 constexpr std::uint32_t kDisconnectTimeoutMs = 2'000;
+constexpr std::uint32_t kAdvertiseRetryMs = 100;
+constexpr std::uint8_t kAdvertiseRetryLimit = 5;
 constexpr char kLogTag[] = "ble_provisioning";
 
 #if !defined(CONFIG_BT_NIMBLE_NVS_PERSIST) || \
@@ -195,6 +198,10 @@ std::uint16_t s_cached_memory_connection = kNoConnection;
 std::uint8_t s_address_type = 0;
 std::atomic<bool> s_running{false};
 std::atomic<bool> s_bond_available{false};
+ble_npl_callout s_advertise_retry_callout{};
+bool s_advertise_retry_initialized = false;
+std::uint8_t s_advertise_retry_count = 0;
+std::atomic<bool> s_advertise_recovery_requested{false};
 runtime::BleShutdown s_shutdown;
 runtime::AsyncShutdownGate s_stop_gate;
 SemaphoreHandle_t s_stop_done = nullptr;
@@ -882,14 +889,18 @@ void end_insecure_connection(std::uint16_t connection_handle) {
     }
 }
 
-void advertise() {
+bool advertise_once() {
     ble_hs_adv_fields advertisement{};
     advertisement.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     advertisement.uuids128 = const_cast<ble_uuid128_t *>(&kServiceUuid);
     advertisement.num_uuids128 = 1;
     advertisement.uuids128_is_complete = 1;
-    if (ble_gap_adv_set_fields(&advertisement) != 0) {
-        return;
+    int result = ble_gap_adv_set_fields(&advertisement);
+    if (result != 0) {
+        crash_diagnostics::mark(runtime::CrashEvent::ble_advertise_failed);
+        ESP_LOGW(
+            kLogTag, "BLE advertisement fields failed (category %d)", result);
+        return false;
     }
 
     ble_hs_adv_fields response{};
@@ -897,15 +908,87 @@ void advertise() {
         const_cast<char *>(kDeviceName));
     response.name_len = sizeof(kDeviceName) - 1;
     response.name_is_complete = 1;
-    if (ble_gap_adv_rsp_set_fields(&response) != 0) {
-        return;
+    result = ble_gap_adv_rsp_set_fields(&response);
+    if (result != 0) {
+        crash_diagnostics::mark(runtime::CrashEvent::ble_advertise_failed);
+        ESP_LOGW(
+            kLogTag, "BLE scan response failed (category %d)", result);
+        return false;
     }
 
     ble_gap_adv_params parameters{};
     parameters.conn_mode = BLE_GAP_CONN_MODE_UND;
     parameters.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    ble_gap_adv_start(
+    result = ble_gap_adv_start(
         s_address_type, nullptr, BLE_HS_FOREVER, &parameters, gap_event, nullptr);
+    if (result != 0 && result != BLE_HS_EALREADY) {
+        crash_diagnostics::mark(runtime::CrashEvent::ble_advertise_failed);
+        ESP_LOGW(
+            kLogTag, "BLE advertising start failed (category %d)", result);
+        return false;
+    }
+    crash_diagnostics::mark(runtime::CrashEvent::ble_advertise_restarted);
+    return true;
+}
+
+void schedule_advertise_retry() {
+    if (!s_running.load(std::memory_order_acquire) ||
+        s_stop_gate.running() || !s_advertise_retry_initialized ||
+        s_advertise_recovery_requested.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (s_advertise_retry_count >= kAdvertiseRetryLimit) {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::ble_advertise_recovery);
+        s_advertise_recovery_requested.store(
+            true, std::memory_order_release);
+        ESP_LOGE(
+            kLogTag,
+            "BLE advertising retries ended; host recovery requested");
+        return;
+    }
+    ++s_advertise_retry_count;
+    crash_diagnostics::mark(runtime::CrashEvent::ble_advertise_retry);
+    const ble_npl_error_t result = ble_npl_callout_reset(
+        &s_advertise_retry_callout,
+        ble_npl_time_ms_to_ticks32(kAdvertiseRetryMs));
+    if (result != BLE_NPL_OK) {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::ble_advertise_recovery);
+        s_advertise_recovery_requested.store(
+            true, std::memory_order_release);
+        ESP_LOGE(
+            kLogTag,
+            "BLE advertising retry timer failed; host recovery requested");
+    }
+}
+
+void advertise_or_retry() {
+    if (!s_running.load(std::memory_order_acquire) ||
+        s_stop_gate.running() ||
+        s_advertise_recovery_requested.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (advertise_once()) {
+        s_advertise_retry_count = 0;
+        ble_npl_callout_stop(&s_advertise_retry_callout);
+        return;
+    }
+    schedule_advertise_retry();
+}
+
+void advertise_retry_event(ble_npl_event *) {
+    advertise_or_retry();
+}
+
+void deinitialize_advertise_retry() {
+    if (s_advertise_retry_initialized) {
+        ble_npl_callout_stop(&s_advertise_retry_callout);
+        ble_npl_callout_deinit(&s_advertise_retry_callout);
+        s_advertise_retry_initialized = false;
+    }
+    s_advertise_retry_count = 0;
+    s_advertise_recovery_requested.store(false, std::memory_order_release);
 }
 
 void on_sync() {
@@ -913,10 +996,14 @@ void on_sync() {
         ble_hs_id_infer_auto(0, &s_address_type) != 0) {
         return;
     }
-    advertise();
+    advertise_or_retry();
 }
 
 void on_reset(int) {
+    if (s_advertise_retry_initialized) {
+        ble_npl_callout_stop(&s_advertise_retry_callout);
+    }
+    s_advertise_retry_count = 0;
     std::uint16_t active_connection = kNoConnection;
     s_session.disconnect();
     s_owner_connection = kNoConnection;
@@ -996,6 +1083,9 @@ esp_err_t stop_host() {
         return ESP_OK;
     }
     if (s_shutdown.step() == runtime::BleShutdown::Step::stop_host) {
+        if (s_advertise_retry_initialized) {
+            ble_npl_callout_stop(&s_advertise_retry_callout);
+        }
         (void)ble_gap_adv_stop();
         const esp_err_t disconnect_result = disconnect_active_link();
         if (disconnect_result != ESP_OK) {
@@ -1005,6 +1095,7 @@ esp_err_t stop_host() {
         if (nimble_port_stop() != 0) {
             return ESP_FAIL;
         }
+        deinitialize_advertise_retry();
         crash_diagnostics::mark(runtime::CrashEvent::ble_host_stop_complete);
         crash_diagnostics::mark(runtime::CrashEvent::ble_store_capture_begin);
         if (!capture_volatile_store()) {
@@ -1152,10 +1243,14 @@ int gap_event(ble_gap_event *event, void *) {
                     end_insecure_connection(event->connect.conn_handle);
                 }
             } else {
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::ble_connection_failed);
                 ESP_LOGW(
                     kLogTag, "BLE connection failed (category %d)",
                     event->connect.status);
-                advertise();
+                if (!s_stop_gate.running()) {
+                    advertise_or_retry();
+                }
             }
             return 0;
         case BLE_GAP_EVENT_DISCONNECT:
@@ -1164,13 +1259,13 @@ int gap_event(ble_gap_event *event, void *) {
                 event->disconnect.reason);
             release_connection(event->disconnect.conn.conn_handle);
             if (!s_stop_gate.running()) {
-                advertise();
+                advertise_or_retry();
             }
             complete_disconnect_wait(event->disconnect.conn.conn_handle);
             return 0;
         case BLE_GAP_EVENT_ADV_COMPLETE:
             if (!s_stop_gate.running()) {
-                advertise();
+                advertise_or_retry();
             }
             return 0;
         case BLE_GAP_EVENT_ENC_CHANGE:
@@ -1601,6 +1696,28 @@ esp_err_t start(
         return init_result;
     }
 
+    s_advertise_retry_count = 0;
+    s_advertise_recovery_requested.store(false, std::memory_order_release);
+    if (ble_npl_callout_init(
+            &s_advertise_retry_callout,
+            nimble_port_get_dflt_eventq(), advertise_retry_event,
+            nullptr) != 0) {
+        nimble_port_deinit();
+        s_memory_store->set_change_callback(nullptr, nullptr);
+        delete_http_proxy_resources();
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
+        vSemaphoreDelete(s_disconnect_done);
+        s_disconnect_done = nullptr;
+        s_settings_store = nullptr;
+        s_memory_store = nullptr;
+        s_passkey_callback = nullptr;
+        s_device_context_callback = nullptr;
+        s_callback_context = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    s_advertise_retry_initialized = true;
+
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
@@ -1628,6 +1745,7 @@ esp_err_t start(
         result = ble_svc_gap_device_name_set(kDeviceName);
     }
     if (result != 0) {
+        deinitialize_advertise_retry();
         nimble_port_deinit();
         s_memory_store->set_change_callback(nullptr, nullptr);
         delete_http_proxy_resources();
@@ -1646,6 +1764,7 @@ esp_err_t start(
     ble_store_config_init();
     if (!restore_volatile_store()) {
         ESP_LOGE(kLogTag, "Could not restore the volatile BLE bond store");
+        deinitialize_advertise_retry();
         nimble_port_deinit();
         s_memory_store->set_change_callback(nullptr, nullptr);
         delete_http_proxy_resources();
@@ -1725,6 +1844,10 @@ bool bond_available() {
 
 bool settings_confirmation_pending() {
     return s_settings_confirmation_pending.load(std::memory_order_acquire);
+}
+
+bool advertising_recovery_requested() {
+    return s_advertise_recovery_requested.load(std::memory_order_acquire);
 }
 
 bool http_proxy_available() {

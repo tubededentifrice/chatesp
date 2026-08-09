@@ -15,8 +15,9 @@ accepts the first commands but does not show the first pixel transfer. The
 runtime replaces the splash as soon as its task and button queue can accept
 input. It does not use a minimum splash timer. An in-session display wake shows
 the current interaction state instead. Development soft sleep keeps the CO5300
-controller on at zero brightness, so wake does not depend on another unreliable
-display-off and display-on cycle.
+initialized at its current brightness and covers the screen with one full black
+frame. Wake removes this frame and does not depend on a zero-to-nonzero
+brightness transition.
 
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short message that identifies the failed operation. The
@@ -110,17 +111,43 @@ confirmed writes for the response boundaries. For bounded PCM with a declared
 length, it forwards BLE data while the HTTPS body arrives. This path keeps the
 saved bond active and makes the phone the device network path.
 
-If the secure phone proxy is not ready, the runtime waits for it for at most two
-seconds. It then stops BLE, protects its restart block, and starts Wi-Fi. This
-releases the remaining Bluetooth memory for TLS. Provisioning starts again when
-the interaction ends and the runtime returns to idle. Before the controller
-restarts, the runtime releases completed TLS sessions and temporarily shuts
-down Wi-Fi. It starts BLE only when internal memory has one 30 KiB block and at
-least 48 KiB free. ChatESP idle keeps Wi-Fi off. This avoids the controller
-assertion that occurs if the vendor stack cannot allocate its internal block.
-Wi-Fi shutdown deinitializes the driver and releases its DMA buffers. Stopping
-only the radio does not release enough contiguous memory. The app treats this
-fallback disconnect as normal and reconnects when the device advertises again.
+The button-wake path starts BLE before the hold becomes a recording. If a
+complete saved bond is present, the runtime keeps BLE active for the full
+recording. It gives the phone a two-second reconnect limit after the button is
+released. Thus, a long recording does not consume the phone reconnect limit.
+If the secure phone proxy is still not ready, the runtime stops BLE, protects
+its restart block, and starts Wi-Fi. This releases the remaining Bluetooth
+memory for TLS. Provisioning starts again when the interaction ends and the
+runtime returns to idle. Before the controller restarts, the runtime releases
+completed TLS sessions and temporarily shuts down Wi-Fi. It starts BLE only
+when internal memory has one 30 KiB block and at least 48 KiB free. ChatESP
+idle keeps Wi-Fi off. This avoids the controller assertion that occurs if the
+vendor stack cannot allocate its internal block. Wi-Fi shutdown deinitializes
+the driver and releases its DMA buffers. Stopping only the radio does not
+release enough contiguous memory. The app treats this fallback disconnect as
+normal and reconnects when the device advertises again.
+
+The app scans for the selected device for 30 seconds at a time. Consecutive
+scan windows have a one-second bounded gap. Thus, a device wake does not fall
+inside a long reconnect backoff while the app is active.
+
+The ESP-IDF automatic connection reattempt is disabled. On the ESP32-S3 it can
+retry a failed peripheral connection with an invalid advertising parameter and
+leave the device awake but not advertising. ChatESP receives the failed link
+event and starts its complete advertising record again.
+
+A failed-connection callback can arrive while the host is stopping. The stop
+state blocks this callback from starting advertising. Outside shutdown, a
+failed advertising start uses five host-task retries at 100-millisecond
+intervals. If they all fail, the runtime performs one complete BLE host restart
+from its idle state. This prevents a transient host memory or procedure state
+from requiring another PWR cycle.
+
+Development sleep keeps the CO5300 initialized and covers the UI with one full
+black frame. It does not send brightness zero. A successful CO5300 command does
+not prove that pixels are visible after a zero-brightness interval. Production
+uses brightness zero only when its cancel window has ended and system-off is
+the next state.
 
 After BLE stops for a cloud request, the runtime reserves the controller restart
 block before TLS starts. The request can use the rest of the released Bluetooth
@@ -190,10 +217,11 @@ firmware also starts a non-blocking SNTP sync with `time.cloudflare.com` after
 Wi-Fi connects. It advances an accepted value with monotonic time while the
 ChatESP device stays powered. The successful transcription response and the IP-context
 response can also supply a standard HTTP `Date` header as a UTC fallback.
-Each route and final-answer prompt gets the user's local minute, such as
-`YYYY-MM-DD HH:MM UTC+04:00`. The prompt does not contain seconds, so requests
-in the same minute use the same time value. A missing or invalid time stops the
-turn instead of giving the model a false time.
+Each route and final-answer prompt gets the user's local weekday and minute,
+such as `YYYY-MM-DD HH:MM UTC+04:00 (Saturday)`. The prompt does not contain
+seconds, so requests in the same minute use the same time value. A missing or
+invalid time or a weekday that does not match the date stops the turn instead
+of giving the model false time context.
 Clock uses seconds from this same accepted time. An HTTP `Date` or NTP value
 does not identify the user's timezone by itself. The app offset or the bounded
 IP-location fallback supplies that offset. Before one source supplies both
@@ -316,10 +344,15 @@ Each UI edit writes only its local non-secret or Keychain store at once. An
 empty credential does not block another edit or an automatic BLE transfer.
 Empty endpoint and model values use built-in defaults in the effective packet.
 An invalid nonempty value stays local, and the device-page status identifies
-the field. The app sends each valid effective configuration automatically after
-connection or a settings change. The firmware receives one validated, atomic
-settings packet. It reports a runtime error when a cloud action needs missing
-Wi-Fi or OpenRouter credentials. An empty Brave key disables search.
+the field. The app sends each changed valid effective configuration
+automatically. After a confirmed packet, it does not send the same fingerprint
+again for 10 minutes. An unchanged reconnect gives the phone proxy two seconds
+before an eligible refresh starts. The app retries a failed automatic transfer
+after 30 seconds while the link stays ready. These intervals use a monotonic
+clock. The firmware receives one
+validated, atomic settings packet. It reports a runtime error when a cloud
+action needs missing Wi-Fi or OpenRouter credentials. An empty Brave key
+disables search.
 The settings, device-context, and memory responses use one serialized ATT
 indication path. A memory response cannot discard a settings acknowledgement.
 The runtime keeps the current radio state until the phone confirms a successful

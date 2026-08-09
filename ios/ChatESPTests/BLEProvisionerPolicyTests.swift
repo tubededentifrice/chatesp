@@ -117,8 +117,8 @@ final class BLEProvisionerPolicyTests: XCTestCase {
     func testScanAndReconnectOperationsHaveFixedBounds() {
         XCTAssertEqual(BLEProvisionerPolicy.scanTimeout, 10)
         XCTAssertEqual(BLEProvisionerPolicy.serviceDiscoveryTimeout, 10)
-        XCTAssertEqual(BLEProvisionerPolicy.reconnectScanTimeout, 10)
-        XCTAssertEqual(BLEProvisionerPolicy.reconnectDelays, [2, 4, 8, 16])
+        XCTAssertEqual(BLEProvisionerPolicy.reconnectScanTimeout, 30)
+        XCTAssertEqual(BLEProvisionerPolicy.reconnectDelays, [0])
         XCTAssertNil(
             BLEProvisionerPolicy.reconnectDelay(
                 attempt: BLEProvisionerPolicy.reconnectDelays.count))
@@ -133,7 +133,7 @@ final class BLEProvisionerPolicyTests: XCTestCase {
             BLEProvisionerPolicy.reconnectAttempt(
                 3, secureNotificationsReady: true),
             0)
-        XCTAssertEqual(BLEProvisionerPolicy.reconnectCycleCooldown, 30)
+        XCTAssertEqual(BLEProvisionerPolicy.reconnectCycleCooldown, 1)
     }
 
     func testReconnectDoesNotStopOnAnIntermediatePeripheralState() {

@@ -104,9 +104,9 @@ struct BLEProvisionerPolicy {
     static let serviceDiscoveryTimeout: TimeInterval = 10
     static let frameTimeout: TimeInterval = 10
     static let deviceContextInterval: TimeInterval = 3_600
-    static let reconnectScanTimeout: TimeInterval = 10
-    static let reconnectDelays: [TimeInterval] = [2, 4, 8, 16]
-    static let reconnectCycleCooldown: TimeInterval = 30
+    static let reconnectScanTimeout: TimeInterval = 30
+    static let reconnectDelays: [TimeInterval] = [0]
+    static let reconnectCycleCooldown: TimeInterval = 1
     static let reconnectStuckStateLimit = 2
 
     static func canStartProvisioning(hasPendingRequest: Bool) -> Bool {

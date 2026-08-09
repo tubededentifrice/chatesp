@@ -5,6 +5,12 @@ struct AutomaticSettingsSyncTarget: Equatable {
     let fingerprintHex: String
 }
 
+struct AutomaticSettingsSyncRecord: Equatable {
+    let target: AutomaticSettingsSyncTarget
+    let attemptedAt: ContinuousClock.Instant
+    let acknowledged: Bool
+}
+
 struct AutomaticSettingsSyncTrigger: Equatable {
     let target: AutomaticSettingsSyncTarget?
     let selectedDeviceID: UUID?
@@ -12,7 +18,15 @@ struct AutomaticSettingsSyncTrigger: Equatable {
     let provisioning: Bool
 }
 
+struct AutomaticSettingsSyncTask: Equatable {
+    let trigger: AutomaticSettingsSyncTrigger
+    let lastAttempt: AutomaticSettingsSyncRecord?
+}
+
 enum AutomaticSettingsSyncPolicy {
+    static let refreshInterval: Duration = .seconds(10 * 60)
+    static let failedRetryInterval: Duration = .seconds(30)
+
     static func target(
         deviceID: UUID,
         settings: ProvisioningSettings
@@ -28,12 +42,48 @@ enum AutomaticSettingsSyncPolicy {
 
     static func shouldStart(
         trigger: AutomaticSettingsSyncTrigger,
-        lastAttempt: AutomaticSettingsSyncTarget?
+        lastAttempt: AutomaticSettingsSyncRecord?,
+        now: ContinuousClock.Instant = .now
     ) -> Bool {
         guard let target = trigger.target else { return false }
-        return trigger.selectedDeviceID == target.deviceID &&
-            trigger.connected && !trigger.provisioning &&
-            lastAttempt != target
+        guard trigger.selectedDeviceID == target.deviceID,
+              trigger.connected, !trigger.provisioning else {
+            return false
+        }
+        guard let lastAttempt, lastAttempt.target == target else {
+            return true
+        }
+        let interval = lastAttempt.acknowledged
+            ? refreshInterval
+            : failedRetryInterval
+        return now - lastAttempt.attemptedAt >= interval
+    }
+
+    static func waitUntilEligible(
+        trigger: AutomaticSettingsSyncTrigger,
+        lastAttempt: AutomaticSettingsSyncRecord?,
+        now: ContinuousClock.Instant = .now
+    ) -> Duration? {
+        guard let target = trigger.target,
+              trigger.selectedDeviceID == target.deviceID,
+              trigger.connected, !trigger.provisioning else {
+            return nil
+        }
+        guard let lastAttempt, lastAttempt.target == target else {
+            return .zero
+        }
+        let interval = lastAttempt.acknowledged
+            ? refreshInterval
+            : failedRetryInterval
+        let elapsed = now - lastAttempt.attemptedAt
+        return elapsed >= interval ? .zero : interval - elapsed
+    }
+
+    static func startDelay(
+        target: AutomaticSettingsSyncTarget,
+        lastAttempt: AutomaticSettingsSyncRecord?
+    ) -> Duration {
+        lastAttempt?.target == target ? .seconds(2) : .milliseconds(350)
     }
 }
 

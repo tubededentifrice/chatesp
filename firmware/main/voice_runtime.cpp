@@ -885,9 +885,12 @@ private:
             network_warm_task_ != nullptr || speech_events_ == nullptr) {
             return;
         }
-        if (ble_provisioning::running() &&
-            monotonic_ms() - recording_started_at_ms_ <
-                kPhoneProxyConnectGraceMs) {
+        const std::uint32_t now_ms = monotonic_ms();
+        if (runtime::keep_ble_during_recording(
+                ble_provisioning::running(),
+                ble_provisioning::bond_available(),
+                recording_started_at_ms_, now_ms,
+                kPhoneProxyConnectGraceMs)) {
             return;
         }
         if (network_.connected() || network_.connecting()) {
@@ -1573,6 +1576,18 @@ private:
                 heartbeat_at_ms = now_ms;
                 crash_diagnostics::heartbeat();
             }
+            if (ble_started_ &&
+                interaction_.state() == InteractionState::idle &&
+                !voice_priority_.load(std::memory_order_acquire) &&
+                ble_provisioning::advertising_recovery_requested()) {
+                ESP_LOGW(
+                    kTag,
+                    "Restarting BLE after advertising retries ended");
+                if (stop_ble()) {
+                    ble_start_attempted_ = false;
+                    ensure_ble_started();
+                }
+            }
             process_quick_controls(now_ms);
             retry_mode_display(now_ms);
             const network::NetworkState network_state = network_.state();
@@ -1783,6 +1798,11 @@ private:
         interaction_.wake_button_down(now_ms);
         previous_state_ = interaction_.state();
         request_display_wake(now_ms);
+        crash_diagnostics::mark(
+            runtime::CrashEvent::phone_proxy_wake_start);
+        if (!ensure_ble_started()) {
+            ESP_LOGW(kTag, "BLE did not start during button wake");
+        }
     }
 
     void request_display_wake(std::uint32_t now_ms) {
@@ -1822,7 +1842,7 @@ private:
             return;
         }
         display_sleep_attempted_at_ms_ = now_ms;
-        if (ui::sleep() == ESP_OK) {
+        if (ui::sleep(true) == ESP_OK) {
             display_sleep_pending_ = false;
         }
     }
@@ -1872,9 +1892,8 @@ private:
             fail("MICROPHONE COULD NOT START");
             return;
         }
-        // Do not start radio work between microphone start and audio reads.
-        // A held cold start connects after release. Normal awake sessions
-        // already have an asynchronous connection.
+        // The button-wake path starts BLE before the recording threshold.
+        // Do not start more radio work between microphone start and reads.
         recording_started_at_ms_ = now_ms;
         level_refreshed_at_ms_ = now_ms;
     }
@@ -1919,7 +1938,13 @@ private:
             fail("HOLD THE BUTTON A LITTLE LONGER");
             return;
         }
-        const std::uint32_t proxy_wait_started_ms = recording_started_at_ms_;
+        const std::uint32_t proxy_wait_started_ms = monotonic_ms();
+        if (ble_provisioning::running() &&
+            !ble_provisioning::http_proxy_available()) {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::phone_proxy_grace_begin);
+            ESP_LOGI(kTag, "Waiting for the saved phone proxy after release");
+        }
         while (ble_provisioning::running() &&
                !ble_provisioning::http_proxy_available() &&
                !cancellation_.cancelled() &&
@@ -1929,6 +1954,10 @@ private:
         }
         const bool use_phone_proxy =
             ble_provisioning::http_proxy_available();
+        crash_diagnostics::mark(
+            use_phone_proxy
+                ? runtime::CrashEvent::phone_proxy_ready
+                : runtime::CrashEvent::phone_proxy_fallback);
         if (!use_phone_proxy && !settings_.has_wifi_credentials()) {
             capture_.discard();
             fail("WI-FI IS NOT CONFIGURED");
@@ -2306,7 +2335,7 @@ private:
         for (std::uint8_t attempt = 0;
              attempt < 3 && display_sleep_result != ESP_OK;
              ++attempt) {
-            display_sleep_result = ui::sleep();
+            display_sleep_result = ui::sleep(true);
             if (display_sleep_result != ESP_OK) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
@@ -2362,6 +2391,10 @@ private:
             }
             return;
         }
+        // The cancel window has ended. Zero brightness only when system-off
+        // is now the next device state. An in-session wake must not depend on
+        // a CO5300 zero-to-nonzero brightness transition.
+        (void)ui::sleep(false);
         crash_diagnostics::mark(runtime::CrashEvent::poweroff_begin);
         if (!poweroff_gate_.mark_poweroff_ready()) {
             display_available_.store(true, std::memory_order_release);

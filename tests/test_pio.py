@@ -111,6 +111,44 @@ class PlatformioWrapperTests(unittest.TestCase):
         self.assertIn(
             "CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192", defaults
         )
+        self.assertIn("CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=n", defaults)
+
+    def test_power_key_policy_uses_the_axp_long_hold_register(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "firmware" / "main" / "power_control.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kAxp2101PowerOffEnable = 0x22", source)
+        self.assertIn("kAxp2101LongHoldShutdown = 1U << 1", source)
+        self.assertIn("repair_legacy_power_key_policy", source)
+        self.assertIn("set_hardware_hold_shutdown(!pressed)", source)
+
+    def test_development_sleep_keeps_the_panel_ready(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        runtime = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        ui = (root / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("display_sleep_result = ui::sleep(true)", runtime)
+        self.assertIn("if (kDevelopmentMode)", runtime)
+        self.assertIn("sleep_overlay", ui)
+        self.assertIn("keep_panel_ready\n        ? ESP_OK", ui)
+
+    def test_ble_advertising_has_shutdown_guard_and_recovery(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        ble = (
+            root / "firmware" / "main" / "ble_provisioning.cpp"
+        ).read_text(encoding="utf-8")
+        runtime = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kAdvertiseRetryLimit = 5", ble)
+        self.assertIn("schedule_advertise_retry", ble)
+        self.assertIn("if (!s_stop_gate.running())", ble)
+        self.assertIn("BLE advertising retries ended", ble)
+        self.assertIn("advertising_recovery_requested", runtime)
 
     def test_common_config_bounds_wifi_ram_for_secure_pairing(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -158,9 +196,12 @@ class PlatformioWrapperTests(unittest.TestCase):
             warm_source.index("stop_ble_for_request()"),
             warm_source.index("xTaskCreatePinnedToCore("),
         )
-        self.assertIn(
-            "proxy_wait_started_ms = recording_started_at_ms_", source
-        )
+        self.assertIn("ble_provisioning::bond_available()", warm_source)
+        self.assertIn("runtime::keep_ble_during_recording(", warm_source)
+        self.assertIn("proxy_wait_started_ms = monotonic_ms()", source)
+        wake_start = source.index("void wake_for_button(")
+        wake_end = source.index("void request_display_wake(", wake_start)
+        self.assertIn("ensure_ble_started()", source[wake_start:wake_end])
         self.assertIn("ble_started_ || ble_provisioning::running()", source)
         context_start = source.index("void start_network_context_lookup()")
         context_end = source.index("void run_network_context_worker()")

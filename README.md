@@ -40,8 +40,9 @@ ChatESP.*
   to ten short facts.
 - **Optional iOS setup:** Provision any number of devices over authenticated,
   encrypted BLE. The app keeps provider secrets in Keychain and automatically
-  sends each valid configuration after a connection or settings change. While
-  the secure link is active, the app also supplies the device network path.
+  sends each changed configuration. It refreshes unchanged settings at most
+  once every 10 minutes. While the secure link is active, the app also
+  supplies the device network path.
 - **Clear model choices:** Search compatible chat, transcription, and speech
   models with their prices. Select English and French voices from the speech
   model's published voice list.
@@ -234,6 +235,8 @@ recovery procedure, and local credential setup. Read the
   lifecycle.
 - [Hardware](docs/hardware.md): board contract, buttons, power, and physical
   acceptance gates.
+- [Troubleshooting](docs/troubleshooting.md): known device, display, PMU, and
+  BLE traps with their log signatures and physical checks.
 - [Provisioning protocol](docs/provisioning-protocol.md): BLE packet,
   acknowledgement, revision, and security rules.
 - [Development mode](docs/development-mode.md): safe firmware work and

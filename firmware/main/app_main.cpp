@@ -36,7 +36,7 @@ void show_start_error(const char *message) {
 }
 
 void request_failure_sleep() {
-    (void)chatesp::ui::sleep();
+    (void)chatesp::ui::sleep(false);
     (void)chatesp::power::power_off();
 }
 
@@ -129,13 +129,24 @@ extern "C" void app_main() {
 
     chatesp::ShortPressGesture mode_button;
     bool mode_button_error_reported = false;
+    bool power_poll_error_reported = false;
     while (true) {
         chatesp::ButtonEdges edges;
         const std::uint32_t now_ms = monotonic_ms();
         if (chatesp::power::poll(now_ms, &edges) != ESP_OK) {
+            if (!power_poll_error_reported) {
+                chatesp::crash_diagnostics::mark(
+                    chatesp::runtime::CrashEvent::pwr_poll_failed);
+                power_poll_error_reported = true;
+            }
             ESP_LOGE(kTag, "Power button read failed");
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
+        }
+        if (power_poll_error_reported) {
+            chatesp::crash_diagnostics::mark(
+                chatesp::runtime::CrashEvent::pwr_poll_recovered);
+            power_poll_error_reported = false;
         }
         if (edges.pressed) {
             runtime.action_button_edge(true, now_ms);

@@ -10,6 +10,15 @@ namespace {
 
 constexpr std::uint64_t kSecondsPerDay = 86'400;
 
+const char *weekday_name(std::uint64_t days_since_epoch) {
+    // 1970-01-01 was a Thursday.
+    constexpr std::array<const char *, 7> names{
+        "Thursday", "Friday", "Saturday", "Sunday",
+        "Monday", "Tuesday", "Wednesday",
+    };
+    return names[days_since_epoch % names.size()];
+}
+
 bool decimal_pair(const char *text, unsigned &value) {
     if (text[0] < '0' || text[0] > '9' ||
         text[1] < '0' || text[1] > '9') {
@@ -209,7 +218,7 @@ bool UtcClock::current_minute(
     unsigned day = 0;
     civil_from_days(days, year, month, day);
 
-    char formatted[27]{};
+    char formatted[39]{};
     int size = 0;
     if (has_utc_offset_) {
         const int offset = utc_offset_minutes_;
@@ -217,13 +226,14 @@ bool UtcClock::current_minute(
             static_cast<unsigned>(offset < 0 ? -offset : offset);
         size = std::snprintf(
             formatted, sizeof(formatted),
-            "%04u-%02u-%02u %02u:%02u UTC%c%02u:%02u",
+            "%04u-%02u-%02u %02u:%02u UTC%c%02u:%02u (%s)",
             year, month, day, hour, minute, offset < 0 ? '-' : '+',
-            magnitude / 60U, magnitude % 60U);
+            magnitude / 60U, magnitude % 60U, weekday_name(days));
     } else {
         size = std::snprintf(
-            formatted, sizeof(formatted), "%04u-%02u-%02u %02u:%02u UTC",
-            year, month, day, hour, minute);
+            formatted, sizeof(formatted),
+            "%04u-%02u-%02u %02u:%02u UTC (%s)",
+            year, month, day, hour, minute, weekday_name(days));
     }
     return size > 0 && static_cast<std::size_t>(size) <= output.capacity() &&
         output.assign(formatted, static_cast<std::size_t>(size));
@@ -248,9 +258,11 @@ bool UtcClock::current_local_time(
 }
 
 bool UtcClock::valid_minute_text(const char *value) {
-    if (value == nullptr ||
-        (std::strlen(value) != 20 && std::strlen(value) != 26) ||
-        value[4] != '-' ||
+    if (value == nullptr) {
+        return false;
+    }
+    const std::size_t size = std::strlen(value);
+    if (size < 29 || size > 38 || value[4] != '-' ||
         value[7] != '-' || value[10] != ' ' || value[13] != ':' ||
         std::memcmp(value + 16, " UTC", 4) != 0) {
         return false;
@@ -260,9 +272,14 @@ bool UtcClock::valid_minute_text(const char *value) {
     unsigned day = 0;
     unsigned hour = 0;
     unsigned minute = 0;
-    const std::size_t size = std::strlen(value);
+    const bool has_offset = value[20] == '+' || value[20] == '-';
+    const std::size_t time_size = has_offset ? 26U : 20U;
+    if (size <= time_size + 3U || value[time_size] != ' ' ||
+        value[time_size + 1U] != '(' || value[size - 1U] != ')') {
+        return false;
+    }
     bool offset_valid = true;
-    if (size == 26) {
+    if (has_offset) {
         unsigned offset_hour = 0;
         unsigned offset_minute = 0;
         offset_valid = (value[20] == '+' || value[20] == '-') &&
@@ -271,11 +288,20 @@ bool UtcClock::valid_minute_text(const char *value) {
             offset_hour <= 14 && offset_minute <= 59 &&
             (offset_hour != 14 || offset_minute == 0);
     }
-    return offset_valid && decimal_year(value, year) && decimal_pair(value + 5, month) &&
-        decimal_pair(value + 8, day) && decimal_pair(value + 11, hour) &&
-        decimal_pair(value + 14, minute) && year >= 2020 && year <= 9999 &&
-        month >= 1 && month <= 12 && day >= 1 &&
-        day <= days_in_month(year, month) && hour <= 23 && minute <= 59;
+    if (!offset_valid || !decimal_year(value, year) ||
+        !decimal_pair(value + 5, month) || !decimal_pair(value + 8, day) ||
+        !decimal_pair(value + 11, hour) ||
+        !decimal_pair(value + 14, minute) || year < 2020 || year > 9999 ||
+        month < 1 || month > 12 || day < 1 ||
+        day > days_in_month(year, month) || hour > 23 || minute > 59) {
+        return false;
+    }
+    const char *expected_weekday = weekday_name(
+        static_cast<std::uint64_t>(days_from_civil(year, month, day)));
+    const std::size_t weekday_size = size - time_size - 3U;
+    return std::strlen(expected_weekday) == weekday_size &&
+        std::memcmp(
+            value + time_size + 2U, expected_weekday, weekday_size) == 0;
 }
 
 }  // namespace agent

@@ -518,30 +518,92 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertTrue(AutomaticSettingsSyncPolicy.shouldStart(
             trigger: ready,
             lastAttempt: nil))
+        let now = ContinuousClock.Instant.now
+        XCTAssertEqual(
+            AutomaticSettingsSyncPolicy.waitUntilEligible(
+                trigger: ready,
+                lastAttempt: nil,
+                now: now),
+            .zero)
+        let recentSuccess = AutomaticSettingsSyncRecord(
+            target: target!,
+            attemptedAt: now,
+            acknowledged: true)
         XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
             trigger: ready,
-            lastAttempt: target))
+            lastAttempt: recentSuccess,
+            now: now))
+        XCTAssertEqual(
+            AutomaticSettingsSyncPolicy.waitUntilEligible(
+                trigger: ready,
+                lastAttempt: recentSuccess,
+                now: now),
+            AutomaticSettingsSyncPolicy.refreshInterval)
+        XCTAssertTrue(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: ready,
+            lastAttempt: recentSuccess,
+            now: now.advanced(by:
+                AutomaticSettingsSyncPolicy.refreshInterval)))
         XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
             trigger: AutomaticSettingsSyncTrigger(
                 target: target,
                 selectedDeviceID: UUID(),
                 connected: true,
                 provisioning: false),
-            lastAttempt: nil))
+            lastAttempt: nil,
+            now: now))
         XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
             trigger: AutomaticSettingsSyncTrigger(
                 target: target,
                 selectedDeviceID: deviceID,
                 connected: false,
                 provisioning: false),
-            lastAttempt: nil))
+            lastAttempt: nil,
+            now: now))
         XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
             trigger: AutomaticSettingsSyncTrigger(
                 target: target,
                 selectedDeviceID: deviceID,
                 connected: true,
                 provisioning: true),
-            lastAttempt: nil))
+            lastAttempt: nil,
+            now: now))
+
+        let recentFailure = AutomaticSettingsSyncRecord(
+            target: target!,
+            attemptedAt: now,
+            acknowledged: false)
+        XCTAssertFalse(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: ready,
+            lastAttempt: recentFailure,
+            now: now))
+        XCTAssertEqual(
+            AutomaticSettingsSyncPolicy.waitUntilEligible(
+                trigger: ready,
+                lastAttempt: recentFailure,
+                now: now),
+            AutomaticSettingsSyncPolicy.failedRetryInterval)
+        XCTAssertTrue(AutomaticSettingsSyncPolicy.shouldStart(
+            trigger: ready,
+            lastAttempt: recentFailure,
+            now: now.advanced(by:
+                AutomaticSettingsSyncPolicy.failedRetryInterval)))
+        XCTAssertEqual(
+            AutomaticSettingsSyncPolicy.startDelay(
+                target: target!, lastAttempt: recentSuccess),
+            .seconds(2))
+        XCTAssertEqual(
+            AutomaticSettingsSyncPolicy.startDelay(
+                target: target!, lastAttempt: nil),
+            .milliseconds(350))
+        XCTAssertNil(AutomaticSettingsSyncPolicy.waitUntilEligible(
+            trigger: AutomaticSettingsSyncTrigger(
+                target: target,
+                selectedDeviceID: deviceID,
+                connected: false,
+                provisioning: false),
+            lastAttempt: recentSuccess,
+            now: now))
 
         var invalidConfiguration = ChatESPConfiguration()
         invalidConfiguration.chatEndpoint = "h"

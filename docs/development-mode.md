@@ -6,12 +6,14 @@ normal firmware development.
 ## Development mode
 
 The `watch_dev` profile defines `CHATESP_DEVELOPMENT_MODE=1`. A sleep request
-sets AMOLED brightness to zero and stops radio work, but it does not request
-AXP2101 system-off. It keeps the CO5300 controller on because repeated
-display-off and display-on cycles can leave the panel black. USB stays
-available, so the next upload can reset and flash the board without a manual
-button sequence. A PWR-button press restores the display. The top mode button
-does not wake it and has no effect while it sleeps.
+draws a full black frame and stops radio work, but it does not change panel
+brightness or request AXP2101 system-off. A zero-brightness CO5300 can accept
+later brightness and display-on commands while its pixels stay black. Keeping
+the initialized panel at its current brightness avoids this false-success wake
+state. Black AMOLED pixels emit no visible light. USB stays available, so the
+next upload can reset and flash the board without a manual button sequence. A
+PWR-button press removes the black frame and redraws the display. The top mode
+button does not wake it and has no effect while it sleeps.
 
 Build and upload development mode with one command:
 

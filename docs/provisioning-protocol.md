@@ -46,19 +46,30 @@ write can cause the system pairing prompt.
 
 ## Transfer
 
-The ChatESP device keeps BLE active when the secure phone proxy is ready. If the
-proxy is not ready after a two-second limit, it stops BLE before it starts
-Wi-Fi for the cloud TLS request. This fallback closes an active phone
-connection. The ChatESP device starts advertising again when it returns to
-idle. The iOS app must treat this as a normal, recoverable disconnect. A
-bounded reconnect retry scans for the saved Core Bluetooth identifier before
-it starts a new connection. It must not report a completed settings write
-unless it received the application acknowledgement before the disconnect.
+The button-wake path starts BLE before the hold becomes a recording. The
+ChatESP device keeps BLE active for the full recording when a complete saved
+bond is present. It starts a two-second phone-proxy limit when the button is
+released. If the proxy is still not ready, it stops BLE before it starts Wi-Fi
+for the cloud TLS request. This fallback closes an active phone connection.
+The ChatESP device starts advertising again when it returns to idle. The iOS
+app must treat this as a normal, recoverable disconnect. A bounded reconnect
+retry scans for the saved Core Bluetooth identifier before it starts a new
+connection. It must not report a completed settings write unless it received
+the application acknowledgement before the disconnect.
 
-Each iOS reconnect scan and connection attempt has a fixed limit. After the
-bounded retry sequence fails, the app waits 30 seconds before it starts a new
-sequence. This lets a selected device reconnect after a long sleep without an
-unbounded scan or a new pairing.
+Each iOS reconnect scan and connection attempt has a fixed limit. A selected
+device scan runs for 30 seconds. A failed scan has a one-second bounded gap
+before the next scan cycle. This lets a selected device connect promptly after
+a wake without an unbounded single scan or a new pairing.
+
+A confirmed settings fingerprint is valid in the active app session for 10
+minutes. A reconnect in that interval does not send the same settings packet.
+A settings change sends a new fingerprint without this refresh delay. When an
+unchanged refresh is due, the app gives the phone proxy two seconds before the
+transfer starts. The app retries a failed automatic transfer after 30 seconds
+while the link stays ready. A disconnect or settings change cancels the old
+schedule. The cache controls transfer frequency only. Proxy notification
+readiness does not depend on a settings transfer.
 
 Development and production builds keep BLE bonds in plaintext NVS. This lets
 the phone reconnect after a cold start or a development firmware upload. The
