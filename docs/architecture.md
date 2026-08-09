@@ -255,7 +255,8 @@ app. If USB is removed, the next request turns the main rails off. Production
 does not restore the full runtime only because USB held the power rail on.
 While the display is active, the runtime reads the battery at most once every
 30 seconds or after a power-source event. At or below 5 percent, it requests
-system-off when VBUS is not good. This protection uses system-off in development
+system-off only when VBUS is not good and the PMU does not report active
+charging. This protection uses system-off in development
 and production. The runtime does not read the battery after sleep starts.
 
 Each turn first uses a short required-tool route. The route is direct answer,

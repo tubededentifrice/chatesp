@@ -103,8 +103,9 @@ self-discharge, or board leakage. Measure complete board current on battery
 hardware before a battery-life claim.
 
 ChatESP requests AXP2101 system-off at or below 5 percent when the PMIC does
-not report good VBUS. This limit applies to development and production. Good
-VBUS prevents the low-battery request so the device can start and charge. The
+not report good VBUS or active charging. This limit applies to development and
+production. Good VBUS or active charging prevents the low-battery request so
+the device can start and charge. The
 active runtime reads the gauge at most once every 30 seconds or after a VBUS
 event. It does not read the gauge after sleep starts. Production system-off
 also stops the processor, so no firmware polling occurs in that state.
@@ -256,7 +257,8 @@ The connected V2 board must pass these checks for this control change:
 - development firmware shows a small `DEV` marker at the footer center, and
   production firmware does not show the marker;
 - at 6 percent on battery power, the device stays on. At 5 percent, it requests
-  system-off in development and production. Good VBUS prevents this request;
+  system-off in development and production. Good VBUS or active charging
+  prevents this request;
 - after sleep starts, the firmware does not read the battery gauge;
 - model text grows on the display before the complete answer is available;
 - smart quotation marks, long dashes, bullets, and ellipses in model text have

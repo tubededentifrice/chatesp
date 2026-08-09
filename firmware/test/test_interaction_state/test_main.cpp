@@ -415,7 +415,7 @@ void test_axp2101_charge_state_uses_current_direction() {
     TEST_ASSERT_FALSE(chatesp::power::axp2101_status_is_charging(0x60));
 }
 
-void test_battery_limit_requires_low_battery_without_external_power() {
+void test_battery_limit_requires_low_battery_without_vbus_or_charging() {
     using chatesp::power::BatteryStatus;
     TEST_ASSERT_TRUE(chatesp::power::axp2101_status_has_external_power(0x20));
     TEST_ASSERT_FALSE(chatesp::power::axp2101_status_has_external_power(0x1f));
@@ -423,6 +423,8 @@ void test_battery_limit_requires_low_battery_without_external_power() {
         BatteryStatus{5, false, false}));
     TEST_ASSERT_FALSE(chatesp::power::low_battery_requires_shutdown(
         BatteryStatus{6, false, false}));
+    TEST_ASSERT_FALSE(chatesp::power::low_battery_requires_shutdown(
+        BatteryStatus{5, true, false}));
     TEST_ASSERT_FALSE(chatesp::power::low_battery_requires_shutdown(
         BatteryStatus{5, true, true}));
     TEST_ASSERT_FALSE(chatesp::power::low_battery_requires_shutdown(
@@ -747,7 +749,7 @@ int main(int, char **) {
     RUN_TEST(test_power_button_filter_rejects_key_edges_with_a_usb_event);
     RUN_TEST(test_power_button_filter_ignores_two_key_edges_in_one_poll);
     RUN_TEST(test_axp2101_charge_state_uses_current_direction);
-    RUN_TEST(test_battery_limit_requires_low_battery_without_external_power);
+    RUN_TEST(test_battery_limit_requires_low_battery_without_vbus_or_charging);
     RUN_TEST(test_radio_signal_uses_three_privacy_safe_bands);
     RUN_TEST(test_short_wake_press_returns_to_idle);
     RUN_TEST(test_held_wake_press_records_until_release);

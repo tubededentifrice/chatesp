@@ -39,7 +39,7 @@ constexpr bool low_battery_requires_shutdown(
     const BatteryStatus &status,
     std::uint8_t limit_percent = kLowBatteryShutdownPercent) {
     return limit_percent <= 100 && status.percent <= limit_percent &&
-        !status.external_power;
+        !status.external_power && !status.charging;
 }
 
 }  // namespace power
