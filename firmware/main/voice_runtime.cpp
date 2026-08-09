@@ -1413,7 +1413,8 @@ private:
         }
         const std::uint32_t source_revision =
             power::power_source_revision();
-        const bool battery_due = force || !battery_checked_ ||
+        const bool battery_due = force || battery_wake_refresh_pending_ ||
+            !battery_checked_ ||
             now_ms - battery_checked_at_ms_ >= kBatteryRefreshMs ||
             source_revision != battery_power_source_revision_;
         if (battery_due &&
@@ -1423,6 +1424,7 @@ private:
             battery_checked_ = true;
             battery_checked_at_ms_ = now_ms;
             battery_power_source_revision_ = source_revision;
+            battery_wake_refresh_pending_ = false;
             if (battery_status_.has_value() &&
                 power::low_battery_requires_shutdown(*battery_status_) &&
                 !low_battery_poweroff_pending_) {
@@ -1848,6 +1850,11 @@ private:
 
     void wake_for_button(std::uint32_t now_ms) {
         low_battery_poweroff_pending_ = false;
+        // The display wake runs while PWR and voice work have priority, so its
+        // forced footer refresh cannot read the PMIC. Keep one request until
+        // that priority ends. This also catches a charge-direction change that
+        // does not produce a new VBUS event while USB stays connected.
+        battery_wake_refresh_pending_ = true;
         display_available_.store(true, std::memory_order_release);
         display_sleep_pending_ = false;
         poweroff_gate_.recover();
@@ -2750,6 +2757,7 @@ private:
     bool display_wake_pending_ = false;
     bool display_sleep_pending_ = false;
     bool battery_checked_ = false;
+    bool battery_wake_refresh_pending_ = false;
     bool low_battery_poweroff_pending_ = false;
     bool footer_shown_ = false;
     bool stream_text_shown_ = false;

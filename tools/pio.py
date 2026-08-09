@@ -11,14 +11,18 @@ import subprocess
 import sys
 import time
 import venv
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from configparser import ConfigParser
 from pathlib import Path
+
+import fcntl
 
 
 IDF_ENV_VERSION = "1.0.0"
 IDF_FRAMEWORK_VERSION = "5.5.3"
 DEPENDENCY_CHECK_CACHE_SECONDS = 60 * 60
+DEVICE_BUILD_LOCK_TIMEOUT_SECONDS = 10 * 60
 WATCH_ENVIRONMENTS = {"watch_dev", "watch_prod"}
 KNOWN_ENVIRONMENTS = WATCH_ENVIRONMENTS | {"native"}
 REVERSIBLE_SDKCONFIG_VALUES = {
@@ -240,6 +244,42 @@ def requested_watch_environments(arguments: list[str]) -> set[str]:
     return selected & WATCH_ENVIRONMENTS
 
 
+@contextmanager
+def device_build_lock(
+    core_dir: Path,
+    arguments: list[str],
+    timeout_seconds: float = DEVICE_BUILD_LOCK_TIMEOUT_SECONDS,
+) -> Iterator[None]:
+    """Serialize device builds that share ESP-IDF managed components."""
+    if not requested_watch_environments(arguments):
+        yield
+        return
+
+    lock_path = core_dir / "chatesp-device-build.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "Another ChatESP device build still owns the shared "
+                        "PlatformIO component directory."
+                    ) from None
+                time.sleep(0.1)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid={os.getpid()}\n")
+        handle.flush()
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def invocation_policy_errors(
     arguments: list[str], environment: Mapping[str, str]
 ) -> list[str]:
@@ -454,25 +494,30 @@ def main() -> int:
         os.environ, root, project
     )
     core_dir = Path(environment["PLATFORMIO_CORE_DIR"])
-    for profile in remove_aliased_watch_builds(
-        project, root, sys.argv[1:]
-    ):
-        print(
-            f"Removed {profile} build data that used a non-canonical path."
-        )
-    for profile in remove_stale_version_watch_builds(
-        project, sys.argv[1:], current_project_version(root)
-    ):
-        print(
-            f"Removed {profile} build data that had an old application version."
-        )
-    verify_dependency_age(root, core_dir)
-    if requires_idf_python(sys.argv[1:]):
-        prepare_profile_sdkconfigs(project, sys.argv[1:])
-        prepare_idf_python(root, core_dir)
-    return subprocess.run(
-        [pio, *sys.argv[1:]], cwd=project, env=environment, check=False
-    ).returncode
+    try:
+        with device_build_lock(core_dir, sys.argv[1:]):
+            for profile in remove_aliased_watch_builds(
+                project, root, sys.argv[1:]
+            ):
+                print(
+                    f"Removed {profile} build data that used a non-canonical path."
+                )
+            for profile in remove_stale_version_watch_builds(
+                project, sys.argv[1:], current_project_version(root)
+            ):
+                print(
+                    f"Removed {profile} build data that had an old application version."
+                )
+            verify_dependency_age(root, core_dir)
+            if requires_idf_python(sys.argv[1:]):
+                prepare_profile_sdkconfigs(project, sys.argv[1:])
+                prepare_idf_python(root, core_dir)
+            return subprocess.run(
+                [pio, *sys.argv[1:]], cwd=project, env=environment, check=False
+            ).returncode
+    except TimeoutError as error:
+        print(str(error), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

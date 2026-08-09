@@ -105,10 +105,12 @@ hardware before a battery-life claim.
 ChatESP requests AXP2101 system-off at or below 5 percent when the PMIC does
 not report good VBUS or active charging. This limit applies to development and
 production. Good VBUS or active charging prevents the low-battery request so
-the device can start and charge. The
-active runtime reads the gauge at most once every 30 seconds or after a VBUS
-event. It does not read the gauge after sleep starts. Production system-off
-also stops the processor, so no firmware polling occurs in that state.
+the device can start and charge. The active runtime reads the gauge at most
+once every 30 seconds, after a VBUS event, or once after a PWR wake. If the
+wake refresh is blocked while the button has priority, the runtime keeps it
+pending and reads the PMIC after that priority ends. It does not read the gauge
+after sleep starts. Production system-off also stops the processor, so no
+firmware polling occurs in that state.
 
 The production profile does not run the optional full-PSRAM start test. It uses
 a speed-optimized bootloader. Development keeps the PSRAM start test so normal
@@ -254,6 +256,8 @@ The connected V2 board must pass these checks for this control change:
   one through three signal bars. The footer shows a valid battery percentage
   or a clear unavailable value. While the battery charges, its icon and
   percentage are green and a charge mark is visible;
+- after a PWR wake with USB still connected, the footer updates the charging
+  state after button priority ends and before the next idle sleep;
 - development firmware shows a small `DEV` marker at the footer center, and
   production firmware does not show the marker;
 - at 6 percent on battery power, the device stays on. At 5 percent, it requests

@@ -9,6 +9,7 @@ from tools.pio import (
     canonical_platformio_environment,
     dependency_check_is_fresh,
     dependency_policy_digest,
+    device_build_lock,
     device_write_policy_errors,
     first_party_write_api_errors,
     invocation_policy_errors,
@@ -124,6 +125,24 @@ class PlatformioWrapperTests(unittest.TestCase):
             self.assertEqual([], removed)
             self.assertTrue(build.exists())
 
+    def test_device_build_lock_serializes_only_device_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            core = Path(directory)
+            with device_build_lock(core, ["run", "-e", "watch_dev"]):
+                with self.assertRaises(TimeoutError):
+                    with device_build_lock(
+                        core,
+                        ["run", "-e", "watch_prod"],
+                        timeout_seconds=0,
+                    ):
+                        pass
+                with device_build_lock(
+                    core,
+                    ["test", "-e", "native"],
+                    timeout_seconds=0,
+                ):
+                    pass
+
     def test_device_profiles_forbid_irreversible_writes(self) -> None:
         root = Path(__file__).resolve().parents[1]
         self.assertEqual(
@@ -199,6 +218,31 @@ class PlatformioWrapperTests(unittest.TestCase):
         self.assertIn("if (!low_battery_poweroff_pending_)", runtime)
         self.assertIn("sleep_overlay", ui)
         self.assertIn("keep_panel_ready\n        ? ESP_OK", ui)
+
+    def test_button_wake_defers_the_blocked_battery_refresh(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+
+        refresh_start = source.index("void refresh_battery(")
+        refresh_end = source.index("void refresh_footer(", refresh_start)
+        refresh_source = source[refresh_start:refresh_end]
+        self.assertIn(
+            "force || battery_wake_refresh_pending_", refresh_source
+        )
+        self.assertLess(
+            refresh_source.index("battery_status_ = power::battery_status()"),
+            refresh_source.index("battery_wake_refresh_pending_ = false"),
+        )
+
+        wake_start = source.index("void wake_for_button(")
+        wake_end = source.index("void request_display_wake(", wake_start)
+        wake_source = source[wake_start:wake_end]
+        self.assertLess(
+            wake_source.index("battery_wake_refresh_pending_ = true"),
+            wake_source.index("request_display_wake(now_ms)"),
+        )
 
     def test_ble_advertising_has_shutdown_guard_and_recovery(self) -> None:
         root = Path(__file__).resolve().parents[1]

@@ -41,7 +41,10 @@ result can be two source files that incorrectly map to one object target.
 Always run PlatformIO through `tools/pio.py`. The wrapper gives PlatformIO a
 canonical `PWD` and cache path. It also removes only the generated ChatESP device-build
 directory when stored build data contains a path alias. It does not remove
-source files or a complete tool cache.
+source files or a complete tool cache. Device profiles share the ESP-IDF
+`managed_components` directory. The wrapper serializes these builds so one
+profile cannot replace a component while another profile uses it. Native tests
+do not take this device-build lock.
 
 ## Reproduce product and BLE faults locally
 
