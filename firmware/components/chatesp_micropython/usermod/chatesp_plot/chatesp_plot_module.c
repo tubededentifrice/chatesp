@@ -19,12 +19,29 @@ static mp_obj_t chatesp_plot_line(size_t argument_count, const mp_obj_t *args) {
 
     double x[CHATESP_MICROPYTHON_MAX_PLOT_POINTS];
     double y[CHATESP_MICROPYTHON_MAX_PLOT_POINTS];
+    size_t finite_point_count = 0;
+    bool has_line_segment = false;
     for (size_t index = 0; index < x_count; ++index) {
         x[index] = mp_obj_get_float(x_items[index]);
-        y[index] = mp_obj_get_float(y_items[index]);
-        if (!isfinite(x[index]) || !isfinite(y[index])) {
-            mp_raise_ValueError(MP_ERROR_TEXT("plot values must be finite"));
+        if (!isfinite(x[index])) {
+            mp_raise_ValueError(MP_ERROR_TEXT("plot x values must be finite"));
         }
+        if (y_items[index] == mp_const_none) {
+            y[index] = NAN;
+            continue;
+        }
+        y[index] = mp_obj_get_float(y_items[index]);
+        if (!isfinite(y[index])) {
+            mp_raise_ValueError(
+                MP_ERROR_TEXT("plot y values must be finite or None"));
+        }
+        has_line_segment = has_line_segment ||
+            (index != 0 && isfinite(y[index - 1]));
+        ++finite_point_count;
+    }
+    if (finite_point_count < 2 || !has_line_segment) {
+        mp_raise_ValueError(
+            MP_ERROR_TEXT("plot needs 2 adjacent finite points"));
     }
 
     const char *title = "";

@@ -1,4 +1,5 @@
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
@@ -119,6 +120,35 @@ public:
         turn.answer.assign("A short answer.");
         return Error::none;
     }
+};
+
+class RepeatingPythonRouteChat final : public ChatProvider {
+public:
+    Error complete(
+        const ConversationHistory &, ChatTurn &turn,
+        CancellationToken &) override {
+        ++answer_calls;
+        turn.kind = ChatTurnKind::answer;
+        turn.answer.assign("The plot is displayed.");
+        return Error::none;
+    }
+
+    Error route_turn(
+        const ConversationHistory &, TurnRoute &route,
+        CancellationToken &) override {
+        ++route_calls;
+        route.kind = TurnRouteKind::tool_call;
+        route.tool_call.id.assign("plot_call");
+        route.tool_call.name.assign("run_python");
+        route.tool_call.arguments.assign(
+            "{\"code\":\"import plot\\nx=[i/63 for i in range(-63,64)]"
+            "\\ny=[None if v==0 else 1/v for v in x]"
+            "\\nplot.line(x,y,'1/x')\"}");
+        return Error::none;
+    }
+
+    int route_calls = 0;
+    int answer_calls = 0;
 };
 
 class TestWebSearch final : public WebSearchProvider {
@@ -367,6 +397,10 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "get_device_status"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "run_python"));
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "plot.line"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "2 to 128"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "None"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(routing_prompt(), "do not call run_python again"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "explicitly asks"));
     TEST_ASSERT_NULL(std::strstr(system_prompt, "Never save a password"));
     TEST_ASSERT_NULL(std::strstr(routing_prompt(), "Never save secrets"));
@@ -590,10 +624,48 @@ void test_agent_loop_stops_after_three_tool_rounds() {
     FixedText<Limits::max_answer_bytes> answer;
     TestCancellation cancellation;
     assert_error(
-        Error::limit_exceeded,
+        Error::tool_round_limit,
         loop.run("Question", 8, answer, cancellation));
     TEST_ASSERT_EQUAL_INT(3, tool.calls);
     TEST_ASSERT_EQUAL_INT(4, chat.calls);
+}
+
+void test_agent_loop_finishes_after_one_python_plot() {
+    TestPythonExecution provider;
+    provider.next_execution.plot.count = 5;
+    provider.next_execution.plot.x[0] = -1.0;
+    provider.next_execution.plot.x[1] = -0.5;
+    provider.next_execution.plot.x[2] = 0.0;
+    provider.next_execution.plot.x[3] = 0.5;
+    provider.next_execution.plot.x[4] = 1.0;
+    provider.next_execution.plot.y[0] = -1.0;
+    provider.next_execution.plot.y[1] = -2.0;
+    provider.next_execution.plot.y[2] = NAN;
+    provider.next_execution.plot.y[3] = 2.0;
+    provider.next_execution.plot.y[4] = 1.0;
+    RunPythonTool tool(provider);
+    ToolRegistry registry;
+    assert_error(Error::none, registry.add(tool));
+    RepeatingPythonRouteChat chat;
+    AgentLoop loop(chat, registry);
+    FixedText<Limits::max_answer_bytes> answer;
+    TestCancellation cancellation;
+    constexpr char request[] =
+        "Trace moi la courbe de 1/x pour x entre -1 et 1";
+
+    assert_error(
+        Error::none,
+        loop.run(request, sizeof(request) - 1, answer, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, chat.route_calls);
+    TEST_ASSERT_EQUAL_INT(1, provider.calls);
+    TEST_ASSERT_EQUAL_INT(1, chat.answer_calls);
+    TEST_ASSERT_EQUAL_STRING("The plot is displayed.", answer.c_str());
+    TEST_ASSERT_NOT_NULL(std::strstr(provider.last_source.c_str(), "None"));
+
+    PlotData plot;
+    TEST_ASSERT_TRUE(tool.take_plot(plot));
+    TEST_ASSERT_EQUAL_UINT32(5, plot.count);
+    TEST_ASSERT_TRUE(std::isnan(plot.y[2]));
 }
 
 void test_agent_loop_honors_cancellation_before_provider() {
@@ -1872,6 +1944,7 @@ int main(int, char **) {
     RUN_TEST(test_agent_loop_executes_one_tool_and_keeps_history);
     RUN_TEST(test_agent_loop_keeps_short_followups_bounded);
     RUN_TEST(test_agent_loop_stops_after_three_tool_rounds);
+    RUN_TEST(test_agent_loop_finishes_after_one_python_plot);
     RUN_TEST(test_agent_loop_honors_cancellation_before_provider);
     RUN_TEST(test_agent_loop_rolls_back_cancelled_turn);
     RUN_TEST(test_agent_loop_gives_model_a_sanitized_tool_error);

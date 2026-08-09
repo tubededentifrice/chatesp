@@ -60,7 +60,7 @@ Error AgentLoop::run(
             break;
         }
         if (round == Limits::max_tool_rounds) {
-            return fail(Error::limit_exceeded);
+            return fail(Error::tool_round_limit);
         }
 
         error = history_.append_tool_call(route_.tool_call);
@@ -87,9 +87,13 @@ Error AgentLoop::run(
         if (error != Error::none) {
             return fail(error);
         }
+        if (tools_.ends_tool_sequence(route_.tool_call)) {
+            route_complete = true;
+            break;
+        }
     }
     if (!route_complete) {
-        return fail(Error::limit_exceeded);
+        return fail(Error::tool_round_limit);
     }
 
     if (cancellation.cancelled()) {

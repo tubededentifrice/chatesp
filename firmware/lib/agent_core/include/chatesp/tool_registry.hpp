@@ -14,6 +14,7 @@ public:
     [[nodiscard]] virtual const char *name() const = 0;
     [[nodiscard]] virtual const char *description() const = 0;
     [[nodiscard]] virtual const char *parameters_schema() const = 0;
+    [[nodiscard]] virtual bool ends_tool_sequence() const { return false; }
     virtual Error execute(
         const char *arguments, std::size_t size,
         FixedText<Limits::max_tool_result_bytes> &result,
@@ -28,6 +29,7 @@ public:
         return *tools_[index];
     }
     [[nodiscard]] Tool *find(const char *name) const;
+    [[nodiscard]] bool ends_tool_sequence(const ToolInvocation &call) const;
     Error execute(
         const ToolInvocation &call,
         FixedText<Limits::max_tool_result_bytes> &result,
@@ -45,6 +47,7 @@ public:
     [[nodiscard]] const char *name() const override;
     [[nodiscard]] const char *description() const override;
     [[nodiscard]] const char *parameters_schema() const override;
+    [[nodiscard]] bool ends_tool_sequence() const override { return true; }
     Error execute(
         const char *arguments, std::size_t size,
         FixedText<Limits::max_tool_result_bytes> &result,
@@ -93,6 +96,7 @@ public:
     [[nodiscard]] const char *name() const override;
     [[nodiscard]] const char *description() const override;
     [[nodiscard]] const char *parameters_schema() const override;
+    [[nodiscard]] bool ends_tool_sequence() const override { return true; }
     Error execute(
         const char *arguments, std::size_t size,
         FixedText<Limits::max_tool_result_bytes> &result,

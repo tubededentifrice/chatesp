@@ -2028,7 +2028,7 @@ private:
             request_scratch_->stream_answer);
         speech_provider_.set_language(agent::SpeechLanguage::english);
         if (!start_speech_worker(request_cancellation)) {
-            fail("SPEECH PIPELINE COULD NOT START");
+            fail("THE DEVICE COULD NOT START ANSWER SPEECH");
             return;
         }
         memory_store_.clear_turn_state();
@@ -2086,7 +2086,7 @@ private:
                 finish_model_power_off();
                 return;
             }
-            fail("SPEECH PIPELINE FAILED");
+            fail("THE DEVICE COULD NOT QUEUE THE COMPLETE ANSWER");
             return;
         }
         speech_channel_.finish();
@@ -2203,11 +2203,6 @@ private:
     void finish_with_error(agent::Error error) {
         if (error == agent::Error::cancelled || cancellation_.cancelled()) {
             cancel_current();
-        } else if (
-            (error == agent::Error::connect_timeout ||
-             error == agent::Error::disconnected) &&
-            network_.connected()) {
-            fail("SERVICE CONNECTION FAILED");
         } else {
             fail(request_error_message(error));
         }

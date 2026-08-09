@@ -185,12 +185,23 @@ void test_error_returns_to_idle_after_visible_period() {
 
 void test_request_errors_have_explicit_user_messages() {
     TEST_ASSERT_EQUAL_STRING(
-        "THE SERVICE RETURNED INVALID DATA",
+        "THE SERVICE SENT AN INVALID RESPONSE",
         chatesp::request_error_message(
             chatesp::agent::Error::malformed_response));
     TEST_ASSERT_EQUAL_STRING(
         "THE MODEL COULD NOT COMPLETE THE ANSWER",
         chatesp::request_error_message(chatesp::agent::Error::model_failed));
+    TEST_ASSERT_EQUAL_STRING(
+        "THE MODEL USED TOO MANY TOOL STEPS",
+        chatesp::request_error_message(
+            chatesp::agent::Error::tool_round_limit));
+    TEST_ASSERT_NOT_EQUAL_INT(
+        0,
+        std::strcmp(
+            chatesp::request_error_message(
+                chatesp::agent::Error::connect_timeout),
+            chatesp::request_error_message(
+                chatesp::agent::Error::first_byte_timeout)));
 
     for (unsigned value = 0;
          value <= static_cast<unsigned>(chatesp::agent::Error::model_failed);
@@ -209,10 +220,10 @@ void test_request_errors_have_explicit_user_messages() {
 
 void test_speech_errors_have_explicit_user_messages() {
     TEST_ASSERT_EQUAL_STRING(
-        "UNABLE TO PLAY THE ANSWER",
+        "THE SPEECH MODEL COULD NOT CREATE AUDIO",
         chatesp::speech_error_message(chatesp::agent::Error::model_failed));
     TEST_ASSERT_EQUAL_STRING(
-        "THE SPEECH SERVICE RETURNED INVALID AUDIO",
+        "THE SPEECH SERVICE SENT AN UNSUPPORTED AUDIO FORMAT",
         chatesp::speech_error_message(
             chatesp::agent::Error::unsupported_media));
 

@@ -14,6 +14,7 @@ enum class Error : std::uint8_t {
     none,
     invalid_argument,
     limit_exceeded,
+    tool_round_limit,
     request_too_large,
     response_too_large,
     malformed_response,

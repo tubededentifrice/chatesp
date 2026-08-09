@@ -188,7 +188,7 @@ const char *hint(InteractionState state) {
         case InteractionState::speaking:
             return "PLAYING ANSWER";
         case InteractionState::error:
-            return "VOICE SERVICE IS NEXT";
+            return "READ THE ERROR DETAILS";
         case InteractionState::sleep_pending:
             return "NEW THREAD ON WAKE";
         case InteractionState::booting:
@@ -1557,8 +1557,8 @@ void show_answer_notice(std::string_view answer, std::string_view notice) {
 void show_error(std::string_view error) {
     prepare_voice_view();
     show_activity(false);
-    set_static_text(status_label, "TRY AGAIN");
-    set_static_text(hint_label, "THE REQUEST DID NOT FINISH");
+    set_static_text(status_label, "REQUEST FAILED");
+    set_static_text(hint_label, "ERROR DETAILS");
     set_content(error, kMaximumErrorBytes);
 }
 
@@ -1699,16 +1699,31 @@ bool show_fullscreen_plot(const agent::PlotData &plot) {
     }
     double minimum_x = plot.x[0];
     double maximum_x = plot.x[0];
-    double minimum_y = plot.y[0];
-    double maximum_y = plot.y[0];
+    double minimum_y = 0.0;
+    double maximum_y = 0.0;
+    bool found_y = false;
+    bool has_line_segment = false;
     for (std::size_t index = 0; index < plot.count; ++index) {
-        if (!std::isfinite(plot.x[index]) || !std::isfinite(plot.y[index])) {
+        if (!std::isfinite(plot.x[index]) || std::isinf(plot.y[index])) {
             return false;
         }
         minimum_x = std::min(minimum_x, plot.x[index]);
         maximum_x = std::max(maximum_x, plot.x[index]);
-        minimum_y = std::min(minimum_y, plot.y[index]);
-        maximum_y = std::max(maximum_y, plot.y[index]);
+        if (!std::isnan(plot.y[index])) {
+            has_line_segment = has_line_segment ||
+                (index != 0 && std::isfinite(plot.y[index - 1]));
+            if (!found_y) {
+                minimum_y = plot.y[index];
+                maximum_y = plot.y[index];
+                found_y = true;
+            } else {
+                minimum_y = std::min(minimum_y, plot.y[index]);
+                maximum_y = std::max(maximum_y, plot.y[index]);
+            }
+        }
+    }
+    if (!found_y || !has_line_segment) {
+        return false;
     }
 
     hide_fullscreen_visual();
@@ -1721,11 +1736,15 @@ bool show_fullscreen_plot(const agent::PlotData &plot) {
             ? static_cast<long double>(index) /
                 static_cast<long double>(plot.count - 1)
             : (static_cast<long double>(plot.x[index]) - minimum_x) / range_x;
+        plot_x_values[index] = static_cast<std::int32_t>(
+            std::clamp(normalized_x, 0.0L, 1.0L) * 1'000.0L);
+        if (std::isnan(plot.y[index])) {
+            plot_y_values[index] = LV_CHART_POINT_NONE;
+            continue;
+        }
         const long double normalized_y = range_y == 0.0L
             ? 0.5L
             : (static_cast<long double>(plot.y[index]) - minimum_y) / range_y;
-        plot_x_values[index] = static_cast<std::int32_t>(
-            std::clamp(normalized_x, 0.0L, 1.0L) * 1'000.0L);
         plot_y_values[index] = static_cast<std::int32_t>(
             std::clamp(normalized_y, 0.0L, 1.0L) * 1'000.0L);
     }

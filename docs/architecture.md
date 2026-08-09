@@ -180,6 +180,8 @@ web search, image search, restricted Python, memory management, or one
 registered device tool.
 Image search still needs a separate model-selected result ID. A relative
 brightness or volume request gets device status before it changes the value.
+Web search and restricted Python each stop tool routing after one call. Thus,
+the model cannot repeat a completed call and reach the tool-step limit.
 After routing and tool work, the final model request has no tools.
 The iOS companion can send its clock and current UTC offset when the ChatESP device
 connects and at most once per hour while the connection stays active. The
@@ -373,7 +375,9 @@ Version 1 has eleven tools:
 - `power_off()`: schedules power-off only after an explicit current request.
 - `run_python(code)`: runs bounded MicroPython for short calculations. Printed
   text enters the tool result. `plot.line(x, y, title)` can select one line
-  plot with 2 through 128 finite points and a title of at most 48 bytes.
+  plot with 2 through 128 entries and a title of at most 48 bytes. Each x value
+  and each defined y value must be finite. A `None` y value makes a gap for an
+  undefined function value, such as zero in a plot of `1/x`.
 - `remember_memory(fact)`: saves one concise fact only after an explicit user
   request. An exact duplicate returns `unchanged` without a write.
 - `forget_memory(id)`: removes one fact by the ID in the current prompt.
@@ -434,6 +438,12 @@ full-screen chart with a white line and bounded axis ranges. The plot stays
 until the next button action or sleep. A plot has priority if one turn also
 selects an image. A Python error or limit keeps the text answer available and
 does not show partial plot data.
+
+Each visible failure names the operation and the reason. The messages
+distinguish service connection phases, service time limits, account or key
+problems, service request and response sizes, device data limits, and model
+tool-step limits. The screen does not tell the user to retry when a retry cannot
+correct the problem.
 
 Tools do not get credentials directly. Providers own credentials and HTTP
 details.

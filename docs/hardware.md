@@ -233,8 +233,10 @@ The restricted Python path must pass these checks on the V2 AMOLED:
 - a large allocation stops at the fixed Python heap limit without a reset;
 - a held PWR press cancels Python work and starts `LISTENING` without a long
   delay;
-- `plot.line` shows 2 through 128 finite points on a black full-screen chart
-  after speech ends;
+- `plot.line` shows 2 through 128 bounded entries on a black full-screen chart
+  after speech ends, and a `None` y value makes a visible line gap;
+- a plot of `1/x` from -1 through 1 completes in one Python tool call and does
+  not draw a line through the undefined value at zero;
 - the plot title and axis ranges are readable with the correct board rotation;
 - a new PWR action and sleep remove the plot;
 - repeated calculations, limit failures, and plots do not cause a reset or a

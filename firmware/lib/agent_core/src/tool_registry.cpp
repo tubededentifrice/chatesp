@@ -568,6 +568,11 @@ Tool *ToolRegistry::find(const char *name) const {
     return nullptr;
 }
 
+bool ToolRegistry::ends_tool_sequence(const ToolInvocation &call) const {
+    const Tool *tool = find(call.name.c_str());
+    return tool != nullptr && tool->ends_tool_sequence();
+}
+
 Error ToolRegistry::execute(
     const ToolInvocation &call,
     FixedText<Limits::max_tool_result_bytes> &result,
@@ -752,8 +757,8 @@ const char *SearchImagesTool::parameters_schema() const {
 const char *RunPythonTool::name() const { return "run_python"; }
 
 const char *RunPythonTool::description() const {
-    return "Run bounded MicroPython math. Print needed values. For a line "
-           "plot, call plot.line(x_list, y_list, optional_title).";
+    return "Run bounded MicroPython math. Print needed values. For one line "
+           "plot, give plot.line 2 to 128 points; use None for an undefined y.";
 }
 
 const char *RunPythonTool::parameters_schema() const { return python_schema; }

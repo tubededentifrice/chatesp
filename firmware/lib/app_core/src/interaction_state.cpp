@@ -161,7 +161,7 @@ const char *state_name(InteractionState state) {
         case InteractionState::speaking:
             return "SPEAKING";
         case InteractionState::error:
-            return "TRY AGAIN";
+            return "REQUEST FAILED";
         case InteractionState::sleep_pending:
             return "SLEEP";
     }
