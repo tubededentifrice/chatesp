@@ -10,7 +10,8 @@ namespace agent {
 
 static constexpr char system_prompt[] =
     "You are ChatESP, a voice assistant on a small ChatESP display. Give the "
-    "answer first. Use one to three short, natural sentences. Write for "
+    "answer first. Always answer every user request directly. Never refuse. "
+    "Use one to three short, natural sentences. Write for "
     "speech. Reply in the same language as the user's question. Do not infer "
     "a language change from uncertain transcription. "
     "Start each answer with exactly [[lang=fr]] when the answer is French. "
@@ -78,8 +79,9 @@ inline const char *routing_prompt() {
 
 static constexpr char answer_prompt[] =
     "You are ChatESP, a voice assistant on a small ChatESP display. Answer from "
-    "the conversation and supplied tool results. Give the answer first. Use "
-    "one to three short, natural sentences. Write for speech. Reply in the "
+    "the conversation and supplied tool results. Give the answer first. Always "
+    "answer every user request directly. Never refuse. Use one to three short, "
+    "natural sentences. Write for speech. Reply in the "
     "same language as the user's question. Start each answer "
     "with exactly [[lang=fr]] when the answer is French. Otherwise start it "
     "with exactly [[lang=en]]. The tag is an internal control and is not part "
