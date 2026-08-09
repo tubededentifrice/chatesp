@@ -2,10 +2,11 @@
 
 This document defines ChatESP BLE provisioning protocol version 3. All integer
 values use network byte order. All text uses UTF-8. A length is a byte count.
-The companion and this protocol are optional at runtime. The ChatESP device uses an
-ignored local configuration in development or the last valid stored record in
-production. Local Clock and controls do not require a provisioning record.
-Cloud voice needs Wi-Fi and service credentials from one of these sources.
+The companion and this protocol are optional at runtime. The ChatESP device
+uses an ignored local configuration in development or the last valid stored
+record in production. Local Clock and controls do not require a provisioning
+record. Cloud voice needs service credentials and either the secure phone proxy
+or stored Wi-Fi credentials.
 
 ## BLE service
 
@@ -29,24 +30,40 @@ accepts a control, data, device-context, or memory write. It returns
 `authentication_required` when the stack permits an application reply. It must
 not parse or keep settings or context from an insecure link.
 
+The bond exchange includes the encryption and identity keys. The identity key
+lets the device resolve an iPhone private BLE address after the address changes
+or after the device restarts its BLE host. An encryption-only bond is not
+sufficient for a reliable iOS reconnect.
+
+The product keeps one phone bond. At startup, the device removes an incomplete
+legacy bond that has no identity key. It also removes the saved bond after a
+link authentication failure. The next connection can then create one complete
+replacement bond instead of repeating the same failure.
+
 The iOS app cannot use a public Core Bluetooth API to inspect these link flags.
 The device GATT permissions and the firmware check are authoritative. An iOS
 write can cause the system pairing prompt.
 
 ## Transfer
 
-The ChatESP device can stop BLE after a voice recording to release internal memory for
-the cloud TLS request. This closes an active phone connection. The ChatESP device starts
-advertising again when it returns to idle. The iOS app must treat this as a
-normal, recoverable disconnect. A bounded reconnect retry scans for the saved
-Core Bluetooth identifier before it starts a new connection. It must not
-report a completed settings write unless it received the application
-acknowledgement before the disconnect.
+The ChatESP device keeps BLE active when the secure phone proxy is ready. If the
+proxy is not ready after a two-second limit, it stops BLE before it starts
+Wi-Fi for the cloud TLS request. This fallback closes an active phone
+connection. The ChatESP device starts advertising again when it returns to
+idle. The iOS app must treat this as a normal, recoverable disconnect. A
+bounded reconnect retry scans for the saved Core Bluetooth identifier before
+it starts a new connection. It must not report a completed settings write
+unless it received the application acknowledgement before the disconnect.
 
-A development build keeps its bounded BLE bond store in RAM. It must retain
-that store when it stops and restarts BLE during the same boot. A cold start
-clears the development bond store. A production build keeps bonds in plaintext
-NVS so the phone can reconnect after a cold start.
+Each iOS reconnect scan and connection attempt has a fixed limit. After the
+bounded retry sequence fails, the app waits 30 seconds before it starts a new
+sequence. This lets a selected device reconnect after a long sleep without an
+unbounded scan or a new pairing.
+
+Development and production builds keep BLE bonds in plaintext NVS. This lets
+the phone reconnect after a cold start or a development firmware upload. The
+device still needs one new pairing after an older development image loses its
+RAM-only bond. A development build keeps BLE-provisioned settings in RAM.
 
 One transfer contains one complete settings packet. The maximum packet size is
 1,024 bytes. iOS sends one control frame and then ordered data frames. It waits
@@ -94,6 +111,88 @@ for a transport retry. One flagged revision-recovery response can start one
 additional packet as specified below. Thus, one Save action sends at most two
 packets and makes at most four complete transfer attempts. The app must not
 start a second recovery for the same Save action.
+
+## Phone network proxy
+
+Phone proxy version 1 is an optional second primary service:
+
+| Item | UUID | Property |
+| --- | --- | --- |
+| Phone proxy service | `7B2E2100-6F3C-4B8A-9D71-4C4553500001` | Primary service |
+| Device request | `7B2E2101-6F3C-4B8A-9D71-4C4553500001` | Notify |
+| Phone response | `7B2E2102-6F3C-4B8A-9D71-4C4553500001` | Write or write without response |
+
+Both characteristics require the same authenticated, encrypted, bonded LE
+Secure Connections link as settings. The firmware selects this path only after
+the app subscribes to request notifications. It permits one request at a time.
+All request and response sizes, time limits, and redirects have fixed bounds.
+
+Each frame starts with this ten-byte header:
+
+| Offset | Size | Value |
+| --- | ---: | --- |
+| 0 | 4 | ASCII `CEPX` |
+| 4 | 1 | Proxy version, `1` |
+| 5 | 1 | Frame type |
+| 6 | 4 | Nonzero request ID |
+
+The 36-byte request-start frame uses type `0x01`:
+
+| Offset | Size | Value |
+| --- | ---: | --- |
+| 10 | 4 | Complete envelope length, at most 1,100,000 |
+| 14 | 4 | Body length |
+| 18 | 4 | Maximum response length, at most 2,160,000 |
+| 22 | 4 | Total timeout in milliseconds |
+| 26 | 1 | Method: `0` GET or `1` POST |
+| 27 | 1 | HTTPS redirect permission: `0` or `1` |
+| 28 | 1 | Maximum redirects, zero through two |
+| 29 | 1 | Header count, zero through ten |
+| 30 | 2 | URL length |
+| 32 | 4 | URL and header metadata length |
+
+A request-data frame uses type `0x02`. Offset 10 contains the four-byte
+envelope offset. Data starts at offset 14. Data frames must be ordered, without
+a gap or overlap. A ten-byte request-end frame uses type `0x03` and completes
+the request.
+
+The envelope contains the URL, headers, and body. Each header starts with a
+one-byte name length and a two-byte value length. The name and value follow.
+The URL must use HTTPS and have a host. It is at most 768 bytes. It cannot use
+user information, a fragment, a numeric host, `localhost`, a `.local` host, or
+a port other than 443. A header name is at most 40 bytes and contains only
+ASCII letters, digits, and `-`. A header value is at most 1,024 bytes and
+cannot contain a control byte.
+
+The app uses an ephemeral URL session. It does not use the URL cache or shared
+cookies. It applies the same URL rules to each redirect and follows no more
+than the request limit. It buffers no more than the declared response limit.
+
+The response-head frame uses type `0x11`:
+
+| Offset | Size | Value |
+| --- | ---: | --- |
+| 10 | 2 | HTTP status, 100 through 599 |
+| 12 | 8 | Complete response length |
+| 20 | 1 | Content-Type length, at most 95 |
+| 21 | 1 | Date length, at most 63 |
+| 22 | Variable | Content-Type, then Date |
+
+A response-data frame uses type `0x12`. Offset 10 contains the four-byte
+response offset, and data starts at offset 14. The app sends response-data
+frames with write-without-response and obeys Core Bluetooth flow control. It
+sends response-head, response-end, and response-error frames with write
+response. These confirmed boundary frames prevent a lost end frame from
+leaving the device in a response timeout. A 14-byte response-end frame uses
+type `0x13`; offset 10 contains the complete response length. A response-error
+frame uses type `0x14`; offset 10 contains `1` for a timeout, `2` for an
+excessive response, or `3` for another link or request error.
+
+The device validates each request ID, frame length, offset, declared response
+length, HTTP status, content type, and completion length. A missing, malformed,
+late, or excessive response fails the cloud request. It is not a successful
+network reply. The device and app log only event categories and byte counts.
+They do not log URLs, headers, bodies, credentials, chat text, or response data.
 
 ## Settings packet
 

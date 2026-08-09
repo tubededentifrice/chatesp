@@ -35,6 +35,7 @@ static esp_lcd_touch_handle_t tp = NULL;
 static esp_lcd_panel_handle_t panel_handle = NULL; // LCD panel handle
 static esp_lcd_panel_io_handle_t io_handle = NULL;
 static bool panel_display_on = false;
+static bool panel_brightness_is_zero = true;
 static uint16_t panel_x_gap = 0;
 
 static i2s_chan_handle_t i2s_tx_chan = NULL;
@@ -442,10 +443,13 @@ esp_err_t bsp_display_brightness_set(int brightness_percent)
             panel_handle, (uint8_t)brightness_percent), TAG,
         "Panel brightness command failed");
 
-    // Restore brightness while the AMOLED is still off. The CO5300 can ignore
-    // a brightness write sent immediately after display-on, which leaves a
-    // logically awake panel black after a zero-brightness sleep.
-    if (brightness_percent > 0)
+    // A zero-brightness sleep can leave the CO5300 output stage inactive even
+    // though no explicit display-off command was sent. Reassert display-on
+    // after the nonzero brightness write on every wake. This command is safe
+    // when the controller is already on and repairs the observed black panel.
+    const bool waking_from_zero =
+        brightness_percent > 0 && panel_brightness_is_zero;
+    if (waking_from_zero)
     {
         ESP_RETURN_ON_ERROR(
             esp_lcd_panel_disp_on_off(panel_handle, true), TAG,
@@ -455,29 +459,16 @@ esp_err_t bsp_display_brightness_set(int brightness_percent)
             ESP_LOGI(TAG, "Panel on");
         }
         panel_display_on = true;
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
+    panel_brightness_is_zero = brightness_percent == 0;
     return ESP_OK;
 }
 
 esp_err_t bsp_display_backlight_off(void)
 {
     ESP_LOGI(TAG, "Backlight off");
-    const esp_err_t brightness_error = bsp_display_brightness_set(0);
-    if (brightness_error != ESP_OK)
-    {
-        ESP_LOGW(TAG, "Brightness zero command failed");
-    }
-    if (!panel_display_on)
-    {
-        return ESP_OK;
-    }
-    const esp_err_t panel_error =
-        esp_lcd_panel_disp_on_off(panel_handle, false);
-    if (panel_error == ESP_OK)
-    {
-        panel_display_on = false;
-    }
-    return panel_error;
+    return bsp_display_brightness_set(0);
 }
 
 esp_err_t bsp_display_backlight_on(void)

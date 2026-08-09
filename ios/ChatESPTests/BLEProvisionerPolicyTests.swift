@@ -1,7 +1,72 @@
+import CoreBluetooth
+import Foundation
 import XCTest
 @testable import ChatESP
 
 final class BLEProvisionerPolicyTests: XCTestCase {
+    func testUnavailablePhaseDoesNotClaimAnActiveConnection() {
+        XCTAssertEqual(
+            ProvisioningPhase.unavailable.text,
+            "The device is asleep or unavailable. Retrying.")
+    }
+
+    func testBluetoothUnavailableStateIsNotReportedAsConnecting() {
+        XCTAssertTrue(BLEProvisionerPolicy.bluetoothIsUnavailable(.poweredOff))
+        XCTAssertTrue(BLEProvisionerPolicy.bluetoothIsUnavailable(.unauthorized))
+        XCTAssertTrue(BLEProvisionerPolicy.bluetoothIsUnavailable(.unsupported))
+        XCTAssertFalse(BLEProvisionerPolicy.bluetoothIsUnavailable(.unknown))
+        XCTAssertFalse(BLEProvisionerPolicy.bluetoothIsUnavailable(.resetting))
+        XCTAssertFalse(BLEProvisionerPolicy.bluetoothIsUnavailable(.poweredOn))
+    }
+
+    func testPhoneProxyRedirectsStayHTTPSAndBounded() throws {
+        let source = try XCTUnwrap(URL(string: "https://example.com/start"))
+        let target = try XCTUnwrap(URL(string: "https://example.net/next"))
+        let insecure = try XCTUnwrap(URL(string: "http://example.net/next"))
+        let response = try XCTUnwrap(
+            HTTPURLResponse(
+                url: source,
+                statusCode: 302,
+                httpVersion: nil,
+                headerFields: nil))
+        let task = URLSession.shared.dataTask(with: source)
+        let delegate = PhoneProxySessionDelegate(
+            allowsRedirects: true, maximumRedirects: 2)
+
+        var accepted: URLRequest?
+        delegate.urlSession(
+            .shared,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: URLRequest(url: target)
+        ) { accepted = $0 }
+        XCTAssertEqual(accepted?.url, target)
+        delegate.urlSession(
+            .shared,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: URLRequest(url: target)
+        ) { accepted = $0 }
+        XCTAssertEqual(accepted?.url, target)
+        delegate.urlSession(
+            .shared,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: URLRequest(url: target)
+        ) { accepted = $0 }
+        XCTAssertNil(accepted)
+
+        let insecureDelegate = PhoneProxySessionDelegate(
+            allowsRedirects: true, maximumRedirects: 2)
+        insecureDelegate.urlSession(
+            .shared,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: URLRequest(url: insecure)
+        ) { accepted = $0 }
+        XCTAssertNil(accepted)
+    }
+
     func testProvisioningRejectsASecondActiveRequest() {
         XCTAssertTrue(BLEProvisionerPolicy.canStartProvisioning(hasPendingRequest: false))
         XCTAssertFalse(BLEProvisionerPolicy.canStartProvisioning(hasPendingRequest: true))
@@ -51,11 +116,57 @@ final class BLEProvisionerPolicyTests: XCTestCase {
 
     func testScanAndReconnectOperationsHaveFixedBounds() {
         XCTAssertEqual(BLEProvisionerPolicy.scanTimeout, 10)
+        XCTAssertEqual(BLEProvisionerPolicy.serviceDiscoveryTimeout, 10)
         XCTAssertEqual(BLEProvisionerPolicy.reconnectScanTimeout, 10)
         XCTAssertEqual(BLEProvisionerPolicy.reconnectDelays, [2, 4, 8, 16])
         XCTAssertNil(
             BLEProvisionerPolicy.reconnectDelay(
                 attempt: BLEProvisionerPolicy.reconnectDelays.count))
+    }
+
+    func testReconnectAttemptResetsOnlyAfterSecureNotifications() {
+        XCTAssertEqual(
+            BLEProvisionerPolicy.reconnectAttempt(
+                3, secureNotificationsReady: false),
+            3)
+        XCTAssertEqual(
+            BLEProvisionerPolicy.reconnectAttempt(
+                3, secureNotificationsReady: true),
+            0)
+        XCTAssertEqual(BLEProvisionerPolicy.reconnectCycleCooldown, 30)
+    }
+
+    func testReconnectDoesNotStopOnAnIntermediatePeripheralState() {
+        XCTAssertEqual(
+            BLEProvisionerPolicy.reconnectStateAction(.disconnected),
+            .scan)
+        XCTAssertEqual(
+            BLEProvisionerPolicy.reconnectStateAction(.connected),
+            .prepare)
+        XCTAssertEqual(
+            BLEProvisionerPolicy.reconnectStateAction(.connecting),
+            .wait)
+        XCTAssertEqual(
+            BLEProvisionerPolicy.reconnectStateAction(.disconnecting),
+            .wait)
+        XCTAssertFalse(
+            BLEProvisionerPolicy.mustResetCentralAfterReconnectWait(
+                state: .connecting, waitCount: 2))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.mustResetCentralAfterReconnectWait(
+                state: .disconnecting, waitCount: 1))
+        XCTAssertTrue(
+            BLEProvisionerPolicy.mustResetCentralAfterReconnectWait(
+                state: .disconnecting, waitCount: 2))
+    }
+
+    func testMemoryRefreshWaitsForSettingsTransfer() {
+        XCTAssertFalse(
+            BLEProvisionerPolicy.shouldRefreshMemories(
+                isProvisioning: true))
+        XCTAssertTrue(
+            BLEProvisionerPolicy.shouldRefreshMemories(
+                isProvisioning: false))
     }
 
     func testReconnectAcceptsOnlyTheSelectedDeviceAdvertisement() {

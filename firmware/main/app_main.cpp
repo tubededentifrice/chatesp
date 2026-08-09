@@ -141,7 +141,8 @@ extern "C" void app_main() {
             runtime.action_button_edge(true, now_ms);
         }
         if (edges.released) {
-            runtime.action_button_edge(false, now_ms);
+            runtime.action_button_edge(
+                false, now_ms, edges.short_press_confirmed);
         }
         chatesp::ButtonEdges mode_edges;
         const esp_err_t mode_result =
@@ -195,7 +196,8 @@ extern "C" void app_main() {
                         }
                         if (recovery_edges.released) {
                             runtime.action_button_edge(
-                                false, recovery_now_ms);
+                                false, recovery_now_ms,
+                                recovery_edges.short_press_confirmed);
                         }
                     }
                     if (!runtime.poweroff_ready()) {

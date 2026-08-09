@@ -14,7 +14,9 @@ the selected brightness command after panel-on. This recovers a CO5300 that
 accepts the first commands but does not show the first pixel transfer. The
 runtime replaces the splash as soon as its task and button queue can accept
 input. It does not use a minimum splash timer. An in-session display wake shows
-the current interaction state instead.
+the current interaction state instead. Development soft sleep keeps the CO5300
+controller on at zero brightness, so wake does not depend on another unreliable
+display-off and display-on cycle.
 
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short message that identifies the failed operation. The
@@ -98,24 +100,52 @@ Rounded vertical bars rise quickly and fall smoothly, and a short peak marker
 shows recent energy. The analyzer uses fixed stack values, does not allocate,
 and does not keep or log audio outside the existing recording buffer.
 
-After a recording ends, the runtime stops BLE before it starts the cloud
-request. This releases the Bluetooth controller memory for TLS. Provisioning
-starts again when the interaction ends and the runtime returns to idle. A phone
-connection can close at the end of a recording. The app must treat this as a
-normal disconnect and reconnect when the ChatESP device advertises again.
+When an authenticated iPhone subscribes to the phone proxy, the runtime keeps
+BLE active and keeps Wi-Fi off. It sends each bounded HTTPS request envelope to
+the app with notifications. The app uses an ephemeral URL session and returns
+bounded response data with write-without-response flow control. It uses
+confirmed writes for the response boundaries. This path keeps the saved bond
+active and makes the phone the device network path.
+
+If the secure phone proxy is not ready, the runtime waits for it for at most two
+seconds. It then stops BLE, protects its restart block, and starts Wi-Fi. This
+releases the remaining Bluetooth memory for TLS. Provisioning starts again when
+the interaction ends and the runtime returns to idle. Before the controller
+restarts, the runtime releases completed TLS sessions and temporarily shuts
+down Wi-Fi. It starts BLE only when internal memory has one 30 KiB block and at
+least 48 KiB free. ChatESP idle keeps Wi-Fi off. This avoids the controller
+assertion that occurs if the vendor stack cannot allocate its internal block.
+Wi-Fi shutdown deinitializes the driver and releases its DMA buffers. Stopping
+only the radio does not release enough contiguous memory. The app treats this
+fallback disconnect as normal and reconnects when the device advertises again.
+
+After BLE stops for a cloud request, the runtime reserves the controller restart
+block before TLS starts. The request can use the rest of the released Bluetooth
+memory, but it cannot split this block. After the runtime closes TLS and fully
+deinitializes Wi-Fi, it releases the block immediately before BLE starts.
+
+General allocations larger than 512 bytes prefer PSRAM. Hardware paths that
+need internal or DMA-capable memory request it explicitly. This policy keeps
+small control objects fast but reduces TLS and response pressure on internal
+memory.
+
+If the runtime cannot reserve the BLE restart block before a cloud request, it
+records a diagnostic event and performs a controlled software restart. The
+restart keeps settings and the BLE bond. This recovery prevents a live device
+from remaining awake without BLE or entering the controller with unsafe memory.
 If the Bluetooth host does not stop, the runtime keeps its state intact and
 does not start TLS work. BLE stop runs in a separate worker. The NimBLE
 completion wait has a one-second limit. A timeout does not block sleep or a
 PWR-button wake. A later stop can retry or collect the incomplete shutdown.
 
-When no live app location is available, the runtime also stops BLE for one
-short IP-context HTTPS lookup. This gives TLS the same controller-memory
-headroom. The optional worker uses one fixed 20 KiB PSRAM stack because it does
-not use DMA from the stack. Thus, its task can start without taking the internal
-RAM that Wi-Fi and I2S need. The provider necessarily observes the public
-source IP, but the request does not ask the provider to return it. The firmware
-does not log or store the IP or the returned coarse location. BLE starts again
-after the worker stack is reclaimed.
+The runtime does not stop active BLE for the optional IP-context HTTPS lookup.
+A phone can be connecting before the firmware receives a GATT event, and that
+lookup must not interrupt pairing or bond restoration. The optional lookup can
+run only during another operation that already stopped BLE. Its worker uses one
+fixed 20 KiB PSRAM stack because it does not use DMA from the stack. The
+provider necessarily observes the public source IP, but the request does not
+ask the provider to return it. The firmware does not log or store the IP or the
+returned coarse location.
 
 Control movement sends the latest brightness and volume values through the
 same bounded callback. Volume uses safe atomic state at once, including during
@@ -126,15 +156,12 @@ flash, send a panel command, or wait for audio. The runtime saves the final
 preference pair after release. It defers that write while voice work or a
 PWR-button action has priority. It does not write NVS for each track position.
 
-The iOS app is optional at runtime. When Wi-Fi credentials are available from
-an ignored development configuration or a stored production record, the
-station starts an asynchronous
-connection as soon as the runtime starts. This does not block the button or
-microphone path. A request waits for that connection or starts a bounded retry
-if the early attempt did not finish. If the device starts with the PWR button
-held, microphone capture starts first. After 100 ms of audio arrives, a
-low-priority worker starts Wi-Fi while capture continues. The capture task does
-not run Wi-Fi setup.
+The iOS app is optional at runtime. ChatESP idle keeps BLE available and Wi-Fi
+off. After 100 ms of a valid recording arrives, a low-priority worker selects
+the secure phone proxy when it is ready. Otherwise, it stops BLE, protects the
+restart block, and starts Wi-Fi while capture continues. The capture task does
+not run radio setup. This order prevents idle Wi-Fi allocations from splitting
+memory that a later BLE restart needs.
 
 The station scans all 2.4 GHz channels and selects the strongest matching
 access point. It rejects access points below -75 dBm and retries the strongest
@@ -143,7 +170,8 @@ uses modem power saving. Voice work uses the active Wi-Fi power mode. It stays
 connected only during the active session.
 ChatESP mode uses a 30-second idle timer in development and production. Clock
 mode resets that idle gate and stays on. A short PWR-button press can still
-request sleep in either mode. Sleep stops the station.
+request sleep in either mode. Sleep stops BLE and Wi-Fi. The app reports the
+device as asleep or unavailable while it runs bounded reconnect attempts.
 
 Each turn first uses a short required-tool route. The route is direct answer,
 web search, image search, restricted Python, memory management, or one
@@ -411,7 +439,11 @@ firmware validates a full settings packet, writes only changed values, and
 reports the applied revision and fingerprint. Production stores the packet and
 BLE bonds in plaintext NVS. This keeps settings after a restart, but a person
 with physical flash access can read the credentials. Development keeps BLE
-settings and bonds in memory. ChatESP never enables eFuse-backed NVS
+settings in memory and bonds in plaintext NVS so firmware uploads keep the
+phone pairing. Phone proxy request headers and bodies use the same authenticated
+encrypted BLE link. The app sends them only to the HTTPS destination in the
+bounded request envelope. It does not save them. ChatESP never enables
+eFuse-backed NVS
 encryption, flash encryption, secure boot, or another irreversible device
 write. Each device build has an explicit zero policy flag. The PlatformIO
 wrapper rejects unreviewed environments, project replacements, build-flag

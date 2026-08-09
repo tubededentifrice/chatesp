@@ -6,10 +6,12 @@ normal firmware development.
 ## Development mode
 
 The `watch_dev` profile defines `CHATESP_DEVELOPMENT_MODE=1`. A sleep request
-turns off the display and radio work, but it does not request AXP2101
-system-off. USB stays available, so the next upload can reset and flash the
-board without a manual button sequence. A PWR-button press wakes the app. The
-top mode button does not wake it and has no effect while it sleeps.
+sets AMOLED brightness to zero and stops radio work, but it does not request
+AXP2101 system-off. It keeps the CO5300 controller on because repeated
+display-off and display-on cycles can leave the panel black. USB stays
+available, so the next upload can reset and flash the board without a manual
+button sequence. A PWR-button press restores the display. The top mode button
+does not wake it and has no effect while it sleeps.
 
 Build and upload development mode with one command:
 
@@ -105,8 +107,9 @@ from the ignored `.secrets/device.env` file are compiled into a local firmware
 image. They stay in device flash until an erase or a replacement image removes
 them. They must never enter a tracked file or a shared firmware artifact. The
 firmware also initializes NVS because the Wi-Fi and Bluetooth drivers use it
-for radio data. Development mode does not enable NVS encryption or persistent
-BLE bonds. Brightness and volume are non-secret device preferences. They use a
+for radio data. Development mode keeps BLE bonds in plaintext NVS so a normal
+firmware upload does not break an iPhone pairing. It does not enable NVS
+encryption. Brightness and volume are non-secret device preferences. They use a
 separate fixed-size NVS record in development and production. Their defaults
 are 65 and 70 percent. If the record cannot be stored, the new value applies
 only to the current session and the tool result reports this state.

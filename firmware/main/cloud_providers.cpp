@@ -292,13 +292,15 @@ agent::Error execute_buffered_with_retry(
 }
 
 agent::Error require_network(
+    transport::HttpTransport &transport,
     network::NetworkManager &network,
     agent::CancellationToken &cancellation) {
     if (cancellation.cancelled()) {
         return agent::Error::cancelled;
     }
-    return network.connected() ? agent::Error::none
-                               : agent::Error::disconnected;
+    return network.connected() || transport.proxy_available()
+        ? agent::Error::none
+        : agent::Error::disconnected;
 }
 
 agent::Error make_openrouter_url(
@@ -383,7 +385,7 @@ agent::Error OpenRouterChatProvider::route_turn(
     agent::CancellationToken &cancellation) {
     route.clear();
     agent::ChatTurn turn;
-    agent::Error error = require_network(network_, cancellation);
+    agent::Error error = require_network(transport_, network_, cancellation);
     agent::FixedText<agent::Limits::max_url_bytes> url;
     if (error == agent::Error::none) {
         error = make_openrouter_url(connection_, kChatPath, url);
@@ -465,7 +467,7 @@ agent::Error OpenRouterChatProvider::complete_answer_streaming(
     agent::ChatTextSink &text_sink,
     agent::CancellationToken &cancellation) {
     turn.clear();
-    agent::Error error = require_network(network_, cancellation);
+    agent::Error error = require_network(transport_, network_, cancellation);
     agent::FixedText<agent::Limits::max_url_bytes> url;
     if (error == agent::Error::none) {
         error = make_openrouter_url(connection_, kChatPath, url);
@@ -532,7 +534,7 @@ agent::Error OpenRouterTranscriptionProvider::transcribe(
     agent::FixedText<agent::Limits::max_transcript_bytes> &transcript,
     agent::CancellationToken &cancellation) {
     transcript.clear();
-    agent::Error error = require_network(network_, cancellation);
+    agent::Error error = require_network(transport_, network_, cancellation);
     agent::FixedText<agent::Limits::max_url_bytes> url;
     if (error == agent::Error::none) {
         error = make_openrouter_url(connection_, kTranscriptionPath, url);
@@ -606,7 +608,7 @@ void OpenRouterTranscriptionProvider::cancel_active() {
 agent::Error OpenRouterSpeechProvider::speak(
     const char *text, std::size_t size, agent::PcmSink &sink,
     agent::CancellationToken &cancellation) {
-    agent::Error error = require_network(network_, cancellation);
+    agent::Error error = require_network(transport_, network_, cancellation);
     agent::FixedText<agent::Limits::max_url_bytes> url;
     if (error == agent::Error::none) {
         error = make_openrouter_url(connection_, kSpeechPath, url);
@@ -656,7 +658,7 @@ agent::Error OpenRouterSpeechProvider::speak(
 agent::Error OpenRouterSpeechProvider::speak_segments(
     SegmentSource &source, agent::PcmSink &sink,
     agent::CancellationToken &cancellation) {
-    agent::Error error = require_network(network_, cancellation);
+    agent::Error error = require_network(transport_, network_, cancellation);
     agent::FixedText<agent::Limits::max_url_bytes> url;
     if (error == agent::Error::none) {
         error = make_openrouter_url(connection_, kSpeechPath, url);
@@ -727,7 +729,7 @@ agent::Error BraveWebSearchProvider::search(
     const char *query, std::size_t size, agent::WebResults &results,
     agent::CancellationToken &cancellation) {
     results.clear();
-    agent::Error error = require_network(network_, cancellation);
+    agent::Error error = require_network(transport_, network_, cancellation);
     agent::SearchRequestTarget target;
     if (error == agent::Error::none) {
         error = agent::build_brave_web_search_target(
@@ -752,7 +754,7 @@ agent::Error BraveImageSearchProvider::search(
     const char *query, std::size_t size, agent::ImageResults &results,
     agent::CancellationToken &cancellation) {
     results.clear();
-    agent::Error error = require_network(network_, cancellation);
+    agent::Error error = require_network(transport_, network_, cancellation);
     agent::SearchRequestTarget target;
     if (error == agent::Error::none) {
         error = agent::build_brave_image_search_target(

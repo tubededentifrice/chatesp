@@ -11,11 +11,7 @@
 #define CHATESP_DEVELOPMENT_MODE 0
 #endif
 
-#if CHATESP_DEVELOPMENT_MODE
-#if defined(CONFIG_BT_NIMBLE_NVS_PERSIST) && CONFIG_BT_NIMBLE_NVS_PERSIST
-#error "Development firmware must keep BLE bonds volatile"
-#endif
-#else
+#if !CHATESP_DEVELOPMENT_MODE
 #if !defined(CONFIG_BT_NIMBLE_NVS_PERSIST) || \
     !CONFIG_BT_NIMBLE_NVS_PERSIST
 #error "Production firmware requires persistent BLE bonds"

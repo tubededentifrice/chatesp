@@ -95,6 +95,188 @@ class PlatformioWrapperTests(unittest.TestCase):
             [], device_write_policy_errors(root / "firmware")
         )
 
+    def test_device_profiles_persist_ble_bonds(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        for profile in ("watch_dev", "watch_prod"):
+            defaults = (
+                root / "firmware" / "config" / f"{profile}.defaults"
+            ).read_text(encoding="utf-8")
+            self.assertIn("CONFIG_BT_NIMBLE_NVS_PERSIST=y", defaults)
+
+    def test_common_config_sizes_nimble_host_for_memory_ble(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        defaults = (root / "firmware" / "sdkconfig.defaults").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192", defaults
+        )
+
+    def test_common_config_bounds_wifi_ram_for_secure_pairing(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        defaults = (root / "firmware" / "sdkconfig.defaults").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_RX_BA_WIN=6", defaults)
+        self.assertIn("CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512", defaults)
+
+    def test_ble_bond_requests_identity_keys_for_private_addresses(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "firmware" / "main" / "ble_provisioning.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            source.count(
+                "BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID"
+            ),
+            2,
+        )
+        self.assertIn("peer_identity", source)
+        self.assertIn("Removed one stale BLE bond", source)
+
+    def test_ble_idle_and_voice_radio_order_protects_restart_memory(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        run_start = source.index("void run()")
+        loop_start = source.index("while (true)", run_start)
+        startup_source = source[run_start:loop_start]
+        self.assertIn("ensure_ble_started();", startup_source)
+        self.assertNotIn("start_network_early", startup_source)
+        warm_start = source.index("void start_network_during_recording()")
+        warm_end = source.index("void run_network_warm_worker()", warm_start)
+        warm_source = source[warm_start:warm_end]
+        self.assertLess(
+            warm_source.index("kPhoneProxyConnectGraceMs"),
+            warm_source.index("stop_ble_for_request()"),
+        )
+        self.assertLess(
+            warm_source.index("stop_ble_for_request()"),
+            warm_source.index("xTaskCreatePinnedToCore("),
+        )
+        self.assertIn(
+            "proxy_wait_started_ms = recording_started_at_ms_", source
+        )
+        self.assertIn("ble_started_ || ble_provisioning::running()", source)
+        context_start = source.index("void start_network_context_lookup()")
+        context_end = source.index("void run_network_context_worker()")
+        self.assertNotIn("stop_ble()", source[context_start:context_end])
+        ble_start = source.index("bool ensure_ble_started()")
+        ble_start_end = source.index("void recover_poweroff", ble_start)
+        ble_start_source = source[ble_start:ble_start_end]
+        self.assertIn("network_.shutdown()", ble_start_source)
+        self.assertIn("kBleControllerMinimumLargestBlockBytes", ble_start_source)
+        self.assertIn("kBleControllerMinimumFreeInternalBytes", ble_start_source)
+        self.assertIn("reserve_ble_restart_memory()", source)
+        self.assertIn("release_ble_restart_memory();", ble_start_source)
+        self.assertIn("ble_memory_recovery_restart", source)
+        self.assertIn("esp_restart();", source)
+        network_source = (
+            root / "firmware" / "main" / "network_manager.cpp"
+        ).read_text(encoding="utf-8")
+        shutdown_start = network_source.index("void NetworkManager::shutdown()")
+        shutdown_end = network_source.index(
+            "NetworkState NetworkManager::state()", shutdown_start
+        )
+        shutdown_source = network_source[shutdown_start:shutdown_end]
+        self.assertIn("clean_failed_initialize();", shutdown_source)
+        self.assertIn("initialized_ = false;", shutdown_source)
+
+    def test_phone_proxy_is_secure_fast_and_preferred(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        ble_source = (
+            root / "firmware" / "main" / "ble_provisioning.cpp"
+        ).read_text(encoding="utf-8")
+        transport_source = (
+            root / "firmware" / "main" / "http_transport.cpp"
+        ).read_text(encoding="utf-8")
+        provider_source = (
+            root / "firmware" / "main" / "cloud_providers.cpp"
+        ).read_text(encoding="utf-8")
+        ios_protocol = (
+            root
+            / "ios"
+            / "ChatESP"
+            / "Provisioning"
+            / "ProvisioningProtocol.swift"
+        ).read_text(encoding="utf-8")
+        ios_ble = (
+            root
+            / "ios"
+            / "ChatESP"
+            / "Provisioning"
+            / "BLEProvisioner.swift"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("BLE_GATT_CHR_F_NOTIFY |", ble_source)
+        self.assertIn("BLE_GATT_CHR_F_WRITE_NO_RSP", ble_source)
+        self.assertIn("BLE_GATT_CHR_F_WRITE_ENC", ble_source)
+        self.assertIn("BLE_GATT_CHR_F_WRITE_AUTHEN", ble_source)
+        self.assertIn("ble_gatts_notify_custom", ble_source)
+        self.assertNotIn("s_http_proxy_indication_done", ble_source)
+        self.assertIn(
+            "if (ble_provisioning::http_proxy_available())",
+            transport_source,
+        )
+        self.assertIn("encoded_length >", transport_source)
+        self.assertNotIn("ble_svc_gatt_changed", ble_source)
+        self.assertIn("transport.proxy_available()", provider_source)
+        self.assertIn("7B2E2100-6F3C-4B8A-9D71-4C4553500001", ios_protocol)
+        self.assertIn("return .withoutResponse", ios_ble)
+        self.assertIn("return .withResponse", ios_ble)
+        self.assertIn("phoneProxyWaitingForWriteResponse", ios_ble)
+        self.assertIn("canSendWriteWithoutResponse", ios_ble)
+        self.assertIn("session.bytes(", ios_ble)
+        value_callback_start = ios_ble.index(
+            "didUpdateValueFor characteristic: CBCharacteristic"
+        )
+        value_callback_end = ios_ble.index(
+            "extension BLEProvisioner: CLLocationManagerDelegate",
+            value_callback_start,
+        )
+        value_callback = ios_ble[value_callback_start:value_callback_end]
+        self.assertIn("MainActor.assumeIsolated", value_callback)
+        self.assertNotIn("Task { @MainActor", value_callback)
+
+    def test_ios_reuses_discovered_settings_characteristics(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "ios" / "ChatESP" / "Provisioning" / "BLEProvisioner.swift"
+        ).read_text(encoding="utf-8")
+        provision_start = source.index("func provision(")
+        prepare_start = source.index(
+            "private func prepareCharacteristics", provision_start
+        )
+        provision_source = source[provision_start:prepare_start]
+        self.assertIn("acknowledgementCharacteristic != nil", provision_source)
+        self.assertIn("beginAttempt()", provision_source)
+        self.assertIn("if selected === peripheral", source)
+        self.assertIn("self.selected == nil", source)
+        self.assertIn("let identifier = self.desiredSelectedID", source)
+
+    def test_development_display_sleep_keeps_co5300_controller_on(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        board_source = (
+            root
+            / "firmware"
+            / "components"
+            / "chatesp_board"
+            / "esp32_s3_touch_amoled_1_8.c"
+        ).read_text(encoding="utf-8")
+        start = board_source.index("esp_err_t bsp_display_backlight_off")
+        end = board_source.index(
+            "esp_err_t bsp_display_backlight_on", start
+        )
+        sleep_source = board_source[start:end]
+        self.assertIn("return bsp_display_brightness_set(0);", sleep_source)
+        self.assertNotIn("esp_lcd_panel_disp_on_off", sleep_source)
+        self.assertIn("panel_brightness_is_zero", board_source)
+        self.assertIn("waking_from_zero", board_source)
+
     def test_device_policy_rejects_an_unsafe_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)

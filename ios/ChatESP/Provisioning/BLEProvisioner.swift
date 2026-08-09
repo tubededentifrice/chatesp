@@ -1,6 +1,43 @@
 import CoreBluetooth
 import CoreLocation
 import Foundation
+import os
+import UIKit
+
+final class PhoneProxySessionDelegate: NSObject, URLSessionTaskDelegate,
+    @unchecked Sendable {
+    private let allowsRedirects: Bool
+    private let maximumRedirects: UInt8
+    private let lock = NSLock()
+    private var redirectCount: UInt8 = 0
+
+    init(allowsRedirects: Bool, maximumRedirects: UInt8) {
+        self.allowsRedirects = allowsRedirects
+        self.maximumRedirects = maximumRedirects
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard allowsRedirects,
+              let redirectText = request.url?.absoluteString,
+              PhoneProxyProtocolV1.validURL(Data(redirectText.utf8)) != nil else {
+            completionHandler(nil)
+            return
+        }
+        lock.lock()
+        let canRedirect = redirectCount < maximumRedirects
+        if canRedirect {
+            redirectCount += 1
+        }
+        lock.unlock()
+        completionHandler(canRedirect ? request : nil)
+    }
+}
 
 struct DiscoveredDevice: Identifiable {
     let peripheral: CBPeripheral
@@ -13,6 +50,7 @@ enum ProvisioningPhase: Equatable {
     case idle
     case scanning
     case connecting
+    case unavailable
     case pairing
     case transferring(Int)
     case waitingForConfirmation
@@ -24,6 +62,8 @@ enum ProvisioningPhase: Equatable {
         case .idle: return "Ready"
         case .scanning: return "Searching for ChatESP"
         case .connecting: return "Connecting"
+        case .unavailable:
+            return "The device is asleep or unavailable. Retrying."
         case .pairing: return "Preparing the secure connection"
         case .transferring(let percent): return "Sending settings: \(percent)%"
         case .waitingForConfirmation: return "Waiting for the ChatESP device"
@@ -53,12 +93,21 @@ struct BLEProvisionerPolicy {
         case retryCompleteTransfer
     }
 
+    enum ReconnectStateAction: Equatable {
+        case scan
+        case prepare
+        case wait
+    }
+
     static let scanTimeout: TimeInterval = 10
     static let connectionTimeout: TimeInterval = 10
+    static let serviceDiscoveryTimeout: TimeInterval = 10
     static let frameTimeout: TimeInterval = 10
     static let deviceContextInterval: TimeInterval = 3_600
     static let reconnectScanTimeout: TimeInterval = 10
     static let reconnectDelays: [TimeInterval] = [2, 4, 8, 16]
+    static let reconnectCycleCooldown: TimeInterval = 30
+    static let reconnectStuckStateLimit = 2
 
     static func canStartProvisioning(hasPendingRequest: Bool) -> Bool {
         !hasPendingRequest
@@ -79,6 +128,48 @@ struct BLEProvisionerPolicy {
     static func reconnectDelay(attempt: Int) -> TimeInterval? {
         guard reconnectDelays.indices.contains(attempt) else { return nil }
         return reconnectDelays[attempt]
+    }
+
+    static func reconnectAttempt(
+        _ current: Int, secureNotificationsReady: Bool
+    ) -> Int {
+        secureNotificationsReady ? 0 : current
+    }
+
+    static func reconnectStateAction(
+        _ state: CBPeripheralState
+    ) -> ReconnectStateAction {
+        switch state {
+        case .disconnected:
+            return .scan
+        case .connected:
+            return .prepare
+        case .connecting, .disconnecting:
+            return .wait
+        @unknown default:
+            return .wait
+        }
+    }
+
+    static func bluetoothIsUnavailable(_ state: CBManagerState) -> Bool {
+        switch state {
+        case .unsupported, .unauthorized, .poweredOff:
+            return true
+        case .unknown, .resetting, .poweredOn:
+            return false
+        @unknown default:
+            return true
+        }
+    }
+
+    static func mustResetCentralAfterReconnectWait(
+        state: CBPeripheralState, waitCount: Int
+    ) -> Bool {
+        state == .disconnecting && waitCount >= reconnectStuckStateLimit
+    }
+
+    static func shouldRefreshMemories(isProvisioning: Bool) -> Bool {
+        !isProvisioning
     }
 
     static func shouldReconnect(
@@ -137,6 +228,12 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private static let deviceContext = CBUUID(string: ProvisioningProtocolV3.deviceContextUUID)
     private static let memoryCommand = CBUUID(string: MemoryProtocolV1.commandUUID)
     private static let memoryResponse = CBUUID(string: MemoryProtocolV1.responseUUID)
+    private static let httpProxyService = CBUUID(
+        string: PhoneProxyProtocolV1.serviceUUID)
+    private static let httpProxyRequest = CBUUID(
+        string: PhoneProxyProtocolV1.requestUUID)
+    private static let httpProxyResponse = CBUUID(
+        string: PhoneProxyProtocolV1.responseUUID)
 
     private lazy var central = CBCentralManager(
         delegate: self,
@@ -155,6 +252,10 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var deviceContextCharacteristic: CBCharacteristic?
     private var memoryCommandCharacteristic: CBCharacteristic?
     private var memoryResponseCharacteristic: CBCharacteristic?
+    private var httpProxyRequestCharacteristic: CBCharacteristic?
+    private var httpProxyResponseCharacteristic: CBCharacteristic?
+    private var serviceDiscoveryInProgress = false
+    private var serviceRediscoveryNeeded = false
     private var pendingPacket: ProvisioningPacket?
     private var transfer: ProvisioningTransfer?
     private var frames: [(CBCharacteristic, Data)] = []
@@ -177,7 +278,9 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var waitingForFreshLocation = false
     private var reconnectWork: DispatchWorkItem?
     private var reconnectScanTimeoutWork: DispatchWorkItem?
+    private var reconnectCooldownWork: DispatchWorkItem?
     private var reconnectAttempt = 0
+    private var reconnectWaitCount = 0
     private var memoryRevision: UInt32 = 0
     private var memoryFingerprint = Data(repeating: 0, count: 32)
     private var nextMemoryRequestID: UInt32 = 1
@@ -190,6 +293,19 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var memoryListFingerprint = Data(repeating: 0, count: 32)
     private var memoryListRestartCount = 0
     private var memoryRefreshNeeded = false
+    private var phoneProxyAssembler = PhoneProxyRequestAssembler()
+    private var phoneProxyTask: Task<Void, Never>?
+    private var phoneProxySession: URLSession?
+    private var phoneProxyRequestID: UInt32?
+    private var phoneProxyResponseData = Data()
+    private var phoneProxyResponseOffset = 0
+    private var phoneProxyResponseEndSent = false
+    private var phoneProxyErrorOnly = false
+    private var phoneProxyPendingFrame: Data?
+    private var phoneProxyWaitingForWriteResponse = false
+    private var phoneProxyBackgroundTask = UIBackgroundTaskIdentifier.invalid
+    private let bleLogger = Logger(
+        subsystem: "org.chatesp.companion", category: "BLE")
 
     init(selectedDeviceIdentifier: UUID? = nil) {
         desiredSelectedID = selectedDeviceIdentifier
@@ -198,6 +314,33 @@ final class BLEProvisioner: NSObject, ObservableObject {
         locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
         locationManager.distanceFilter = 5_000
         _ = central
+        trace(
+            "provisioner_ready_selection_\(selectedDeviceIdentifier == nil ? 0 : 1)")
+    }
+
+    private func trace(_ event: String, error: Error? = nil) {
+        if let error {
+            let value = error as NSError
+            bleLogger.error(
+                "event=\(event, privacy: .public) error_domain=\(value.domain, privacy: .public) error_code=\(value.code)")
+#if DEBUG
+            print(
+                "BLE_TRACE event=\(event) error_domain=\(value.domain) " +
+                "error_code=\(value.code)")
+#endif
+        } else {
+            bleLogger.notice("event=\(event, privacy: .public)")
+#if DEBUG
+            print("BLE_TRACE event=\(event)")
+#endif
+        }
+    }
+
+    private func cancelConnection(
+        _ peripheral: CBPeripheral, reason: String
+    ) {
+        trace("cancel_\(reason)")
+        central.cancelPeripheralConnection(peripheral)
     }
 
     deinit {
@@ -208,7 +351,10 @@ final class BLEProvisioner: NSObject, ObservableObject {
         freshLocationWaitWork?.cancel()
         reconnectWork?.cancel()
         reconnectScanTimeoutWork?.cancel()
+        reconnectCooldownWork?.cancel()
         memoryTimeoutWork?.cancel()
+        phoneProxyTask?.cancel()
+        phoneProxySession?.invalidateAndCancel()
         locationManager.stopMonitoringSignificantLocationChanges()
     }
 
@@ -231,11 +377,14 @@ final class BLEProvisioner: NSObject, ObservableObject {
         reconnectWork = nil
         reconnectScanTimeoutWork?.cancel()
         reconnectScanTimeoutWork = nil
+        reconnectCooldownWork?.cancel()
+        reconnectCooldownWork = nil
         scanTimeoutWork?.cancel()
         scanWhenReady = false
         discoveredDevices = []
         discovered = [:]
         phase = .scanning
+        trace("scan_start")
         central.scanForPeripherals(
             withServices: [Self.service],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
@@ -266,6 +415,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     func restoreSelectedDevice(identifier: UUID?) {
+        trace("restore_selection_\(identifier == nil ? 0 : 1)")
         if BLEProvisionerPolicy.mustCancelProvisioningForSelectionChange(
             isProvisioning: isProvisioning,
             selectedID: selectedID,
@@ -277,12 +427,14 @@ final class BLEProvisioner: NSObject, ObservableObject {
         guard let identifier else {
             for peripheral in restoredPeripherals.values where
                 !isSelected(peripheral) {
-                central.cancelPeripheralConnection(peripheral)
+                cancelConnection(peripheral, reason: "restore_removed")
             }
             restoredPeripherals = [:]
             return
         }
+        trace("restore_central_state_\(central.state.rawValue)")
         if selectedID == identifier, let selected {
+            trace("restore_existing_state_\(selected.state.rawValue)")
             selected.delegate = self
             if selected.state == .connected {
                 isDeviceConnected = true
@@ -297,6 +449,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 isDeviceConnected = false
                 if reconnectWork == nil,
                    reconnectScanTimeoutWork == nil {
+                    reconnectCooldownWork?.cancel()
+                    reconnectCooldownWork = nil
                     reconnectAttempt = 0
                     connectSelected()
                 }
@@ -305,10 +459,13 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
         if let peripheral = restoredPeripherals[identifier] ??
             central.retrievePeripherals(withIdentifiers: [identifier]).first {
+            trace("restore_retrieved_state_\(peripheral.state.rawValue)")
             select(peripheral, notifySelectionChange: false)
         } else if central.state == .poweredOn {
+            trace("restore_scan_required")
             startScan()
         } else {
+            trace("restore_waiting_for_central")
             scanWhenReady = true
         }
     }
@@ -322,6 +479,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
         reconnectWork = nil
         reconnectScanTimeoutWork?.cancel()
         reconnectScanTimeoutWork = nil
+        reconnectCooldownWork?.cancel()
+        reconnectCooldownWork = nil
         connectionTimeoutWork?.cancel()
         connectionTimeoutWork = nil
         contextTimer?.invalidate()
@@ -349,10 +508,11 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
         clearMemoryConnectionState()
         clearCharacteristics()
+        serviceDiscoveryInProgress = false
         phase = .idle
         if let oldSelection {
             oldSelection.delegate = nil
-            central.cancelPeripheralConnection(oldSelection)
+            cancelConnection(oldSelection, reason: "device_forgotten")
         }
         onSelectedDeviceChanged?(nil)
     }
@@ -364,10 +524,34 @@ final class BLEProvisioner: NSObject, ObservableObject {
         central.stopScan()
         scanTimeoutWork?.cancel()
         scanTimeoutWork = nil
+        trace(
+            "select_state_\(peripheral.state.rawValue)_same_" +
+            "\(selected === peripheral ? 1 : 0)")
+        if selected === peripheral,
+           selectedID == peripheral.identifier {
+            desiredSelectedID = peripheral.identifier
+            peripheral.delegate = self
+            isDeviceConnected = peripheral.state == .connected
+            if notifySelectionChange {
+                onSelectedDeviceChanged?(peripheral.identifier)
+            }
+            if peripheral.state == .connected {
+                if !serviceDiscoveryInProgress,
+                   controlCharacteristic == nil {
+                    prepareCharacteristics(on: peripheral)
+                }
+            } else if reconnectWork == nil,
+                      reconnectScanTimeoutWork == nil {
+                connectSelected()
+            }
+            return
+        }
         reconnectWork?.cancel()
         reconnectWork = nil
         reconnectScanTimeoutWork?.cancel()
         reconnectScanTimeoutWork = nil
+        reconnectCooldownWork?.cancel()
+        reconnectCooldownWork = nil
         connectionTimeoutWork?.cancel()
         connectionTimeoutWork = nil
         let oldSelection = selected
@@ -376,10 +560,12 @@ final class BLEProvisioner: NSObject, ObservableObject {
         desiredSelectedID = peripheral.identifier
         if let oldSelection, oldSelection !== peripheral {
             oldSelection.delegate = nil
-            central.cancelPeripheralConnection(oldSelection)
+            cancelConnection(oldSelection, reason: "selection_changed")
         }
         reconnectAttempt = 0
+        reconnectWaitCount = 0
         isDeviceConnected = peripheral.state == .connected
+        serviceDiscoveryInProgress = false
         clearMemoryConnectionState()
         clearCharacteristics()
         resetDeviceContextTransfer()
@@ -419,7 +605,13 @@ final class BLEProvisioner: NSObject, ObservableObject {
         pendingPacket = packet
         attempt = 0
         if selected.state == .connected {
-            prepareCharacteristics(on: selected)
+            if controlCharacteristic != nil,
+               dataCharacteristic != nil,
+               acknowledgementCharacteristic != nil {
+                beginAttempt()
+            } else {
+                prepareCharacteristics(on: selected)
+            }
         } else {
             connectSelected()
         }
@@ -427,12 +619,46 @@ final class BLEProvisioner: NSObject, ObservableObject {
 
     private func prepareCharacteristics(on peripheral: CBPeripheral) {
         guard isSelected(peripheral) else { return }
+        guard !serviceDiscoveryInProgress else {
+            trace("service_discovery_already_running")
+            return
+        }
         connectionTimeoutWork?.cancel()
         connectionTimeoutWork = nil
         phase = .pairing
         clearCharacteristics()
         clearMemoryConnectionState()
-        peripheral.discoverServices([Self.service])
+        serviceDiscoveryInProgress = true
+        trace("service_discovery_start")
+        peripheral.discoverServices([Self.service, Self.httpProxyService])
+        startServiceDiscoveryTimeout(for: peripheral)
+    }
+
+    private func startServiceDiscoveryTimeout(for peripheral: CBPeripheral) {
+        connectionTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self, weak peripheral] in
+            guard let self, let peripheral,
+                  self.isSelected(peripheral),
+                  self.serviceDiscoveryInProgress else { return }
+            self.connectionTimeoutWork = nil
+            self.serviceDiscoveryInProgress = false
+            self.trace("service_discovery_timeout")
+            self.cancelConnection(
+                peripheral, reason: "service_discovery_timeout")
+            if self.pendingPacket != nil {
+                self.finish(
+                    .failure(ProvisioningError.timeout),
+                    sendContext: false)
+            } else {
+                self.phase = .failed(
+                    "The ChatESP device did not complete Bluetooth setup. Retrying.")
+                self.scheduleReconnect()
+            }
+        }
+        connectionTimeoutWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + BLEProvisionerPolicy.serviceDiscoveryTimeout,
+            execute: work)
     }
 
     private func clearCharacteristics() {
@@ -442,6 +668,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
         deviceContextCharacteristic = nil
         memoryCommandCharacteristic = nil
         memoryResponseCharacteristic = nil
+        httpProxyRequestCharacteristic = nil
+        httpProxyResponseCharacteristic = nil
     }
 
     private func resetDeviceContextTransfer() {
@@ -495,6 +723,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func clearMemoryConnectionState() {
+        clearPhoneProxyConnectionState()
         memoryTimeoutWork?.cancel()
         memoryTimeoutWork = nil
         pendingMemoryCommand = nil
@@ -509,6 +738,259 @@ final class BLEProvisioner: NSObject, ObservableObject {
         memoryMessage = isDeviceConnected
             ? "Update the ChatESP device firmware to manage memories."
             : "Connect a ChatESP device to manage memories."
+    }
+
+    private func clearPhoneProxyConnectionState() {
+        phoneProxyTask?.cancel()
+        phoneProxyTask = nil
+        phoneProxySession?.invalidateAndCancel()
+        phoneProxySession = nil
+        phoneProxyAssembler.reset()
+        phoneProxyRequestID = nil
+        phoneProxyResponseData.removeAll(keepingCapacity: false)
+        phoneProxyResponseOffset = 0
+        phoneProxyResponseEndSent = false
+        phoneProxyErrorOnly = false
+        phoneProxyPendingFrame = nil
+        phoneProxyWaitingForWriteResponse = false
+        endPhoneProxyBackgroundTask()
+    }
+
+    private func endPhoneProxyBackgroundTask() {
+        guard phoneProxyBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(phoneProxyBackgroundTask)
+        phoneProxyBackgroundTask = .invalid
+    }
+
+    private func handlePhoneProxyRequestFrame(_ frame: Data) {
+        do {
+            if let request = try phoneProxyAssembler.consume(frame) {
+                startPhoneProxyRequest(request)
+            }
+        } catch {
+            trace("phone_proxy_request_rejected", error: error)
+            phoneProxyAssembler.reset()
+            if frame.count >= PhoneProxyProtocolV1.commonHeaderSize {
+                sendPhoneProxyError(
+                    requestID: frame.readBigEndianUInt32(at: 6), code: 3)
+            }
+        }
+    }
+
+    private func startPhoneProxyRequest(_ proxyRequest: PhoneProxyRequest) {
+        guard phoneProxyTask == nil,
+              phoneProxyRequestID == nil else {
+            sendPhoneProxyError(requestID: proxyRequest.requestID, code: 3)
+            return
+        }
+        trace("phone_proxy_request_begin")
+        phoneProxyRequestID = proxyRequest.requestID
+        phoneProxyBackgroundTask = UIApplication.shared.beginBackgroundTask(
+            withName: "ChatESP phone proxy"
+        ) { [weak self] in
+            Task { @MainActor in
+                self?.phoneProxyTask?.cancel()
+                self?.phoneProxySession?.invalidateAndCancel()
+            }
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest =
+            proxyRequest.request.timeoutInterval
+        configuration.timeoutIntervalForResource =
+            proxyRequest.request.timeoutInterval
+        configuration.waitsForConnectivity = true
+        let session = URLSession(
+            configuration: configuration,
+            delegate: PhoneProxySessionDelegate(
+                allowsRedirects: proxyRequest.allowsRedirects,
+                maximumRedirects: proxyRequest.maximumRedirects),
+            delegateQueue: nil)
+        phoneProxySession = session
+        phoneProxyTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let (bytes, response) = try await session.bytes(
+                    for: proxyRequest.request)
+                try Task.checkCancellation()
+                guard let response = response as? HTTPURLResponse else {
+                    self.sendPhoneProxyError(
+                        requestID: proxyRequest.requestID, code: 3)
+                    return
+                }
+                let expectedLength = response.expectedContentLength
+                if expectedLength > Int64(proxyRequest.maximumResponseSize) {
+                    self.sendPhoneProxyError(
+                        requestID: proxyRequest.requestID, code: 2)
+                    return
+                }
+                var data = Data()
+                if expectedLength > 0 {
+                    data.reserveCapacity(Int(expectedLength))
+                }
+                for try await byte in bytes {
+                    guard data.count < proxyRequest.maximumResponseSize else {
+                        session.invalidateAndCancel()
+                        self.sendPhoneProxyError(
+                            requestID: proxyRequest.requestID, code: 2)
+                        return
+                    }
+                    data.append(byte)
+                }
+                try self.sendPhoneProxyResponse(
+                    requestID: proxyRequest.requestID,
+                    response: response,
+                    data: data)
+            } catch is CancellationError {
+                if self.phoneProxyRequestID == proxyRequest.requestID,
+                   self.isDeviceConnected {
+                    self.sendPhoneProxyError(
+                        requestID: proxyRequest.requestID, code: 3)
+                } else {
+                    self.finishPhoneProxyResponse()
+                }
+            } catch {
+                let code: UInt8 = (error as? URLError)?.code == .timedOut
+                    ? 1
+                    : 3
+                self.sendPhoneProxyError(
+                    requestID: proxyRequest.requestID, code: code)
+            }
+        }
+    }
+
+    private func sendPhoneProxyResponse(
+        requestID: UInt32, response: HTTPURLResponse, data: Data
+    ) throws {
+        let contentType = response.value(
+            forHTTPHeaderField: "Content-Type") ?? ""
+        let date = response.value(forHTTPHeaderField: "Date") ?? ""
+        let head = try PhoneProxyProtocolV1.responseHead(
+            requestID: requestID,
+            status: response.statusCode,
+            contentLength: data.count,
+            contentType: contentType,
+            date: date)
+        phoneProxyResponseData = data
+        phoneProxyResponseOffset = 0
+        phoneProxyResponseEndSent = false
+        phoneProxyErrorOnly = false
+        queuePhoneProxyFrame(head)
+    }
+
+    private func sendPhoneProxyError(requestID: UInt32, code: UInt8) {
+        guard phoneProxyRequestID == nil ||
+                phoneProxyRequestID == requestID else { return }
+        phoneProxyRequestID = requestID
+        phoneProxyResponseData.removeAll(keepingCapacity: false)
+        phoneProxyResponseOffset = 0
+        phoneProxyResponseEndSent = true
+        phoneProxyErrorOnly = true
+        queuePhoneProxyFrame(
+            PhoneProxyProtocolV1.responseError(
+                requestID: requestID, code: code))
+    }
+
+    private func queuePhoneProxyFrame(_ frame: Data) {
+        guard phoneProxyPendingFrame == nil else {
+            finishPhoneProxyResponse()
+            return
+        }
+        phoneProxyPendingFrame = frame
+        drainPhoneProxyFrame()
+    }
+
+    private func drainPhoneProxyFrame() {
+        guard let selected,
+              let characteristic = httpProxyResponseCharacteristic,
+              isActive(selected),
+              let frame = phoneProxyPendingFrame else {
+            finishPhoneProxyResponse()
+            return
+        }
+        let type = phoneProxyWriteType(for: frame)
+        guard frame.count <= selected.maximumWriteValueLength(for: type) else {
+            finishPhoneProxyResponse()
+            return
+        }
+        if type == .withResponse {
+            guard !phoneProxyWaitingForWriteResponse else { return }
+            phoneProxyWaitingForWriteResponse = true
+            selected.writeValue(frame, for: characteristic, type: type)
+        } else {
+            guard selected.canSendWriteWithoutResponse else { return }
+            selected.writeValue(frame, for: characteristic, type: type)
+            phoneProxyPendingFrame = nil
+            DispatchQueue.main.async { [weak self] in
+                self?.sendNextPhoneProxyResponseFrame()
+            }
+        }
+    }
+
+    private func phoneProxyWriteType(
+        for frame: Data
+    ) -> CBCharacteristicWriteType {
+        guard frame.count > 5,
+              frame[5] == PhoneProxyProtocolV1.FrameType.responseData.rawValue else {
+            return .withResponse
+        }
+        return .withoutResponse
+    }
+
+    private func sendNextPhoneProxyResponseFrame() {
+        guard let requestID = phoneProxyRequestID,
+              let selected else {
+            finishPhoneProxyResponse()
+            return
+        }
+        if phoneProxyErrorOnly {
+            finishPhoneProxyResponse()
+            return
+        }
+        if phoneProxyResponseOffset < phoneProxyResponseData.count {
+            let capacity = selected.maximumWriteValueLength(
+                for: .withoutResponse) - PhoneProxyProtocolV1.dataHeaderSize
+            guard capacity > 0 else {
+                finishPhoneProxyResponse()
+                return
+            }
+            let end = min(
+                phoneProxyResponseData.count,
+                phoneProxyResponseOffset + capacity)
+            let bytes = phoneProxyResponseData.subdata(
+                in: phoneProxyResponseOffset..<end)
+            let frame = PhoneProxyProtocolV1.responseData(
+                requestID: requestID,
+                offset: phoneProxyResponseOffset,
+                bytes: bytes)
+            phoneProxyResponseOffset = end
+            queuePhoneProxyFrame(frame)
+            return
+        }
+        if !phoneProxyResponseEndSent {
+            phoneProxyResponseEndSent = true
+            queuePhoneProxyFrame(
+                PhoneProxyProtocolV1.responseEnd(
+                    requestID: requestID,
+                    size: phoneProxyResponseData.count))
+            return
+        }
+        trace("phone_proxy_request_complete")
+        finishPhoneProxyResponse()
+    }
+
+    private func finishPhoneProxyResponse() {
+        phoneProxySession?.finishTasksAndInvalidate()
+        phoneProxySession = nil
+        phoneProxyTask = nil
+        phoneProxyRequestID = nil
+        phoneProxyResponseData.removeAll(keepingCapacity: false)
+        phoneProxyResponseOffset = 0
+        phoneProxyResponseEndSent = false
+        phoneProxyErrorOnly = false
+        phoneProxyPendingFrame = nil
+        phoneProxyWaitingForWriteResponse = false
+        endPhoneProxyBackgroundTask()
     }
 
     private func allocateMemoryRequestID() -> UInt32 {
@@ -895,30 +1377,87 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func scheduleReconnect() {
-        guard reconnectWork == nil,
-              reconnectScanTimeoutWork == nil,
-              pendingPacket == nil,
-              let selected,
-              let delay = BLEProvisionerPolicy.reconnectDelay(
+        if reconnectWork != nil {
+            trace("reconnect_skip_work")
+            return
+        }
+        if reconnectScanTimeoutWork != nil {
+            trace("reconnect_skip_scan")
+            return
+        }
+        if reconnectCooldownWork != nil {
+            trace("reconnect_skip_cooldown")
+            return
+        }
+        if pendingPacket != nil {
+            trace("reconnect_skip_transfer")
+            return
+        }
+        guard let selected else {
+            trace("reconnect_skip_selection")
+            return
+        }
+        guard let delay = BLEProvisionerPolicy.reconnectDelay(
                 attempt: reconnectAttempt) else {
-            if selectedID != nil, reconnectAttempt >=
-                BLEProvisionerPolicy.reconnectDelays.count {
-                phase = .failed("The ChatESP device did not reconnect.")
-            }
+            phase = .unavailable
+            scheduleReconnectCooldown()
             return
         }
         reconnectAttempt += 1
+        trace(
+            "reconnect_scheduled_\(reconnectAttempt)_state_" +
+            "\(selected.state.rawValue)")
         let work = DispatchWorkItem { [weak self, weak selected] in
             guard let self else { return }
             self.reconnectWork = nil
             guard let selected,
                   self.isSelected(selected),
-                  self.central.state == .poweredOn,
-                  selected.state == .disconnected else { return }
-            self.startReconnectScan()
+                  self.central.state == .poweredOn else { return }
+            self.trace("reconnect_run_state_\(selected.state.rawValue)")
+            switch BLEProvisionerPolicy.reconnectStateAction(selected.state) {
+            case .scan:
+                self.reconnectWaitCount = 0
+                self.startReconnectScan()
+            case .prepare:
+                self.reconnectWaitCount = 0
+                self.connectSelected()
+            case .wait:
+                if selected.state == .connecting {
+                    self.cancelConnection(
+                        selected, reason: "reconnect_waiting_for_cancel")
+                }
+                self.reconnectWaitCount += 1
+                if BLEProvisionerPolicy.mustResetCentralAfterReconnectWait(
+                    state: selected.state,
+                    waitCount: self.reconnectWaitCount
+                ) {
+                    self.resetCentralForReconnect()
+                } else {
+                    self.scheduleReconnect()
+                }
+            }
         }
         reconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func scheduleReconnectCooldown() {
+        guard reconnectCooldownWork == nil,
+              pendingPacket == nil,
+              selectedID != nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reconnectCooldownWork = nil
+            guard self.selected != nil,
+                  !self.isDeviceConnected,
+                  self.central.state == .poweredOn else { return }
+            self.reconnectAttempt = 0
+            self.scheduleReconnect()
+        }
+        reconnectCooldownWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + BLEProvisionerPolicy.reconnectCycleCooldown,
+            execute: work)
     }
 
     private func connectSelected() {
@@ -928,6 +1467,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
         phase = .connecting
         selected.delegate = self
+        trace("connect_state_\(selected.state.rawValue)")
         switch selected.state {
         case .connected:
             lastDeviceContextSentAtUptime = nil
@@ -945,16 +1485,53 @@ final class BLEProvisioner: NSObject, ObservableObject {
         }
     }
 
+    private func resetCentralForReconnect() {
+        guard desiredSelectedID != nil else { return }
+        trace("central_reset_stuck_disconnect")
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        reconnectScanTimeoutWork?.cancel()
+        reconnectScanTimeoutWork = nil
+        reconnectCooldownWork?.cancel()
+        reconnectCooldownWork = nil
+        connectionTimeoutWork?.cancel()
+        connectionTimeoutWork = nil
+        central.stopScan()
+        central.delegate = nil
+        selected?.delegate = nil
+        selected = nil
+        restoredPeripherals = [:]
+        discovered = [:]
+        discoveredDevices = []
+        isDeviceConnected = false
+        serviceDiscoveryInProgress = false
+        clearMemoryConnectionState()
+        clearCharacteristics()
+        resetDeviceContextTransfer()
+        reconnectAttempt = 0
+        reconnectWaitCount = 0
+        scanWhenReady = true
+        phase = .connecting
+        central = CBCentralManager(
+            delegate: self,
+            queue: .main,
+            options: [
+                CBCentralManagerOptionRestoreIdentifierKey:
+                    "com.chatesp.provisioning.central"
+            ])
+    }
+
     private func startConnectionTimeout(for peripheral: CBPeripheral) {
         connectionTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self, weak peripheral] in
             guard let self, let peripheral, self.isSelected(peripheral),
                   peripheral.state != .connected else { return }
             self.connectionTimeoutWork = nil
-            self.central.cancelPeripheralConnection(peripheral)
+            self.cancelConnection(peripheral, reason: "connection_timeout")
             if self.pendingPacket != nil {
                 self.finish(.failure(ProvisioningError.timeout), sendContext: false)
             } else {
+                self.phase = .unavailable
                 self.scheduleReconnect()
             }
         }
@@ -971,7 +1548,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
             scheduleReconnect()
             return
         }
-        phase = .connecting
+        phase = .unavailable
         central.scanForPeripherals(
             withServices: [Self.service],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
@@ -1050,7 +1627,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 frameIndex: self.frameIndex,
                 frameCount: self.frames.count) == .failConnection {
                 if let selected = self.selected {
-                    self.central.cancelPeripheralConnection(selected)
+                    self.cancelConnection(selected, reason: "transfer_timeout")
                 }
                 self.finish(
                     .failure(ProvisioningError.timeout),
@@ -1094,6 +1671,11 @@ final class BLEProvisioner: NSObject, ObservableObject {
         let callback = completion
         completion = nil
         callback?(result)
+        if memoryAvailable, memoryRefreshNeeded,
+           pendingMemoryCommand == nil {
+            memoryRefreshNeeded = false
+            refreshMemories()
+        }
         if shouldSendContext {
             sendDeviceContext()
         }
@@ -1107,13 +1689,31 @@ final class BLEProvisioner: NSObject, ObservableObject {
 extension BLEProvisioner: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
+            guard central === self.central else { return }
+            self.trace("central_state_\(central.state.rawValue)")
             if central.state == .poweredOn, self.scanWhenReady {
+                self.trace("central_resume_pending_selection")
                 if let identifier = self.desiredSelectedID,
                    let peripheral = self.restoredPeripherals[identifier] ??
                     self.central.retrievePeripherals(
                         withIdentifiers: [identifier]).first {
                     self.select(peripheral, notifySelectionChange: false)
                 } else {
+                    self.trace("central_resume_scan")
+                    self.startScan()
+                }
+                return
+            }
+            if central.state == .poweredOn,
+               self.selected == nil,
+               let identifier = self.desiredSelectedID {
+                self.trace("central_restore_saved_selection")
+                if let peripheral = self.restoredPeripherals[identifier] ??
+                    self.central.retrievePeripherals(
+                        withIdentifiers: [identifier]).first {
+                    self.select(peripheral, notifySelectionChange: false)
+                } else {
+                    self.trace("central_restore_scan")
                     self.startScan()
                 }
                 return
@@ -1124,7 +1724,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
                self.pendingPacket == nil {
                 self.scheduleReconnect()
             }
-            if central.state != .poweredOn, self.phase == .scanning {
+            if BLEProvisionerPolicy.bluetoothIsUnavailable(central.state) {
                 self.scanWhenReady = false
                 self.phase = .failed(ProvisioningError.bluetoothUnavailable.localizedDescription)
             }
@@ -1135,7 +1735,10 @@ extension BLEProvisioner: CBCentralManagerDelegate {
                 self.reconnectWork = nil
                 self.reconnectScanTimeoutWork?.cancel()
                 self.reconnectScanTimeoutWork = nil
+                self.reconnectCooldownWork?.cancel()
+                self.reconnectCooldownWork = nil
                 self.isDeviceConnected = false
+                self.serviceDiscoveryInProgress = false
                 self.clearMemoryConnectionState()
                 self.resetDeviceContextTransfer()
                 if self.pendingPacket != nil || self.completion != nil {
@@ -1154,6 +1757,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey]
             as? [CBPeripheral] ?? []
         Task { @MainActor in
+            guard central === self.central else { return }
             for peripheral in peripherals {
                 peripheral.delegate = self
                 self.restoredPeripherals[peripheral.identifier] = peripheral
@@ -1174,6 +1778,7 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         rssi RSSI: NSNumber
     ) {
         Task { @MainActor in
+            guard central === self.central else { return }
             guard central.isScanning else { return }
             self.discovered[peripheral.identifier] = peripheral
             self.discoveredDevices = self.discovered.values
@@ -1208,19 +1813,23 @@ extension BLEProvisioner: CBCentralManagerDelegate {
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
+            guard central === self.central else { return }
             guard self.isSelected(peripheral) else {
                 if self.restoredPeripherals[peripheral.identifier] !== peripheral {
-                    central.cancelPeripheralConnection(peripheral)
+                    self.cancelConnection(
+                        peripheral, reason: "unexpected_connection")
                 }
                 return
             }
+            self.trace("link_connected")
             self.reconnectWork?.cancel()
             self.reconnectWork = nil
             self.reconnectScanTimeoutWork?.cancel()
             self.reconnectScanTimeoutWork = nil
+            self.reconnectCooldownWork?.cancel()
+            self.reconnectCooldownWork = nil
             self.connectionTimeoutWork?.cancel()
             self.connectionTimeoutWork = nil
-            self.reconnectAttempt = 0
             self.lastDeviceContextSentAtUptime = nil
             self.isDeviceConnected = true
             self.prepareCharacteristics(on: peripheral)
@@ -1233,15 +1842,18 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard central === self.central else { return }
             guard self.isSelected(peripheral) else { return }
+            self.trace("link_connect_failed", error: error)
             self.connectionTimeoutWork?.cancel()
             self.connectionTimeoutWork = nil
             self.isDeviceConnected = false
+            self.serviceDiscoveryInProgress = false
             self.clearMemoryConnectionState()
             if self.pendingPacket != nil {
                 self.finish(.failure(error ?? ProvisioningError.disconnected))
             } else {
-                self.phase = .idle
+                self.phase = .unavailable
                 self.scheduleReconnect()
             }
         }
@@ -1253,15 +1865,18 @@ extension BLEProvisioner: CBCentralManagerDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            guard central === self.central else { return }
             guard self.isSelected(peripheral) else { return }
+            self.trace("link_disconnected", error: error)
             self.connectionTimeoutWork?.cancel()
             self.connectionTimeoutWork = nil
             self.isDeviceConnected = false
+            self.serviceDiscoveryInProgress = false
             self.clearMemoryConnectionState()
             if self.pendingPacket != nil {
                 self.finish(.failure(error ?? ProvisioningError.disconnected))
             } else if self.selectedID == peripheral.identifier {
-                self.phase = .idle
+                self.phase = .unavailable
                 self.pendingDeviceContext = nil
                 self.deviceContextTimeoutWork?.cancel()
                 self.cancelFreshLocationWait()
@@ -1277,12 +1892,29 @@ extension BLEProvisioner: CBPeripheralDelegate {
         Task { @MainActor in
             guard self.isActive(peripheral) else { return }
             if let error {
+                self.connectionTimeoutWork?.cancel()
+                self.connectionTimeoutWork = nil
+                self.serviceDiscoveryInProgress = false
+                self.trace("service_discovery_failed", error: error)
                 self.finish(.failure(error))
                 return
             }
             guard let service = peripheral.services?.first(where: { $0.uuid == Self.service }) else {
+                self.connectionTimeoutWork?.cancel()
+                self.connectionTimeoutWork = nil
+                self.serviceDiscoveryInProgress = false
+                self.trace("service_missing")
                 self.finish(.failure(ProvisioningError.missingService))
                 return
+            }
+            self.trace("service_discovery_complete")
+            if let proxyService = peripheral.services?.first(
+                where: { $0.uuid == Self.httpProxyService }) {
+                peripheral.discoverCharacteristics(
+                    [Self.httpProxyRequest, Self.httpProxyResponse],
+                    for: proxyService)
+            } else {
+                self.trace("phone_proxy_unavailable")
             }
             peripheral.discoverCharacteristics(
                 [Self.control, Self.data, Self.acknowledgement, Self.deviceContext,
@@ -1300,7 +1932,33 @@ extension BLEProvisioner: CBPeripheralDelegate {
             guard self.isActive(peripheral), service.peripheral === peripheral else {
                 return
             }
+            if service.uuid == Self.httpProxyService {
+                if let error {
+                    self.trace("phone_proxy_discovery_failed", error: error)
+                    return
+                }
+                self.httpProxyRequestCharacteristic =
+                    service.characteristics?.first {
+                        $0.uuid == Self.httpProxyRequest
+                    }
+                self.httpProxyResponseCharacteristic =
+                    service.characteristics?.first {
+                        $0.uuid == Self.httpProxyResponse
+                    }
+                if let proxyRequest = self.httpProxyRequestCharacteristic,
+                   self.httpProxyResponseCharacteristic != nil {
+                    self.trace("phone_proxy_notify_request")
+                    peripheral.setNotifyValue(true, for: proxyRequest)
+                } else {
+                    self.trace("phone_proxy_unavailable")
+                }
+                return
+            }
+            self.connectionTimeoutWork?.cancel()
+            self.connectionTimeoutWork = nil
+            self.serviceDiscoveryInProgress = false
             if let error {
+                self.trace("characteristic_discovery_failed", error: error)
                 self.finish(.failure(error))
                 return
             }
@@ -1318,8 +1976,17 @@ extension BLEProvisioner: CBPeripheralDelegate {
             self.memoryResponseCharacteristic = service.characteristics?.first {
                 $0.uuid == Self.memoryResponse
             }
+            let requiredReady = self.controlCharacteristic != nil &&
+                self.dataCharacteristic != nil &&
+                self.acknowledgementCharacteristic != nil &&
+                self.deviceContextCharacteristic != nil
+            let memoryReady = self.memoryCommandCharacteristic != nil &&
+                self.memoryResponseCharacteristic != nil
+            self.trace(
+                "characteristics_required_\(requiredReady ? 1 : 0)_memory_\(memoryReady ? 1 : 0)")
             if let response = self.memoryResponseCharacteristic,
                self.memoryCommandCharacteristic != nil {
+                self.trace("memory_notify_request")
                 peripheral.setNotifyValue(true, for: response)
             } else {
                 self.memoryAvailable = false
@@ -1331,6 +1998,33 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 self.beginAttempt()
             } else {
                 self.prepareDeviceContextSync()
+            }
+            if self.serviceRediscoveryNeeded {
+                self.serviceRediscoveryNeeded = false
+                DispatchQueue.main.async { [weak self, weak peripheral] in
+                    guard let self, let peripheral,
+                          self.isActive(peripheral) else { return }
+                    self.prepareCharacteristics(on: peripheral)
+                }
+            }
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didModifyServices invalidatedServices: [CBService]
+    ) {
+        Task { @MainActor in
+            guard self.isActive(peripheral),
+                  invalidatedServices.contains(where: {
+                    $0.uuid == Self.service ||
+                        $0.uuid == Self.httpProxyService
+                  }) else { return }
+            self.trace("service_change_received")
+            if self.serviceDiscoveryInProgress {
+                self.serviceRediscoveryNeeded = true
+            } else {
+                self.prepareCharacteristics(on: peripheral)
             }
         }
     }
@@ -1347,18 +2041,37 @@ extension BLEProvisioner: CBPeripheralDelegate {
             }
             if characteristic.uuid == Self.memoryResponse {
                 if let error {
+                    self.trace("memory_notify_failed", error: error)
                     self.memoryAvailable = false
                     self.memories = []
                     self.memoryMessage = self.memoryErrorText(error)
                 } else if characteristic.isNotifying,
                           self.memoryCommandCharacteristic != nil {
+                    self.trace("memory_notify_ready")
                     self.memoryAvailable = true
-                    self.memoryMessage = "Loading memories."
-                    self.refreshMemories()
+                    if BLEProvisionerPolicy.shouldRefreshMemories(
+                        isProvisioning: self.isProvisioning
+                    ) {
+                        self.memoryMessage = "Loading memories."
+                        self.refreshMemories()
+                    } else {
+                        self.memoryRefreshNeeded = true
+                    }
+                }
+                return
+            }
+            if characteristic.uuid == Self.httpProxyRequest {
+                if let error {
+                    self.trace("phone_proxy_notify_failed", error: error)
+                    self.clearPhoneProxyConnectionState()
+                } else if characteristic.isNotifying,
+                          self.httpProxyResponseCharacteristic != nil {
+                    self.trace("phone_proxy_ready")
                 }
                 return
             }
             if let error {
+                self.trace("ack_notify_failed", error: error)
                 if self.pendingPacket != nil {
                     self.retryOrFinish(error)
                 } else {
@@ -1374,6 +2087,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 return
             }
             guard characteristic.isNotifying else {
+                self.trace("ack_notify_disabled")
                 if self.pendingPacket != nil {
                     self.retryOrFinish(ProvisioningError.writeFailed)
                 } else {
@@ -1385,6 +2099,12 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 }
                 return
             }
+            self.trace("ack_notify_ready")
+            self.reconnectAttempt = BLEProvisionerPolicy.reconnectAttempt(
+                self.reconnectAttempt, secureNotificationsReady: true)
+            self.reconnectWaitCount = 0
+            self.reconnectCooldownWork?.cancel()
+            self.reconnectCooldownWork = nil
             self.timeoutWork?.cancel()
             self.timeoutWork = nil
             if self.pendingPacket != nil {
@@ -1405,6 +2125,18 @@ extension BLEProvisioner: CBPeripheralDelegate {
                   characteristic.service?.peripheral === peripheral else {
                 return
             }
+            if characteristic.uuid == Self.httpProxyResponse {
+                guard self.phoneProxyWaitingForWriteResponse else { return }
+                self.phoneProxyWaitingForWriteResponse = false
+                self.phoneProxyPendingFrame = nil
+                if let error {
+                    self.trace("phone_proxy_response_write_failed", error: error)
+                    self.finishPhoneProxyResponse()
+                } else {
+                    self.sendNextPhoneProxyResponseFrame()
+                }
+                return
+            }
             if characteristic.uuid == Self.memoryCommand {
                 if let error {
                     self.retryMemoryCommand(error)
@@ -1419,6 +2151,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 self.timeoutWork = nil
             }
             if let error {
+                self.trace("write_failed", error: error)
                 if characteristic.uuid == Self.deviceContext {
                     self.deviceContextTimeoutWork?.cancel()
                     self.pendingDeviceContext = nil
@@ -1441,14 +2174,36 @@ extension BLEProvisioner: CBPeripheralDelegate {
         }
     }
 
+    nonisolated func peripheralIsReady(
+        toSendWriteWithoutResponse peripheral: CBPeripheral
+    ) {
+        Task { @MainActor in
+            guard self.isActive(peripheral) else { return }
+            self.drainPhoneProxyFrame()
+        }
+    }
+
     nonisolated func peripheral(
         _ peripheral: CBPeripheral,
         didUpdateValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        Task { @MainActor in
+        // The central manager dispatches peripheral events on its configured
+        // main queue. Process each value before Core Bluetooth replaces the
+        // characteristic property with the next notification.
+        MainActor.assumeIsolated {
             guard self.isActive(peripheral),
                   characteristic.service?.peripheral === peripheral else {
+                return
+            }
+            if characteristic.uuid == Self.httpProxyRequest {
+                if let error {
+                    self.trace("phone_proxy_receive_failed", error: error)
+                    self.clearPhoneProxyConnectionState()
+                    return
+                }
+                guard let data = characteristic.value else { return }
+                self.handlePhoneProxyRequestFrame(data)
                 return
             }
             if characteristic.uuid == Self.memoryResponse {
@@ -1520,6 +2275,7 @@ extension BLEProvisioner: CBPeripheralDelegate {
                     self.lastDeviceContextSentAtUptime = nil
                     return
                 }
+                self.trace("device_context_acknowledged")
                 return
             }
             guard let packet = self.pendingPacket else { return }
@@ -1536,8 +2292,10 @@ extension BLEProvisioner: CBPeripheralDelegate {
                       acknowledgement.fingerprint == packet.fingerprint else {
                     throw ProvisioningError.acknowledgementMismatch
                 }
+                self.trace("settings_acknowledged")
                 self.finish(.success(acknowledgement))
             } catch {
+                self.trace("settings_ack_failed", error: error)
                 self.finish(.failure(error))
             }
         }

@@ -39,7 +39,8 @@ ChatESP.*
   to ten short facts.
 - **Optional iOS setup:** Provision any number of devices over authenticated,
   encrypted BLE. The app keeps provider secrets in Keychain and automatically
-  sends each valid configuration after a connection or settings change.
+  sends each valid configuration after a connection or settings change. While
+  the secure link is active, the app also supplies the device network path.
 - **Clear model choices:** Search compatible chat, transcription, and speech
   models with their prices. Select English and French voices from the speech
   model's published voice list.
@@ -84,9 +85,9 @@ buttons.
 | Power | AXP2101 PMU, USB-C, and 3.7 V battery connector |
 | Storage | MicroSD slot |
 
-You also need a USB-C cable, 2.4 GHz Wi-Fi, and an OpenRouter key. Add a Brave
-Search key for web and image search. The iOS companion and a battery are
-optional.
+You also need a USB-C cable and an OpenRouter key. Cloud requests can use the
+iOS companion through BLE or a configured 2.4 GHz Wi-Fi network. Add a Brave
+Search key for web and image search. A battery is optional.
 
 See the
 [official board documentation](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.8)
@@ -108,10 +109,11 @@ ChatESP keeps the privacy rules small and explicit:
 - ChatESP does not enable secure boot, flash encryption, or encrypted NVS,
   because these features can cause an irreversible eFuse write.
 
-Production settings, BLE bonds, and saved memories use plaintext NVS. A person
-with physical access to the flash can read them. Do not store secrets as
-memories. See [the architecture](docs/architecture.md#secret-lifecycle) for the
-complete data lifecycle.
+Production settings and all BLE bonds use plaintext NVS. Saved memories also
+use plaintext NVS. A person with physical access to the flash can read them.
+Do not store secrets as memories. See
+[the architecture](docs/architecture.md#secret-lifecycle) for the complete data
+lifecycle.
 
 ## Project status
 
@@ -121,6 +123,9 @@ physical checks:
 - black-screen start without a white frame;
 - bottom-button hold-to-talk;
 - streamed answer text and clear streamed speech;
+- secure iPhone BLE provisioning and bond restoration;
+- five cloud requests in one voice turn through the iPhone BLE proxy;
+- Wi-Fi cloud fallback after the phone proxy is unavailable;
 - button preemption;
 - strongest-access-point selection; and
 - Wi-Fi modem power saving.
@@ -131,15 +136,14 @@ image search, restricted MicroPython, user-controlled memory, BLE
 provisioning, device controls, travel Clock, and sleep paths.
 
 The app can store an empty Wi-Fi or OpenRouter value. Local Clock and device
-controls remain available. Cloud features report the missing value until the
-user configures it.
+controls remain available. Cloud features need an OpenRouter key. They need
+either the secure phone proxy or stored Wi-Fi credentials.
 
 The following physical acceptance gates are still open: full-screen image
 color and crop, Clock rotation and rounded-corner rendering, top-button mode
-switching, physical iPhone provisioning, Clock current, production system-off,
-memory persistence and compaction, secure BLE memory management, MicroPython
-limits and plot display, and long-cycle tests. Do not treat a successful build
-as proof that these hardware gates passed.
+switching, Clock current, production system-off, memory persistence and
+compaction, MicroPython limits and plot display, and long-cycle tests. Do not
+treat a successful build as proof that these hardware gates passed.
 
 ## Cloud defaults
 
@@ -213,8 +217,8 @@ Use production mode only for final power tests and release images:
 uv run --locked python tools/pio.py run -e watch_prod
 ```
 
-Production enables persistent settings, persistent BLE bonds, and AXP2101
-system-off. Every device profile sets
+Both profiles keep BLE bonds. Production also enables persistent settings and
+AXP2101 system-off. Every device profile sets
 `CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. The build stops if this lock is
 missing or changed.
 

@@ -20,6 +20,7 @@ struct InteractionConfig {
     std::uint32_t talk_hold_ms = 350;
     std::uint32_t idle_sleep_ms = 30'000;
     std::uint32_t error_visible_ms = 2'200;
+    std::uint32_t sleep_press_min_ms = 80;
 };
 
 class InteractionStateMachine {
@@ -29,7 +30,8 @@ public:
     void ready(std::uint32_t now_ms);
     void button_down(std::uint32_t now_ms);
     void wake_button_down(std::uint32_t now_ms);
-    void button_up(std::uint32_t now_ms);
+    void button_up(
+        std::uint32_t now_ms, bool short_press_confirmed = true);
     void tick(std::uint32_t now_ms);
     void transcription_ready(std::uint32_t now_ms);
     void tool_started(std::uint32_t now_ms);

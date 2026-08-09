@@ -4,6 +4,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "chatesp/button_debouncer.hpp"
+#include "crash_diagnostics.hpp"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_io_expander.h"
@@ -25,8 +26,12 @@ constexpr std::uint8_t kAxp2101SoftwareOff = 1U << 0;
 constexpr std::uint8_t kAxp2101PowerKeyShutdown = 1U << 2;
 constexpr std::uint8_t kAxp2101PowerKeyPositiveEdge = 1U << 0;
 constexpr std::uint8_t kAxp2101PowerKeyNegativeEdge = 1U << 1;
+constexpr std::uint8_t kAxp2101PowerKeyLongPress = 1U << 2;
+constexpr std::uint8_t kAxp2101PowerKeyShortPress = 1U << 3;
 constexpr std::uint8_t kAxp2101PowerKeyEdgeMask =
     kAxp2101PowerKeyPositiveEdge | kAxp2101PowerKeyNegativeEdge;
+constexpr std::uint8_t kAxp2101PowerKeyPressMask =
+    kAxp2101PowerKeyShortPress | kAxp2101PowerKeyLongPress;
 constexpr std::uint8_t kAxp2101VbusRemoveEvent = 1U << 6;
 constexpr std::uint8_t kAxp2101VbusInsertEvent = 1U << 7;
 constexpr std::uint8_t kAxp2101PowerSourceEventMask =
@@ -103,7 +108,8 @@ esp_err_t prepare_power_key_events(
     if (error != ESP_OK) {
         return error;
     }
-    enabled |= kAxp2101PowerKeyEdgeMask | kAxp2101PowerSourceEventMask;
+    enabled |= kAxp2101PowerKeyEdgeMask | kAxp2101PowerKeyPressMask |
+        kAxp2101PowerSourceEventMask;
     error = write_axp2101(kAxp2101IrqEnable2, enabled);
     if (error != ESP_OK) {
         return error;
@@ -121,7 +127,8 @@ esp_err_t prepare_power_key_events(
     // IRQ status bits are write-one-to-clear. Clear only observed events so an
     // event that arrives after the read stays available to the first poll.
     const std::uint8_t observed = status &
-        (kAxp2101PowerKeyEdgeMask | kAxp2101PowerSourceEventMask);
+        (kAxp2101PowerKeyEdgeMask | kAxp2101PowerKeyPressMask |
+         kAxp2101PowerSourceEventMask);
     return observed == 0
         ? ESP_OK
         : write_axp2101(kAxp2101IrqStatus2, observed);
@@ -130,10 +137,13 @@ esp_err_t prepare_power_key_events(
 esp_err_t read_power_key_events(
     bool *pressed_event,
     bool *released_event,
-    bool *power_source_event) {
+    bool *power_source_event,
+    bool *short_press_event,
+    bool *long_press_event) {
     ESP_RETURN_ON_FALSE(
         pressed_event != nullptr && released_event != nullptr &&
-            power_source_event != nullptr,
+            power_source_event != nullptr && short_press_event != nullptr &&
+            long_press_event != nullptr,
         ESP_ERR_INVALID_ARG,
         kTag,
         "No PWR event output");
@@ -143,7 +153,8 @@ esp_err_t read_power_key_events(
         return error;
     }
     const std::uint8_t observed = status &
-        (kAxp2101PowerKeyEdgeMask | kAxp2101PowerSourceEventMask);
+        (kAxp2101PowerKeyEdgeMask | kAxp2101PowerKeyPressMask |
+         kAxp2101PowerSourceEventMask);
     if (observed != 0) {
         error = write_axp2101(kAxp2101IrqStatus2, observed);
         if (error != ESP_OK) {
@@ -158,6 +169,10 @@ esp_err_t read_power_key_events(
         (status & kAxp2101PowerKeyPositiveEdge) != 0;
     *power_source_event =
         (status & kAxp2101PowerSourceEventMask) != 0;
+    *short_press_event =
+        (status & kAxp2101PowerKeyShortPress) != 0;
+    *long_press_event =
+        (status & kAxp2101PowerKeyLongPress) != 0;
     return ESP_OK;
 }
 
@@ -247,17 +262,42 @@ esp_err_t poll(std::uint32_t now_ms, ButtonEdges *edges) {
     bool pressed_event = false;
     bool released_event = false;
     bool power_source_event = false;
+    bool short_press_event = false;
+    bool long_press_event = false;
     ESP_RETURN_ON_ERROR(
         read_power_key_events(
-            &pressed_event, &released_event, &power_source_event),
+            &pressed_event, &released_event, &power_source_event,
+            &short_press_event, &long_press_event),
         kTag,
         "PWR event read failed");
+    if (pressed_event) {
+        crash_diagnostics::mark(runtime::CrashEvent::pwr_raw_press);
+    }
+    if (released_event) {
+        crash_diagnostics::mark(runtime::CrashEvent::pwr_raw_release);
+    }
+    if (short_press_event) {
+        crash_diagnostics::mark(runtime::CrashEvent::pwr_raw_short_press);
+    }
+    if (long_press_event) {
+        crash_diagnostics::mark(runtime::CrashEvent::pwr_raw_long_press);
+    }
+    if (power_source_event) {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::pwr_power_source_change);
+    }
     *edges = action_button.update(
-        pressed_event, released_event, power_source_event, now_ms);
+        pressed_event, released_event, power_source_event,
+        short_press_event, now_ms);
     if (edges->pressed) {
         action_button_stably_pressed = true;
+        crash_diagnostics::mark(runtime::CrashEvent::pwr_press_accepted);
     } else if (edges->released) {
         action_button_stably_pressed = false;
+        crash_diagnostics::mark(
+            edges->short_press_confirmed
+                ? runtime::CrashEvent::pwr_release_accepted
+                : runtime::CrashEvent::pwr_release_unconfirmed);
     }
 
     // Return a new edge without doing PMU I2C work. The next poll applies the

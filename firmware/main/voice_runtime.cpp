@@ -35,6 +35,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -76,6 +77,10 @@ constexpr std::uint32_t kClockTimeSyncLimitMs = 15'000;
 constexpr std::uint32_t kModeDisplayRetryMs = 100;
 constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
 constexpr std::uint32_t kBleStopTimeoutMs = 1'000;
+constexpr std::uint32_t kPhoneProxyConnectGraceMs = 2'000;
+constexpr std::size_t kBleControllerMinimumLargestBlockBytes = 30 * 1024;
+constexpr std::size_t kBleControllerMinimumFreeInternalBytes = 48 * 1024;
+constexpr std::uint32_t kBleMemoryLogIntervalMs = 5'000;
 constexpr std::size_t kMinimumRecordingSamples =
     AudioCapture::kSampleRateHz / 10;
 static_assert(
@@ -204,8 +209,10 @@ private:
 
 class NetworkRequestGuard {
 public:
-    explicit NetworkRequestGuard(network::NetworkManager &network)
-        : network_(network), active_(network_.set_request_active(true) == ESP_OK) {}
+    explicit NetworkRequestGuard(
+        network::NetworkManager &network, bool enabled = true)
+        : network_(network),
+          active_(enabled && network_.set_request_active(true) == ESP_OK) {}
 
     ~NetworkRequestGuard() {
         if (active_) {
@@ -379,6 +386,7 @@ enum class CommandKind : std::uint8_t {
 struct Command {
     CommandKind kind = CommandKind::button_down;
     std::uint32_t at_ms = 0;
+    bool short_press_confirmed = false;
 };
 
 struct PasskeyEvent {
@@ -480,6 +488,7 @@ public:
         if (ble_started_) {
             (void)ble_provisioning::stop(kBleStopTimeoutMs);
         }
+        release_ble_restart_memory();
         if (agent_loop_ != nullptr) {
             agent_loop_->clear_thread();
             agent_loop_->~AgentLoop();
@@ -616,7 +625,9 @@ public:
         return ESP_OK;
     }
 
-    void action_button_edge(bool pressed, std::uint32_t at_ms) {
+    void action_button_edge(
+        bool pressed, std::uint32_t at_ms,
+        bool short_press_confirmed) {
         if (command_queue_ == nullptr) {
             return;
         }
@@ -641,6 +652,7 @@ public:
                        : CommandKind::button_down)
                 : CommandKind::button_up,
             at_ms,
+            short_press_confirmed,
         };
         queue_command(command);
     }
@@ -868,11 +880,22 @@ private:
     }
 
     void start_network_during_recording() {
-        if (!settings_.has_wifi_credentials() || network_initialized_ ||
+        if (ble_provisioning::http_proxy_available() ||
+            !settings_.has_wifi_credentials() || network_initialized_ ||
             network_warm_task_ != nullptr || speech_events_ == nullptr) {
             return;
         }
+        if (ble_provisioning::running() &&
+            monotonic_ms() - recording_started_at_ms_ <
+                kPhoneProxyConnectGraceMs) {
+            return;
+        }
         if (network_.connected() || network_.connecting()) {
+            return;
+        }
+        // Protect the controller restart block before the recording-time
+        // worker can initialize Wi-Fi.
+        if (!stop_ble_for_request()) {
             return;
         }
         xEventGroupClearBits(speech_events_, kNetworkWarmDoneBit);
@@ -963,6 +986,7 @@ private:
     void start_network_context_lookup() {
         if (network_context_task_ != nullptr ||
             context_lookup_attempted_ || !network_.connected() ||
+            ble_started_ || ble_provisioning::running() ||
             !live_approximate_location_.view().empty() ||
             voice_priority_.load(std::memory_order_acquire) ||
             speech_events_ == nullptr) {
@@ -976,14 +1000,11 @@ private:
             agent::Error::model_failed, std::memory_order_release);
         xEventGroupClearBits(speech_events_, kNetworkContextDoneBit);
 
-        // TLS needs the controller memory. A phone can reconnect after this
-        // one short, optional lookup.
-        if (!stop_ble()) {
-            ESP_LOGW(
-                kTag,
-                "Optional IP context skipped because Bluetooth stayed active");
-            return;
-        }
+        // Do not stop an active BLE host for this optional TLS request. A
+        // phone can be connecting or restoring notifications even when the
+        // firmware has not received a GATT event yet. Run the lookup only
+        // during another operation that already owns the network and has
+        // stopped BLE.
         crash_diagnostics::mark(runtime::CrashEvent::network_context_begin);
         // This optional HTTPS worker does not use DMA from its stack. Keep its
         // fixed stack in PSRAM so Wi-Fi, I2S, and task control data keep enough
@@ -1289,7 +1310,9 @@ private:
             // Clock can become active before the asynchronous startup
             // connection has supplied UTC and a timezone. Keep that bounded
             // acquisition alive, then stop Wi-Fi from the runtime loop.
-            start_network_early(true);
+            if (stop_ble_for_request()) {
+                start_network_early(true);
+            }
         } else {
             stop_clock_network();
         }
@@ -1302,7 +1325,7 @@ private:
         ESP_LOGI(kTag, "Clock mode is active");
     }
 
-    void enter_chat_mode(std::uint32_t now_ms, bool defer_network) {
+    void enter_chat_mode(std::uint32_t now_ms) {
         if (!display_available_.load(std::memory_order_acquire)) {
             return;
         }
@@ -1314,9 +1337,6 @@ private:
         (void)apply_mode_display(AppMode::chat, interaction_.state());
         footer_shown_ = false;
         refresh_footer(now_ms, true);
-        if (!defer_network) {
-            start_network_early(true);
-        }
         ESP_LOGI(kTag, "ChatESP mode is active");
     }
 
@@ -1522,7 +1542,9 @@ private:
         } else {
             show_state(previous_state_);
             refresh_footer(monotonic_ms(), true);
-            start_network_early(true);
+            // Allocate the BLE controller before Wi-Fi takes DMA-capable
+            // internal RAM. Secure pairing also needs this headroom.
+            ensure_ble_started();
         }
 
         std::uint32_t heartbeat_at_ms = monotonic_ms();
@@ -1627,11 +1649,6 @@ private:
                     ensure_ble_started();
                 }
                 refresh_settings();
-                if (!interaction_.button_is_down() &&
-                    app_mode_.load(std::memory_order_acquire) ==
-                        AppMode::chat) {
-                    start_network_early(false);
-                }
             }
         }
     }
@@ -1659,7 +1676,7 @@ private:
                 return;
             }
             if (app_mode_.load(std::memory_order_acquire) == AppMode::clock) {
-                enter_chat_mode(command.at_ms, false);
+                enter_chat_mode(command.at_ms);
             } else {
                 if (interaction_.state() != InteractionState::idle) {
                     cancel_current();
@@ -1674,7 +1691,7 @@ private:
             app_mode_.load(std::memory_order_acquire) == AppMode::clock) {
             // The bottom button always returns to ChatESP before its normal
             // short-press or hold-to-talk state handling continues.
-            enter_chat_mode(command.at_ms, true);
+            enter_chat_mode(command.at_ms);
         }
         if (command.kind == CommandKind::wake_button_down ||
             command.kind == CommandKind::wake_from_poweroff ||
@@ -1687,18 +1704,20 @@ private:
         if (command.kind == CommandKind::button_down) {
             ESP_LOGI(kTag, "Action button started a voice hold");
             interaction_.button_down(command.at_ms);
-            // Reassert only the panel command here. Full display work must not
-            // delay the button state machine or microphone capture.
-            const esp_err_t panel_error = ui::reassert_panel(
-                device_control_.brightness_percent());
-            if (panel_error != ESP_OK) {
-                display_wake_pending_ = true;
-                display_wake_attempted_at_ms_ = command.at_ms;
-            }
+            // A brightness command alone does not recover every CO5300 black
+            // panel state. Redraw the active view and reassert brightness on
+            // each deliberate voice hold. The display lock is bounded so
+            // microphone capture still starts promptly.
+            request_display_wake(command.at_ms);
         } else if (command.kind == CommandKind::button_up) {
             ESP_LOGI(kTag, "Action button was released");
             timing_.reset(command.at_ms);
-            interaction_.button_up(command.at_ms);
+            interaction_.button_up(
+                command.at_ms, command.short_press_confirmed);
+            if (interaction_.state() == InteractionState::sleep_pending) {
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::sleep_button_request);
+            }
             if (interaction_.state() == InteractionState::idle) {
                 voice_priority_.store(false, std::memory_order_release);
             }
@@ -1765,17 +1784,22 @@ private:
     }
 
     void request_display_wake(std::uint32_t now_ms) {
+        crash_diagnostics::mark(runtime::CrashEvent::display_wake_begin);
         const esp_err_t result = ui::wake(
             interaction_.state(), device_control_.brightness_percent(),
             app_mode_.load(std::memory_order_acquire));
         display_wake_pending_ = result != ESP_OK;
         display_wake_attempted_at_ms_ = now_ms;
         if (display_wake_pending_) {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::display_wake_failed);
             ESP_LOGW(
                 kTag,
                 "Display wake will retry (category %s)",
                 esp_err_to_name(result));
         } else {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::display_wake_complete);
             footer_shown_ = false;
             refresh_footer(now_ms, true);
         }
@@ -1849,6 +1873,7 @@ private:
         // Do not start radio work between microphone start and audio reads.
         // A held cold start connects after release. Normal awake sessions
         // already have an asynchronous connection.
+        recording_started_at_ms_ = now_ms;
         level_refreshed_at_ms_ = now_ms;
     }
 
@@ -1892,7 +1917,17 @@ private:
             fail("HOLD THE BUTTON A LITTLE LONGER");
             return;
         }
-        if (!settings_.has_wifi_credentials()) {
+        const std::uint32_t proxy_wait_started_ms = recording_started_at_ms_;
+        while (ble_provisioning::running() &&
+               !ble_provisioning::http_proxy_available() &&
+               !cancellation_.cancelled() &&
+               monotonic_ms() - proxy_wait_started_ms <
+                   kPhoneProxyConnectGraceMs) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        const bool use_phone_proxy =
+            ble_provisioning::http_proxy_available();
+        if (!use_phone_proxy && !settings_.has_wifi_credentials()) {
             capture_.discard();
             fail("WI-FI IS NOT CONFIGURED");
             return;
@@ -1907,40 +1942,48 @@ private:
 
         join_network_warm_worker();
         finish_network_context_worker(true);
-        if (!stop_ble_for_request()) {
-            capture_.discard();
-            fail("BLUETOOTH COULD NOT STOP");
-            return;
-        }
-
-        if (!network_initialized_) {
-            const esp_err_t network_result = network_.initialize();
-            if (network_result != ESP_OK) {
-                ESP_LOGE(
-                    kTag,
-                    "Wi-Fi initialize failed (category %s)",
-                    esp_err_to_name(network_result));
+        if (!use_phone_proxy) {
+            if (!stop_ble_for_request()) {
                 capture_.discard();
-                fail("WI-FI COULD NOT START");
+                fail("BLUETOOTH COULD NOT STOP");
                 return;
             }
-            network_initialized_ = true;
+            if (!network_initialized_) {
+                const esp_err_t network_result = network_.initialize();
+                if (network_result != ESP_OK) {
+                    ESP_LOGE(
+                        kTag,
+                        "Wi-Fi initialize failed (category %s)",
+                        esp_err_to_name(network_result));
+                    capture_.discard();
+                    fail("WI-FI COULD NOT START");
+                    return;
+                }
+                network_initialized_ = true;
+            }
         }
-        NetworkRequestGuard network_request(network_);
-        if (!network_.connected()) {
-            draw_footer(ui::WifiIndicator::connecting);
-        }
-        agent::Error error = network_.connect(
-            settings_.wifi(), request_cancellation);
-        refresh_footer(monotonic_ms(), true);
-        error = request_cancellation.normalize(error);
-        if (error != agent::Error::none) {
-            capture_.discard();
-            finish_with_error(error);
-            return;
+        NetworkRequestGuard network_request(network_, !use_phone_proxy);
+        agent::Error error = agent::Error::none;
+        if (!use_phone_proxy) {
+            if (!network_.connected()) {
+                draw_footer(ui::WifiIndicator::connecting);
+            }
+            error = network_.connect(
+                settings_.wifi(), request_cancellation);
+            refresh_footer(monotonic_ms(), true);
+            error = request_cancellation.normalize(error);
+            if (error != agent::Error::none) {
+                capture_.discard();
+                finish_with_error(error);
+                return;
+            }
+        } else {
+            ESP_LOGI(kTag, "Using the secure iPhone network proxy");
         }
         timing_.mark(runtime::TurnPhase::network_ready, monotonic_ms());
-        timing_.set_rssi_band(network_.rssi_band());
+        if (!use_phone_proxy) {
+            timing_.set_rssi_band(network_.rssi_band());
+        }
         show_state(InteractionState::transcribing);
 
         auto &transcript = request_scratch_->transcript;
@@ -2137,6 +2180,8 @@ private:
     }
 
     void finish_model_power_off() {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::sleep_model_request);
         image_transport_.cancel_active();
         join_image_worker();
         selected_image_result_.clear();
@@ -2246,10 +2291,6 @@ private:
         pending_plot_.clear();
         hide_visual();
         show_state(interaction_.state());
-        if (!interaction_.button_is_down() &&
-            app_mode_.load(std::memory_order_acquire) == AppMode::chat) {
-            start_network_early(true);
-        }
         crash_diagnostics::mark(runtime::CrashEvent::settings_apply_complete);
     }
 
@@ -2278,6 +2319,9 @@ private:
                 kTag,
                 "Display sleep failed (category %s)",
                 esp_err_to_name(display_sleep_result));
+        } else {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::display_sleep_complete);
         }
         display_sleep_pending_ = display_sleep_result != ESP_OK;
         display_sleep_attempted_at_ms_ = monotonic_ms();
@@ -2328,7 +2372,10 @@ private:
     }
 
     bool stop_ble_for_request() {
-        return stop_ble();
+        if (!stop_ble()) {
+            return false;
+        }
+        return reserve_ble_restart_memory();
     }
 
     void stop_clock_network() {
@@ -2341,6 +2388,7 @@ private:
         }
         reset_transports();
         early_connect_attempted_at_ms_ = 0;
+        ensure_ble_started();
     }
 
     bool stop_ble() {
@@ -2364,6 +2412,42 @@ private:
         if (ble_started_ && ble_provisioning::running()) {
             return true;
         }
+        // The ESP controller can assert instead of returning an allocation
+        // error when its 32 KiB internal block is unavailable. Release all
+        // completed TLS and Wi-Fi allocations before the controller starts,
+        // as at cold boot, and never call it without the required headroom.
+        if (network_initialized_) {
+            cancel_network_context_worker();
+            stop_network_time_sync();
+            cancel_transports();
+            network_.shutdown();
+            network_initialized_ = false;
+            reset_transports();
+            early_connect_attempted_at_ms_ = 0;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        release_ble_restart_memory();
+        const std::size_t free_internal = heap_caps_get_free_size(
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        const std::size_t largest_internal =
+            heap_caps_get_largest_free_block(
+                MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (free_internal < kBleControllerMinimumFreeInternalBytes ||
+            largest_internal < kBleControllerMinimumLargestBlockBytes) {
+            ble_start_attempted_ = false;
+            const std::uint32_t now_ms = monotonic_ms();
+            if (ble_memory_logged_at_ms_ == 0 ||
+                now_ms - ble_memory_logged_at_ms_ >=
+                kBleMemoryLogIntervalMs) {
+                ble_memory_logged_at_ms_ = now_ms;
+                ESP_LOGW(
+                    kTag,
+                    "BLE start delayed for memory: free=%u largest=%u",
+                    static_cast<unsigned>(free_internal),
+                    static_cast<unsigned>(largest_internal));
+            }
+            return false;
+        }
         ble_start_attempted_ = true;
         crash_diagnostics::mark(runtime::CrashEvent::ble_start_begin);
         const esp_err_t result = ble_provisioning::start(
@@ -2378,6 +2462,48 @@ private:
             ESP_LOGE(kTag, "BLE provisioning restart failed");
         }
         return ble_started_;
+    }
+
+    bool reserve_ble_restart_memory() {
+        if (ble_restart_reservation_ != nullptr) {
+            return true;
+        }
+        ble_restart_reservation_ = heap_caps_malloc(
+            kBleControllerMinimumLargestBlockBytes,
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (ble_restart_reservation_ == nullptr && network_initialized_) {
+            // The active Wi-Fi driver can split the block that BLE released.
+            // Recreate Wi-Fi after the reservation is in place.
+            cancel_network_context_worker();
+            stop_network_time_sync();
+            cancel_transports();
+            network_.shutdown();
+            network_initialized_ = false;
+            reset_transports();
+            early_connect_attempted_at_ms_ = 0;
+            vTaskDelay(pdMS_TO_TICKS(10));
+            ble_restart_reservation_ = heap_caps_malloc(
+                kBleControllerMinimumLargestBlockBytes,
+                MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+        if (ble_restart_reservation_ == nullptr) {
+            ESP_LOGE(kTag, "BLE restart memory could not be reserved");
+            crash_diagnostics::mark(
+                runtime::CrashEvent::ble_memory_recovery_restart);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            esp_restart();
+            return false;
+        }
+        ESP_LOGI(kTag, "BLE restart memory is reserved");
+        return true;
+    }
+
+    void release_ble_restart_memory() {
+        if (ble_restart_reservation_ == nullptr) {
+            return;
+        }
+        heap_caps_free(ble_restart_reservation_);
+        ble_restart_reservation_ = nullptr;
     }
 
     void recover_poweroff(std::uint32_t now_ms) {
@@ -2479,6 +2605,7 @@ private:
     std::atomic<bool> quick_controls_commit_pending_{false};
     runtime::PoweroffGate poweroff_gate_;
     std::uint32_t level_refreshed_at_ms_ = 0;
+    std::uint32_t recording_started_at_ms_ = 0;
     std::uint32_t settings_checked_at_ms_ = 0;
     std::uint32_t early_connect_attempted_at_ms_ = 0;
     std::uint32_t display_wake_attempted_at_ms_ = 0;
@@ -2492,7 +2619,9 @@ private:
     std::uint8_t clock_refreshed_second_ = 0xff;
     bool tools_ready_ = false;
     bool ble_started_ = false;
+    void *ble_restart_reservation_ = nullptr;
     bool ble_start_attempted_ = false;
+    std::uint32_t ble_memory_logged_at_ms_ = 0;
     bool network_initialized_ = false;
     bool context_lookup_attempted_ = false;
     bool sntp_started_ = false;
@@ -2544,9 +2673,12 @@ esp_err_t VoiceRuntime::start(
     return result;
 }
 
-void VoiceRuntime::action_button_edge(bool pressed, std::uint32_t at_ms) {
+void VoiceRuntime::action_button_edge(
+    bool pressed, std::uint32_t at_ms,
+    bool short_press_confirmed) {
     if (impl_ != nullptr) {
-        impl_->action_button_edge(pressed, at_ms);
+        impl_->action_button_edge(
+            pressed, at_ms, short_press_confirmed);
     }
 }
 

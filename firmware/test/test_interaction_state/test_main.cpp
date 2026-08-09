@@ -29,6 +29,28 @@ void test_short_press_requests_sleep() {
         static_cast<int>(machine.state()));
 }
 
+void test_unconfirmed_or_electrically_short_press_stays_awake() {
+    InteractionStateMachine machine;
+    machine.ready(1'000);
+    machine.button_down(1'100);
+    machine.button_up(1'300, false);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(machine.state()));
+
+    machine.button_down(1'400);
+    machine.button_up(1'479, true);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(machine.state()));
+
+    machine.button_down(1'500);
+    machine.button_up(1'580, true);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::sleep_pending),
+        static_cast<int>(machine.state()));
+}
+
 void test_ble_shutdown_retries_each_incomplete_step() {
     chatesp::runtime::BleShutdown shutdown;
     using Step = chatesp::runtime::BleShutdown::Step;
@@ -263,6 +285,40 @@ void test_power_button_filter_accepts_pmu_edges() {
     TEST_ASSERT_TRUE(button.update(false, false, false, 140).pressed);
     TEST_ASSERT_FALSE(button.update(false, true, false, 500).released);
     TEST_ASSERT_TRUE(button.update(false, false, false, 530).released);
+}
+
+void test_power_button_filter_confirms_only_a_pmu_short_press() {
+    chatesp::PowerButtonFilter button{30};
+    button.reset(false, 100);
+
+    TEST_ASSERT_FALSE(button.update(true, false, false, false, 110).pressed);
+    TEST_ASSERT_TRUE(button.update(false, false, false, false, 140).pressed);
+    TEST_ASSERT_FALSE(button.update(false, true, false, true, 500).released);
+    const chatesp::ButtonEdges confirmed =
+        button.update(false, false, false, false, 530);
+    TEST_ASSERT_TRUE(confirmed.released);
+    TEST_ASSERT_TRUE(confirmed.short_press_confirmed);
+
+    button.reset(false, 600);
+    TEST_ASSERT_FALSE(button.update(true, false, false, false, 610).pressed);
+    TEST_ASSERT_TRUE(button.update(false, false, false, false, 640).pressed);
+    TEST_ASSERT_FALSE(button.update(false, true, false, false, 700).released);
+    const chatesp::ButtonEdges unconfirmed =
+        button.update(false, false, false, false, 730);
+    TEST_ASSERT_TRUE(unconfirmed.released);
+    TEST_ASSERT_FALSE(unconfirmed.short_press_confirmed);
+}
+
+void test_power_button_filter_quarantines_adjacent_usb_press_noise() {
+    chatesp::PowerButtonFilter button{30, 250};
+    button.reset(false, 100);
+
+    TEST_ASSERT_FALSE(button.update(false, false, true, false, 200).pressed);
+    TEST_ASSERT_FALSE(button.update(true, false, false, false, 215).pressed);
+    TEST_ASSERT_FALSE(button.update(false, false, false, false, 500).pressed);
+
+    TEST_ASSERT_FALSE(button.update(true, false, false, false, 500).pressed);
+    TEST_ASSERT_TRUE(button.update(false, false, false, false, 530).pressed);
 }
 
 void test_power_button_filter_accepts_release_without_an_exio_change() {
@@ -552,6 +608,7 @@ void test_pairing_code_always_uses_chat_orientation() {
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_short_press_requests_sleep);
+    RUN_TEST(test_unconfirmed_or_electrically_short_press_stays_awake);
     RUN_TEST(test_ble_shutdown_retries_each_incomplete_step);
     RUN_TEST(test_hold_records_until_release);
     RUN_TEST(test_release_at_hold_threshold_without_tick_requests_sleep);
@@ -566,6 +623,8 @@ int main(int, char **) {
     RUN_TEST(test_button_debouncer_rejects_bounce_and_handles_wrap);
     RUN_TEST(test_power_button_filter_rejects_usb_source_transitions);
     RUN_TEST(test_power_button_filter_accepts_pmu_edges);
+    RUN_TEST(test_power_button_filter_confirms_only_a_pmu_short_press);
+    RUN_TEST(test_power_button_filter_quarantines_adjacent_usb_press_noise);
     RUN_TEST(test_power_button_filter_accepts_release_without_an_exio_change);
     RUN_TEST(test_power_button_filter_keeps_a_press_across_usb_removal);
     RUN_TEST(test_power_button_filter_rejects_key_edges_with_a_usb_event);

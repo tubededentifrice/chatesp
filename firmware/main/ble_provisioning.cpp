@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include "chatesp/ble_shutdown.hpp"
 #include "chatesp/indication_gate.hpp"
@@ -11,10 +12,12 @@
 #include "chatesp/runtime_control.hpp"
 #include "crash_diagnostics.hpp"
 #include "device_memory_store.hpp"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_task_wdt.h"
 #include "host/ble_gap.h"
+#include "host/ble_att.h"
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
 #include "host/ble_hs_mbuf.h"
@@ -22,6 +25,7 @@
 #include "host/ble_store.h"
 #include "host/util/util.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -31,6 +35,10 @@
 #include "settings_store.hpp"
 
 extern "C" void ble_store_config_init(void);
+
+#if CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE < 8192
+#error "The NimBLE host stack must support bounded memory BLE commands"
+#endif
 
 namespace chatesp {
 namespace ble_provisioning {
@@ -43,6 +51,7 @@ constexpr std::size_t kMaximumDataFrameSize =
 constexpr std::uint32_t kStopTaskStackBytes = 4 * 1024;
 constexpr UBaseType_t kStopTaskPriority = 5;
 constexpr std::uint32_t kStopTaskReclaimDelayMs = 10;
+constexpr std::uint32_t kDisconnectTimeoutMs = 2'000;
 constexpr char kLogTag[] = "ble_provisioning";
 
 #if !defined(CONFIG_BT_NIMBLE_NVS_PERSIST) || \
@@ -145,6 +154,15 @@ const ble_uuid128_t kMemoryCommandUuid = BLE_UUID128_INIT(
 const ble_uuid128_t kMemoryResponseUuid = BLE_UUID128_INIT(
     0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
     0x8a, 0x4b, 0x3c, 0x6f, 0x06, 0x10, 0x2e, 0x7b);
+const ble_uuid128_t kHttpProxyServiceUuid = BLE_UUID128_INIT(
+    0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
+    0x8a, 0x4b, 0x3c, 0x6f, 0x00, 0x21, 0x2e, 0x7b);
+const ble_uuid128_t kHttpProxyRequestUuid = BLE_UUID128_INIT(
+    0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
+    0x8a, 0x4b, 0x3c, 0x6f, 0x01, 0x21, 0x2e, 0x7b);
+const ble_uuid128_t kHttpProxyResponseUuid = BLE_UUID128_INIT(
+    0x01, 0x00, 0x50, 0x53, 0x45, 0x4c, 0x71, 0x9d,
+    0x8a, 0x4b, 0x3c, 0x6f, 0x02, 0x21, 0x2e, 0x7b);
 
 SettingsStore *s_settings_store = nullptr;
 DeviceMemoryStore *s_memory_store = nullptr;
@@ -156,6 +174,7 @@ std::uint16_t s_owner_connection = kNoConnection;
 std::uint16_t s_passkey_connection = kNoConnection;
 std::uint16_t s_acknowledgement_handle = 0;
 std::uint16_t s_memory_response_handle = 0;
+std::uint16_t s_http_proxy_request_handle = 0;
 std::uint16_t s_active_connection = kNoConnection;
 SemaphoreHandle_t s_memory_ble_mutex = nullptr;
 std::array<std::uint8_t, agent::max_memory_ble_response_bytes>
@@ -175,15 +194,38 @@ std::size_t s_cached_memory_response_size = 0;
 std::uint16_t s_cached_memory_connection = kNoConnection;
 std::uint8_t s_address_type = 0;
 std::atomic<bool> s_running{false};
+std::atomic<bool> s_bond_available{false};
 runtime::BleShutdown s_shutdown;
 runtime::AsyncShutdownGate s_stop_gate;
 SemaphoreHandle_t s_stop_done = nullptr;
+SemaphoreHandle_t s_disconnect_done = nullptr;
+std::atomic<std::uint16_t> s_disconnect_wait_connection{kNoConnection};
 std::atomic<esp_err_t> s_stop_result{ESP_OK};
 provisioning::IndicationGate s_acknowledgement_gate;
 std::atomic<bool> s_acknowledgement_waiting{false};
 std::atomic<bool> s_acknowledgement_in_flight{false};
 std::atomic<bool> s_settings_confirmation_pending{false};
 std::atomic<bool> s_indication_send_active{false};
+std::atomic<bool> s_http_proxy_subscribed{false};
+std::atomic<bool> s_http_proxy_secure{false};
+SemaphoreHandle_t s_http_proxy_send_mutex = nullptr;
+QueueHandle_t s_http_proxy_response_queue = nullptr;
+
+struct HttpProxyFrame {
+    std::uint16_t size = 0;
+    std::array<std::uint8_t, kMaximumHttpProxyFrameSize> data{};
+};
+
+void delete_http_proxy_resources() {
+    if (s_http_proxy_send_mutex != nullptr) {
+        vSemaphoreDelete(s_http_proxy_send_mutex);
+        s_http_proxy_send_mutex = nullptr;
+    }
+    if (s_http_proxy_response_queue != nullptr) {
+        vQueueDelete(s_http_proxy_response_queue);
+        s_http_proxy_response_queue = nullptr;
+    }
+}
 
 int gap_event(ble_gap_event *event, void *argument);
 int gatt_access(
@@ -191,6 +233,78 @@ int gatt_access(
     std::uint16_t attribute_handle,
     ble_gatt_access_ctxt *context,
     void *argument);
+
+struct BondInventory {
+    std::size_t local = 0;
+    std::size_t peer = 0;
+    ble_addr_t local_address{};
+    ble_addr_t peer_address{};
+    bool local_ltk = false;
+    bool local_identity = false;
+    bool peer_ltk = false;
+    bool peer_identity = false;
+};
+
+int inspect_bond_entry(
+    int object_type, union ble_store_value *value, void *cookie) {
+    auto *inventory = static_cast<BondInventory *>(cookie);
+    if (inventory == nullptr || value == nullptr) {
+        return 1;
+    }
+    if (object_type == BLE_STORE_OBJ_TYPE_OUR_SEC) {
+        ++inventory->local;
+        inventory->local_address = value->sec.peer_addr;
+        inventory->local_ltk = value->sec.ltk_present;
+        inventory->local_identity = value->sec.irk_present;
+    } else if (object_type == BLE_STORE_OBJ_TYPE_PEER_SEC) {
+        ++inventory->peer;
+        inventory->peer_address = value->sec.peer_addr;
+        inventory->peer_ltk = value->sec.ltk_present;
+        inventory->peer_identity = value->sec.irk_present;
+    }
+    return 0;
+}
+
+BondInventory inspect_bond_store() {
+    BondInventory inventory;
+    if (ble_store_iterate(
+            BLE_STORE_OBJ_TYPE_OUR_SEC, inspect_bond_entry, &inventory) != 0 ||
+        ble_store_iterate(
+            BLE_STORE_OBJ_TYPE_PEER_SEC, inspect_bond_entry, &inventory) != 0) {
+        return {};
+    }
+    return inventory;
+}
+
+bool addresses_match(const ble_addr_t &left, const ble_addr_t &right) {
+    return left.type == right.type &&
+        std::memcmp(left.val, right.val, sizeof(left.val)) == 0;
+}
+
+bool complete_bond_is_stored(const BondInventory &inventory) {
+    return inventory.local == 1 && inventory.peer == 1 &&
+        inventory.local_ltk && inventory.local_identity &&
+        inventory.peer_ltk && inventory.peer_identity &&
+        addresses_match(inventory.local_address, inventory.peer_address);
+}
+
+bool remove_stored_bond(const BondInventory &inventory) {
+    if (inventory.local == 0 && inventory.peer == 0) {
+        return true;
+    }
+    const ble_addr_t &address = inventory.peer != 0
+        ? inventory.peer_address
+        : inventory.local_address;
+    const int result = ble_store_util_delete_peer(&address);
+    if (result != 0) {
+        ESP_LOGW(
+            kLogTag, "Could not remove stale BLE bond (category %d)", result);
+        return false;
+    }
+    s_bond_available.store(false, std::memory_order_release);
+    ESP_LOGW(kLogTag, "Removed one stale BLE bond");
+    return true;
+}
 
 ble_gatt_chr_def s_characteristics[] = {
     {
@@ -264,12 +378,45 @@ ble_gatt_chr_def s_characteristics[] = {
     {},
 };
 
+ble_gatt_chr_def s_http_proxy_characteristics[] = {
+    {
+        .uuid = &kHttpProxyRequestUuid.u,
+        .access_cb = gatt_access,
+        .arg = nullptr,
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_NOTIFY |
+            BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC |
+            BLE_GATT_CHR_F_NOTIFY_INDICATE_AUTHEN,
+        .min_key_size = BLE_SM_PAIR_KEY_SZ_MAX,
+        .val_handle = &s_http_proxy_request_handle,
+        .cpfd = nullptr,
+    },
+    {
+        .uuid = &kHttpProxyResponseUuid.u,
+        .access_cb = gatt_access,
+        .arg = reinterpret_cast<void *>(5),
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP |
+            BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN,
+        .min_key_size = BLE_SM_PAIR_KEY_SZ_MAX,
+        .val_handle = nullptr,
+        .cpfd = nullptr,
+    },
+    {},
+};
+
 ble_gatt_svc_def s_services[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
         .uuid = &kServiceUuid.u,
         .includes = nullptr,
         .characteristics = s_characteristics,
+    },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &kHttpProxyServiceUuid.u,
+        .includes = nullptr,
+        .characteristics = s_http_proxy_characteristics,
     },
     {},
 };
@@ -364,7 +511,8 @@ void send_device_context_acknowledgement(
 }
 
 void try_send_acknowledgement() {
-    if (s_memory_indication_in_flight.load(std::memory_order_acquire) ||
+    if (s_indication_send_active.load(std::memory_order_acquire) ||
+        s_memory_indication_in_flight.load(std::memory_order_acquire) ||
         s_acknowledgement_in_flight.load(std::memory_order_acquire) ||
         s_acknowledgement_handle == 0) {
         return;
@@ -431,7 +579,8 @@ agent::MemoryBleStatus memory_ble_status(
 }
 
 void try_send_memory_indication_locked() {
-    if (s_memory_indication_in_flight.load(std::memory_order_acquire) ||
+    if (s_indication_send_active.load(std::memory_order_acquire) ||
+        s_memory_indication_in_flight.load(std::memory_order_acquire) ||
         s_acknowledgement_waiting.load(std::memory_order_acquire) ||
         s_acknowledgement_in_flight.load(std::memory_order_acquire) ||
         s_memory_response_handle == 0 ||
@@ -474,6 +623,8 @@ void try_send_memory_indication_locked() {
     s_indication_send_active.store(false, std::memory_order_release);
     if (result == 0) {
         s_memory_indication_in_flight.store(true, std::memory_order_release);
+        crash_diagnostics::mark(
+            runtime::CrashEvent::memory_indication_sent);
         if (sending_change) {
             s_memory_change_pending = false;
         } else {
@@ -494,6 +645,7 @@ void queue_memory_response_locked(
     s_queued_memory_response = encoded;
     s_queued_memory_response_size = size;
     s_queued_memory_connection = connection_handle;
+    crash_diagnostics::mark(runtime::CrashEvent::memory_response_queued);
     try_send_memory_indication_locked();
 }
 
@@ -675,19 +827,22 @@ void release_connection(std::uint16_t connection_handle) {
         s_session.disconnect();
         s_owner_connection = kNoConnection;
     }
-    if (s_active_connection == connection_handle && memory_ble_lock()) {
-        s_active_connection = kNoConnection;
-        s_memory_indication_in_flight.store(false, std::memory_order_release);
-        s_memory_change_pending = false;
-        s_pending_memory_change.clear();
-        s_queued_memory_response.fill(0);
-        s_queued_memory_response_size = 0;
-        s_queued_memory_connection = kNoConnection;
-        s_cached_memory_command.fill(0);
-        s_cached_memory_command_size = 0;
-        s_cached_memory_response.fill(0);
-        s_cached_memory_response_size = 0;
-        s_cached_memory_connection = kNoConnection;
+    if (memory_ble_lock()) {
+        if (s_active_connection == connection_handle) {
+            s_active_connection = kNoConnection;
+            s_memory_indication_in_flight.store(
+                false, std::memory_order_release);
+            s_memory_change_pending = false;
+            s_pending_memory_change.clear();
+            s_queued_memory_response.fill(0);
+            s_queued_memory_response_size = 0;
+            s_queued_memory_connection = kNoConnection;
+            s_cached_memory_command.fill(0);
+            s_cached_memory_command_size = 0;
+            s_cached_memory_response.fill(0);
+            s_cached_memory_response_size = 0;
+            s_cached_memory_connection = kNoConnection;
+        }
         memory_ble_unlock();
     }
     if (s_acknowledgement_gate.clear_connection(connection_handle)) {
@@ -695,7 +850,36 @@ void release_connection(std::uint16_t connection_handle) {
     }
     s_acknowledgement_waiting.store(false, std::memory_order_release);
     s_acknowledgement_in_flight.store(false, std::memory_order_release);
+    s_http_proxy_subscribed.store(false, std::memory_order_release);
+    s_http_proxy_secure.store(false, std::memory_order_release);
+    if (s_http_proxy_response_queue != nullptr) {
+        xQueueReset(s_http_proxy_response_queue);
+        HttpProxyFrame disconnected{};
+        (void)xQueueSend(s_http_proxy_response_queue, &disconnected, 0);
+    }
     hide_passkey(connection_handle);
+}
+
+void complete_disconnect_wait(std::uint16_t connection_handle) {
+    std::uint16_t expected = connection_handle;
+    if (s_disconnect_wait_connection.compare_exchange_strong(
+            expected, kNoConnection, std::memory_order_acq_rel) &&
+        s_disconnect_done != nullptr) {
+        xSemaphoreGive(s_disconnect_done);
+    }
+}
+
+void end_insecure_connection(std::uint16_t connection_handle) {
+    const int result = ble_gap_terminate(
+        connection_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (result == BLE_HS_ENOTCONN) {
+        release_connection(connection_handle);
+    } else if (result != 0 && result != BLE_HS_EALREADY) {
+        release_connection(connection_handle);
+        ESP_LOGW(
+            kLogTag, "BLE insecure-link close failed (category %d)",
+            result);
+    }
 }
 
 void advertise() {
@@ -733,9 +917,11 @@ void on_sync() {
 }
 
 void on_reset(int) {
+    std::uint16_t active_connection = kNoConnection;
     s_session.disconnect();
     s_owner_connection = kNoConnection;
     if (memory_ble_lock()) {
+        active_connection = s_active_connection;
         s_active_connection = kNoConnection;
         s_memory_indication_in_flight.store(false, std::memory_order_release);
         s_memory_command_active = false;
@@ -750,7 +936,10 @@ void on_reset(int) {
     s_acknowledgement_in_flight.store(false, std::memory_order_release);
     s_settings_confirmation_pending.store(false, std::memory_order_release);
     s_indication_send_active.store(false, std::memory_order_release);
+    s_http_proxy_subscribed.store(false, std::memory_order_release);
+    s_http_proxy_secure.store(false, std::memory_order_release);
     hide_all_passkeys();
+    complete_disconnect_wait(active_connection);
 }
 
 void host_task(void *) {
@@ -758,17 +947,62 @@ void host_task(void *) {
     nimble_port_freertos_deinit();
 }
 
+esp_err_t disconnect_active_link() {
+    std::uint16_t connection_handle = kNoConnection;
+    if (!memory_ble_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    connection_handle = s_active_connection;
+    memory_ble_unlock();
+    if (connection_handle == kNoConnection) {
+        return ESP_OK;
+    }
+    if (s_disconnect_done == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    (void)xSemaphoreTake(s_disconnect_done, 0);
+    s_disconnect_wait_connection.store(
+        connection_handle, std::memory_order_release);
+    crash_diagnostics::mark(runtime::CrashEvent::ble_disconnect_requested);
+    const int result = ble_gap_terminate(
+        connection_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (result == BLE_HS_ENOTCONN) {
+        release_connection(connection_handle);
+        complete_disconnect_wait(connection_handle);
+    } else if (result != 0 && result != BLE_HS_EALREADY) {
+        s_disconnect_wait_connection.store(
+            kNoConnection, std::memory_order_release);
+        ESP_LOGW(
+            kLogTag, "BLE shutdown disconnect failed (category %d)", result);
+        return ESP_FAIL;
+    }
+
+    if (xSemaphoreTake(
+            s_disconnect_done,
+            pdMS_TO_TICKS(kDisconnectTimeoutMs)) != pdTRUE) {
+        std::uint16_t expected = connection_handle;
+        (void)s_disconnect_wait_connection.compare_exchange_strong(
+            expected, kNoConnection, std::memory_order_acq_rel);
+        crash_diagnostics::mark(runtime::CrashEvent::ble_disconnect_timeout);
+        return ESP_ERR_TIMEOUT;
+    }
+    crash_diagnostics::mark(runtime::CrashEvent::ble_disconnect_complete);
+    return ESP_OK;
+}
+
 esp_err_t stop_host() {
     if (!s_running.load(std::memory_order_acquire)) {
         return ESP_OK;
     }
     if (s_shutdown.step() == runtime::BleShutdown::Step::stop_host) {
+        (void)ble_gap_adv_stop();
+        const esp_err_t disconnect_result = disconnect_active_link();
+        if (disconnect_result != ESP_OK) {
+            return disconnect_result;
+        }
         crash_diagnostics::mark(runtime::CrashEvent::ble_host_stop_begin);
-        const int advertisement_stop_result = ble_gap_adv_stop();
         if (nimble_port_stop() != 0) {
-            if (advertisement_stop_result == 0) {
-                advertise();
-            }
             return ESP_FAIL;
         }
         crash_diagnostics::mark(runtime::CrashEvent::ble_host_stop_complete);
@@ -802,10 +1036,19 @@ esp_err_t stop_host() {
     s_settings_confirmation_pending.store(false, std::memory_order_release);
     s_indication_send_active.store(false, std::memory_order_release);
     s_memory_indication_in_flight.store(false, std::memory_order_release);
+    s_http_proxy_subscribed.store(false, std::memory_order_release);
+    s_http_proxy_secure.store(false, std::memory_order_release);
     if (s_memory_ble_mutex != nullptr) {
         vSemaphoreDelete(s_memory_ble_mutex);
         s_memory_ble_mutex = nullptr;
     }
+    if (s_disconnect_done != nullptr) {
+        vSemaphoreDelete(s_disconnect_done);
+        s_disconnect_done = nullptr;
+    }
+    delete_http_proxy_resources();
+    s_disconnect_wait_connection.store(
+        kNoConnection, std::memory_order_release);
     s_pending_memory_change.clear();
     s_queued_memory_response.fill(0);
     s_queued_memory_response_size = 0;
@@ -857,6 +1100,25 @@ esp_err_t consume_stop_result() {
     return result;
 }
 
+void log_bond_state(std::uint16_t connection_handle) {
+    ble_gap_conn_desc description{};
+    if (ble_gap_conn_find(connection_handle, &description) != 0) {
+        ESP_LOGI(kLogTag, "BLE bond state unavailable");
+        return;
+    }
+    ble_store_key_sec key{};
+    key.peer_addr = description.peer_id_addr;
+    ble_store_value_sec local_security{};
+    ble_store_value_sec peer_security{};
+    const bool local_bond =
+        ble_store_read_our_sec(&key, &local_security) == 0;
+    const bool peer_bond =
+        ble_store_read_peer_sec(&key, &peer_security) == 0;
+    ESP_LOGI(
+        kLogTag, "BLE bond state: local=%d peer=%d",
+        local_bond ? 1 : 0, peer_bond ? 1 : 0);
+}
+
 int gap_event(ble_gap_event *event, void *) {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
@@ -866,25 +1128,77 @@ int gap_event(ble_gap_event *event, void *) {
                     s_active_connection = event->connect.conn_handle;
                     memory_ble_unlock();
                 }
-                ble_gap_security_initiate(event->connect.conn_handle);
+                log_bond_state(event->connect.conn_handle);
+                ESP_LOGI(
+                    kLogTag,
+                    "BLE pairing memory: free=%u largest=%u",
+                    static_cast<unsigned>(heap_caps_get_free_size(
+                        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)),
+                    static_cast<unsigned>(heap_caps_get_largest_free_block(
+                        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)));
+                const int security_result =
+                    ble_gap_security_initiate(event->connect.conn_handle);
+                ESP_LOGI(
+                    kLogTag, "BLE security start result: category %d",
+                    security_result);
+                if (security_result != 0 &&
+                    security_result != BLE_HS_EALREADY) {
+                    crash_diagnostics::mark(
+                        runtime::CrashEvent::ble_security_start_failed);
+                    ESP_LOGW(
+                        kLogTag,
+                        "BLE security start failed (category %d)",
+                        security_result);
+                    end_insecure_connection(event->connect.conn_handle);
+                }
             } else {
+                ESP_LOGW(
+                    kLogTag, "BLE connection failed (category %d)",
+                    event->connect.status);
                 advertise();
             }
             return 0;
         case BLE_GAP_EVENT_DISCONNECT:
+            ESP_LOGW(
+                kLogTag, "BLE link ended (category %d)",
+                event->disconnect.reason);
             release_connection(event->disconnect.conn.conn_handle);
-            advertise();
+            if (!s_stop_gate.running()) {
+                advertise();
+            }
+            complete_disconnect_wait(event->disconnect.conn.conn_handle);
             return 0;
         case BLE_GAP_EVENT_ADV_COMPLETE:
-            advertise();
+            if (!s_stop_gate.running()) {
+                advertise();
+            }
             return 0;
         case BLE_GAP_EVENT_ENC_CHANGE:
             hide_passkey(event->enc_change.conn_handle);
             if (provisioning::link_is_secure(
                     link_security(event->enc_change.conn_handle))) {
                 crash_diagnostics::mark(runtime::CrashEvent::ble_secure);
+                s_bond_available.store(true, std::memory_order_release);
+                s_http_proxy_secure.store(true, std::memory_order_release);
+                ESP_LOGI(kLogTag, "BLE link is secure");
             } else {
-                release_connection(event->enc_change.conn_handle);
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::ble_security_failed);
+                ESP_LOGW(
+                    kLogTag, "BLE security failed (category %d)",
+                    event->enc_change.status);
+                if (s_stop_gate.running()) {
+                    ESP_LOGI(
+                        kLogTag,
+                        "BLE security ended during an intentional stop");
+                    return 0;
+                }
+                // The product supports one phone. If security fails, a saved
+                // bond can only be stale or incomplete. Remove it so the next
+                // connection can create a complete identity-key bond instead
+                // of repeating an authentication failure forever.
+                (void)remove_stored_bond(inspect_bond_store());
+                end_insecure_connection(event->enc_change.conn_handle);
             }
             return 0;
         case BLE_GAP_EVENT_PASSKEY_ACTION: {
@@ -910,6 +1224,10 @@ int gap_event(ble_gap_event *event, void *) {
             return result;
         }
         case BLE_GAP_EVENT_REPEAT_PAIRING: {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::ble_repeat_pairing);
+            ESP_LOGW(kLogTag, "BLE peer requested a new pairing");
+            s_bond_available.store(false, std::memory_order_release);
             ble_gap_conn_desc description{};
             if (ble_gap_conn_find(
                     event->repeat_pairing.conn_handle, &description) != 0) {
@@ -924,6 +1242,16 @@ int gap_event(ble_gap_event *event, void *) {
             if (event->notify_tx.indication == 0 ||
                 event->notify_tx.status == 0) {
                 return 0;
+            }
+            if (event->notify_tx.attr_handle == s_memory_response_handle ||
+                event->notify_tx.attr_handle == s_acknowledgement_handle) {
+                ESP_LOGI(
+                    kLogTag,
+                    "BLE indication completed: channel=%s category=%d",
+                    event->notify_tx.attr_handle == s_memory_response_handle
+                            ? "memory"
+                            : "acknowledgement",
+                    event->notify_tx.status);
             }
             // NimBLE reports an immediate send error from inside
             // ble_gatts_indicate_custom(). Do not re-enter either sender while
@@ -958,6 +1286,17 @@ int gap_event(ble_gap_event *event, void *) {
             return 0;
         }
         case BLE_GAP_EVENT_SUBSCRIBE:
+            if (event->subscribe.attr_handle ==
+                s_http_proxy_request_handle) {
+                s_http_proxy_subscribed.store(
+                    event->subscribe.cur_notify != 0,
+                    std::memory_order_release);
+                ESP_LOGI(
+                    kLogTag,
+                    "BLE proxy subscription: notify=%d indicate=%d",
+                    event->subscribe.cur_notify != 0 ? 1 : 0,
+                    event->subscribe.cur_indicate != 0 ? 1 : 0);
+            }
             try_send_acknowledgement();
             if (memory_ble_lock()) {
                 try_send_memory_indication_locked();
@@ -987,7 +1326,9 @@ int gatt_access(
         if (s_owner_connection == connection_handle) {
             release_connection(connection_handle);
         }
-        if (characteristic == 4) {
+        if (characteristic == 5) {
+            return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+        } else if (characteristic == 4) {
             const std::size_t frame_size = OS_MBUF_PKTLEN(context->om);
             std::array<std::uint8_t, agent::max_memory_ble_command_bytes> frame{};
             std::uint16_t copied_size = 0;
@@ -1014,7 +1355,30 @@ int gatt_access(
         return 0;
     }
 
+    if (characteristic == 5) {
+        const std::size_t frame_size = OS_MBUF_PKTLEN(context->om);
+        if (frame_size == 0 || frame_size > kMaximumHttpProxyFrameSize ||
+            s_http_proxy_response_queue == nullptr) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        HttpProxyFrame frame{};
+        std::uint16_t copied_size = 0;
+        if (ble_hs_mbuf_to_flat(
+                context->om, frame.data.data(), frame.data.size(),
+                &copied_size) != 0 || copied_size != frame_size) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        frame.size = copied_size;
+        if (xQueueSend(s_http_proxy_response_queue, &frame, 0) != pdTRUE) {
+            clear_bytes(frame.data.data(), frame.data.size());
+            return BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        clear_bytes(frame.data.data(), frame.data.size());
+        return 0;
+    }
+
     if (characteristic == 4) {
+        crash_diagnostics::mark(runtime::CrashEvent::memory_command_begin);
         const std::size_t frame_size = OS_MBUF_PKTLEN(context->om);
         std::array<std::uint8_t, agent::max_memory_ble_command_bytes> frame{};
         std::uint16_t copied_size = 0;
@@ -1029,6 +1393,9 @@ int gatt_access(
             handle_memory_command(connection_handle, nullptr, frame_size, true);
         }
         clear_bytes(frame.data(), frame.size());
+        ESP_LOGI(
+            kLogTag, "NimBLE host stack minimum free bytes: %u",
+            static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
         return 0;
     }
 
@@ -1152,7 +1519,8 @@ esp_err_t start(
     if (storage_result != ESP_OK) {
         return storage_result;
     }
-#if defined(CONFIG_BT_NIMBLE_NVS_PERSIST) && CONFIG_BT_NIMBLE_NVS_PERSIST
+#if !CHATESP_DEVELOPMENT_MODE && \
+    defined(CONFIG_BT_NIMBLE_NVS_PERSIST) && CONFIG_BT_NIMBLE_NVS_PERSIST
     if (settings_store->persistence() != SettingsPersistence::plaintext_nvs) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -1176,8 +1544,34 @@ esp_err_t start(
         s_memory_store = nullptr;
         return ESP_ERR_NO_MEM;
     }
+    s_disconnect_done = xSemaphoreCreateBinary();
+    if (s_disconnect_done == nullptr) {
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
+        s_settings_store = nullptr;
+        s_memory_store = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    s_http_proxy_send_mutex = xSemaphoreCreateMutex();
+    s_http_proxy_response_queue = xQueueCreate(8, sizeof(HttpProxyFrame));
+    if (s_http_proxy_send_mutex == nullptr ||
+        s_http_proxy_response_queue == nullptr) {
+        delete_http_proxy_resources();
+        vSemaphoreDelete(s_disconnect_done);
+        s_disconnect_done = nullptr;
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
+        s_settings_store = nullptr;
+        s_memory_store = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    s_disconnect_wait_connection.store(
+        kNoConnection, std::memory_order_release);
     s_active_connection = kNoConnection;
     s_memory_response_handle = 0;
+    s_http_proxy_request_handle = 0;
+    s_http_proxy_subscribed.store(false, std::memory_order_release);
+    s_http_proxy_secure.store(false, std::memory_order_release);
     s_memory_indication_in_flight = false;
     s_memory_command_active = false;
     s_memory_change_pending = false;
@@ -1194,8 +1588,11 @@ esp_err_t start(
     const esp_err_t init_result = nimble_port_init();
     if (init_result != ESP_OK) {
         s_memory_store->set_change_callback(nullptr, nullptr);
+        delete_http_proxy_resources();
         vSemaphoreDelete(s_memory_ble_mutex);
         s_memory_ble_mutex = nullptr;
+        vSemaphoreDelete(s_disconnect_done);
+        s_disconnect_done = nullptr;
         s_settings_store = nullptr;
         s_memory_store = nullptr;
         s_passkey_callback = nullptr;
@@ -1213,8 +1610,13 @@ esp_err_t start(
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_sc_only = 1;
     ble_hs_cfg.sm_sec_lvl = 4;
-    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
-    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    // Keep the peer identity key with the encryption key. iOS uses a
+    // resolvable private address, so an encryption-only bond cannot be found
+    // after the phone changes its over-the-air address.
+    ble_hs_cfg.sm_our_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -1228,8 +1630,11 @@ esp_err_t start(
     if (result != 0) {
         nimble_port_deinit();
         s_memory_store->set_change_callback(nullptr, nullptr);
+        delete_http_proxy_resources();
         vSemaphoreDelete(s_memory_ble_mutex);
         s_memory_ble_mutex = nullptr;
+        vSemaphoreDelete(s_disconnect_done);
+        s_disconnect_done = nullptr;
         s_settings_store = nullptr;
         s_memory_store = nullptr;
         s_passkey_callback = nullptr;
@@ -1243,8 +1648,11 @@ esp_err_t start(
         ESP_LOGE(kLogTag, "Could not restore the volatile BLE bond store");
         nimble_port_deinit();
         s_memory_store->set_change_callback(nullptr, nullptr);
+        delete_http_proxy_resources();
         vSemaphoreDelete(s_memory_ble_mutex);
         s_memory_ble_mutex = nullptr;
+        vSemaphoreDelete(s_disconnect_done);
+        s_disconnect_done = nullptr;
         s_settings_store = nullptr;
         s_memory_store = nullptr;
         s_passkey_callback = nullptr;
@@ -1252,6 +1660,25 @@ esp_err_t start(
         s_callback_context = nullptr;
         return ESP_FAIL;
     }
+    BondInventory bond_inventory = inspect_bond_store();
+    ESP_LOGI(
+        kLogTag,
+        "BLE stored bond keys: local_ltk=%d local_id=%d "
+        "peer_ltk=%d peer_id=%d",
+        bond_inventory.local_ltk ? 1 : 0,
+        bond_inventory.local_identity ? 1 : 0,
+        bond_inventory.peer_ltk ? 1 : 0,
+        bond_inventory.peer_identity ? 1 : 0);
+    if ((bond_inventory.local != 0 || bond_inventory.peer != 0) &&
+        !complete_bond_is_stored(bond_inventory)) {
+        (void)remove_stored_bond(bond_inventory);
+        bond_inventory = inspect_bond_store();
+    }
+    s_bond_available.store(
+        complete_bond_is_stored(bond_inventory), std::memory_order_release);
+    ESP_LOGI(
+        kLogTag, "BLE stored bond ready: %d",
+        s_bond_available.load(std::memory_order_acquire) ? 1 : 0);
     s_shutdown.reset();
     s_running.store(true, std::memory_order_release);
     nimble_port_freertos_init(host_task);
@@ -1292,8 +1719,145 @@ esp_err_t stop(std::uint32_t timeout_ms) {
 
 bool running() { return s_running.load(std::memory_order_acquire); }
 
+bool bond_available() {
+    return s_bond_available.load(std::memory_order_acquire);
+}
+
 bool settings_confirmation_pending() {
     return s_settings_confirmation_pending.load(std::memory_order_acquire);
+}
+
+bool http_proxy_available() {
+    if (!s_running.load(std::memory_order_acquire) ||
+        !s_http_proxy_subscribed.load(std::memory_order_acquire) ||
+        !s_http_proxy_secure.load(std::memory_order_acquire)) {
+        return false;
+    }
+    if (!memory_ble_lock()) {
+        return false;
+    }
+    const bool available = s_active_connection != kNoConnection;
+    memory_ble_unlock();
+    return available;
+}
+
+std::size_t http_proxy_frame_capacity() {
+    if (!http_proxy_available() || !memory_ble_lock()) {
+        return 0;
+    }
+    const std::uint16_t connection_handle = s_active_connection;
+    memory_ble_unlock();
+    const std::uint16_t mtu = ble_att_mtu(connection_handle);
+    if (mtu <= 3) {
+        return 0;
+    }
+    const std::size_t payload = static_cast<std::size_t>(mtu - 3);
+    return payload < kMaximumHttpProxyFrameSize
+        ? payload
+        : kMaximumHttpProxyFrameSize;
+}
+
+void begin_http_proxy_exchange() {
+    if (s_http_proxy_response_queue != nullptr) {
+        xQueueReset(s_http_proxy_response_queue);
+    }
+}
+
+esp_err_t send_http_proxy_frame(
+    const std::uint8_t *data, std::size_t size, std::uint32_t timeout_ms) {
+    if (data == nullptr || size == 0 || timeout_ms == 0 ||
+        s_http_proxy_send_mutex == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (xSemaphoreTake(
+            s_http_proxy_send_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    const TickType_t started = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    esp_err_t result = ESP_ERR_TIMEOUT;
+    while (xTaskGetTickCount() - started < timeout_ticks) {
+        if (!http_proxy_available()) {
+            result = ESP_ERR_INVALID_STATE;
+            break;
+        }
+        const std::size_t capacity = http_proxy_frame_capacity();
+        if (size > capacity) {
+            result = ESP_ERR_INVALID_SIZE;
+            break;
+        }
+        std::uint16_t connection_handle = kNoConnection;
+        if (memory_ble_lock()) {
+            connection_handle = s_active_connection;
+            memory_ble_unlock();
+        }
+        if (connection_handle == kNoConnection) {
+            result = ESP_ERR_INVALID_STATE;
+            break;
+        }
+        os_mbuf *packet = ble_hs_mbuf_from_flat(data, size);
+        if (packet == nullptr) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            continue;
+        }
+        const int send_result = ble_gatts_notify_custom(
+            connection_handle, s_http_proxy_request_handle, packet);
+        if (send_result == 0) {
+            result = ESP_OK;
+            break;
+        }
+        if (send_result == BLE_HS_ENOMEM || send_result == BLE_HS_EBUSY) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            continue;
+        }
+        result = ESP_FAIL;
+        ESP_LOGW(
+            kLogTag, "BLE proxy notification failed (category %d)",
+            send_result);
+        break;
+    }
+    if (result != ESP_OK) {
+        ESP_LOGW(
+            kLogTag,
+            "BLE proxy frame failed: size=%u category=%s",
+            static_cast<unsigned>(size), esp_err_to_name(result));
+    }
+    xSemaphoreGive(s_http_proxy_send_mutex);
+    return result;
+}
+
+esp_err_t receive_http_proxy_frame(
+    std::uint8_t *data, std::size_t capacity, std::size_t *size,
+    std::uint32_t timeout_ms) {
+    if (data == nullptr || size == nullptr || capacity == 0 ||
+        timeout_ms == 0 || s_http_proxy_response_queue == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    HttpProxyFrame frame{};
+    if (xQueueReceive(
+            s_http_proxy_response_queue, &frame,
+            pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (frame.size == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (frame.size > capacity) {
+        clear_bytes(frame.data.data(), frame.data.size());
+        return ESP_ERR_INVALID_SIZE;
+    }
+    std::memcpy(data, frame.data.data(), frame.size);
+    *size = frame.size;
+    clear_bytes(frame.data.data(), frame.data.size());
+    return ESP_OK;
+}
+
+void cancel_http_proxy_exchange() {
+    if (s_http_proxy_response_queue != nullptr) {
+        xQueueReset(s_http_proxy_response_queue);
+        HttpProxyFrame cancelled{};
+        (void)xQueueSend(s_http_proxy_response_queue, &cancelled, 0);
+    }
 }
 
 }  // namespace ble_provisioning

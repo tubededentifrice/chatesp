@@ -89,7 +89,9 @@ void test_crash_trace_keeps_bounded_reset_history() {
     auto active_index = chatesp::runtime::crash_trace_active_index(trace);
     TEST_ASSERT_LESS_THAN(trace.boots.size(), active_index);
     TEST_ASSERT_EQUAL_UINT32(1, trace.boots[active_index].sequence);
-    for (std::uint32_t index = 0; index < 20; ++index) {
+    for (std::uint32_t index = 0;
+         index < chatesp::runtime::kCrashTraceEventCount + 4;
+         ++index) {
         TEST_ASSERT_TRUE(chatesp::runtime::crash_trace_mark(
             trace, chatesp::runtime::CrashEvent::ble_stop_requested, index));
     }

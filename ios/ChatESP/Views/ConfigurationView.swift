@@ -156,7 +156,7 @@ struct ConfigurationView: View {
             return message
         case .pairing, .transferring, .waitingForConfirmation:
             return provisioner.phase.text
-        case .scanning, .connecting:
+        case .scanning, .connecting, .unavailable:
             return provisioner.phase.text
         default:
             return provisioner.isDeviceConnected

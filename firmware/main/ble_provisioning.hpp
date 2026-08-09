@@ -29,7 +29,20 @@ esp_err_t start(
     void *callback_context);
 esp_err_t stop(std::uint32_t timeout_ms);
 [[nodiscard]] bool running();
+[[nodiscard]] bool bond_available();
 [[nodiscard]] bool settings_confirmation_pending();
+
+constexpr std::size_t kMaximumHttpProxyFrameSize = 512;
+
+[[nodiscard]] bool http_proxy_available();
+[[nodiscard]] std::size_t http_proxy_frame_capacity();
+void begin_http_proxy_exchange();
+esp_err_t send_http_proxy_frame(
+    const std::uint8_t *data, std::size_t size, std::uint32_t timeout_ms);
+esp_err_t receive_http_proxy_frame(
+    std::uint8_t *data, std::size_t capacity, std::size_t *size,
+    std::uint32_t timeout_ms);
+void cancel_http_proxy_exchange();
 
 }  // namespace ble_provisioning
 }  // namespace chatesp

@@ -34,8 +34,16 @@ const char *event_name(runtime::CrashEvent event) {
         case Event::wifi_connected: return "wifi_connected";
         case Event::ble_start_begin: return "ble_start_begin";
         case Event::ble_start_complete: return "ble_start_complete";
+        case Event::ble_memory_recovery_restart:
+            return "ble_memory_recovery_restart";
         case Event::ble_stop_requested: return "ble_stop_requested";
         case Event::ble_stop_task_start: return "ble_stop_task_start";
+        case Event::ble_disconnect_requested:
+            return "ble_disconnect_requested";
+        case Event::ble_disconnect_complete:
+            return "ble_disconnect_complete";
+        case Event::ble_disconnect_timeout:
+            return "ble_disconnect_timeout";
         case Event::ble_host_stop_begin: return "ble_host_stop_begin";
         case Event::ble_host_stop_complete: return "ble_host_stop_complete";
         case Event::ble_store_capture_begin: return "ble_store_capture_begin";
@@ -51,6 +59,10 @@ const char *event_name(runtime::CrashEvent event) {
         case Event::ble_passkey_complete: return "ble_passkey_complete";
         case Event::ble_connected: return "ble_connected";
         case Event::ble_secure: return "ble_secure";
+        case Event::ble_security_start_failed:
+            return "ble_security_start_failed";
+        case Event::ble_security_failed: return "ble_security_failed";
+        case Event::ble_repeat_pairing: return "ble_repeat_pairing";
         case Event::ble_disconnected: return "ble_disconnected";
         case Event::settings_transfer_begin: return "settings_transfer_begin";
         case Event::settings_packet_complete:
@@ -61,8 +73,28 @@ const char *event_name(runtime::CrashEvent event) {
         case Event::settings_ack_failed: return "settings_ack_failed";
         case Event::settings_apply_begin: return "settings_apply_begin";
         case Event::settings_apply_complete: return "settings_apply_complete";
+        case Event::memory_command_begin: return "memory_command_begin";
+        case Event::memory_response_queued: return "memory_response_queued";
+        case Event::memory_indication_sent: return "memory_indication_sent";
+        case Event::pwr_raw_press: return "pwr_raw_press";
+        case Event::pwr_raw_release: return "pwr_raw_release";
+        case Event::pwr_raw_short_press: return "pwr_raw_short_press";
+        case Event::pwr_raw_long_press: return "pwr_raw_long_press";
+        case Event::pwr_power_source_change:
+            return "pwr_power_source_change";
+        case Event::pwr_press_accepted: return "pwr_press_accepted";
+        case Event::pwr_release_accepted: return "pwr_release_accepted";
+        case Event::pwr_release_unconfirmed:
+            return "pwr_release_unconfirmed";
+        case Event::sleep_button_request: return "sleep_button_request";
+        case Event::sleep_model_request: return "sleep_model_request";
         case Event::soft_sleep_begin: return "soft_sleep_begin";
         case Event::poweroff_begin: return "poweroff_begin";
+        case Event::display_sleep_complete:
+            return "display_sleep_complete";
+        case Event::display_wake_begin: return "display_wake_begin";
+        case Event::display_wake_complete: return "display_wake_complete";
+        case Event::display_wake_failed: return "display_wake_failed";
     }
     return "unknown";
 }

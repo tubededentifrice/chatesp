@@ -710,4 +710,126 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertTrue(response.isChangeEvent)
         XCTAssertEqual(response.operation, .changed)
     }
+
+    func testPhoneProxyReassemblesBoundedHTTPSRequest() throws {
+        let requestID: UInt32 = 17
+        let url = Data("https://example.test/v1/chat".utf8)
+        let headerName = Data("Authorization".utf8)
+        let headerValue = Data("Bearer TEST_VALUE".utf8)
+        let body = Data("{\"message\":\"hello\"}".utf8)
+        var metadata = url
+        metadata.append(UInt8(headerName.count))
+        metadata.appendBigEndian(UInt16(headerValue.count))
+        metadata.append(headerName)
+        metadata.append(headerValue)
+        var envelope = metadata
+        envelope.append(body)
+
+        var start = PhoneProxyProtocolV1.commonFrame(
+            type: .requestStart, requestID: requestID)
+        start.appendBigEndian(UInt32(envelope.count))
+        start.appendBigEndian(UInt32(body.count))
+        start.appendBigEndian(UInt32(4_096))
+        start.appendBigEndian(UInt32(30_000))
+        start.append(1)
+        start.append(0)
+        start.append(0)
+        start.append(1)
+        start.appendBigEndian(UInt16(url.count))
+        start.appendBigEndian(UInt32(metadata.count))
+
+        var assembler = PhoneProxyRequestAssembler()
+        XCTAssertNil(try assembler.consume(start))
+        var offset = 0
+        while offset < envelope.count {
+            let end = min(envelope.count, offset + 11)
+            var frame = PhoneProxyProtocolV1.commonFrame(
+                type: .requestData, requestID: requestID)
+            frame.appendBigEndian(UInt32(offset))
+            frame.append(envelope.subdata(in: offset..<end))
+            XCTAssertNil(try assembler.consume(frame))
+            offset = end
+        }
+        let end = PhoneProxyProtocolV1.commonFrame(
+            type: .requestEnd, requestID: requestID)
+        let result = try XCTUnwrap(assembler.consume(end))
+        XCTAssertEqual(result.requestID, requestID)
+        XCTAssertEqual(result.request.url?.absoluteString, String(data: url, encoding: .utf8))
+        XCTAssertEqual(result.request.httpMethod, "POST")
+        XCTAssertEqual(result.request.value(forHTTPHeaderField: "Authorization"), "Bearer TEST_VALUE")
+        XCTAssertEqual(result.request.httpBody, body)
+        XCTAssertEqual(result.maximumResponseSize, 4_096)
+    }
+
+    func testPhoneProxyRejectsUnsafeURLsAndHeaders() {
+        XCTAssertNotNil(
+            PhoneProxyProtocolV1.validURL(
+                Data("https://api.example.com:443/path?q=1".utf8)))
+        XCTAssertNil(
+            PhoneProxyProtocolV1.validURL(
+                Data("http://api.example.com/path".utf8)))
+        XCTAssertNil(
+            PhoneProxyProtocolV1.validURL(
+                Data("https://user@api.example.com/path".utf8)))
+        XCTAssertNil(
+            PhoneProxyProtocolV1.validURL(
+                Data("https://127.0.0.1/path".utf8)))
+        XCTAssertNil(
+            PhoneProxyProtocolV1.validURL(
+                Data("https://device.local/path".utf8)))
+        XCTAssertNil(
+            PhoneProxyProtocolV1.validURL(
+                Data("https://api.example.com/path#part".utf8)))
+        XCTAssertTrue(
+            PhoneProxyProtocolV1.validHeaderName(Data("Content-Type".utf8)))
+        XCTAssertFalse(
+            PhoneProxyProtocolV1.validHeaderName(Data("Bad:Name".utf8)))
+        XCTAssertTrue(
+            PhoneProxyProtocolV1.validHeaderValue(
+                Data("application/json".utf8)))
+        XCTAssertFalse(
+            PhoneProxyProtocolV1.validHeaderValue(Data([0x61, 0x0a, 0x62])))
+    }
+
+    func testPhoneProxyRejectsOutOfOrderData() throws {
+        var start = PhoneProxyProtocolV1.commonFrame(
+            type: .requestStart, requestID: 3)
+        start.appendBigEndian(UInt32(4))
+        start.appendBigEndian(UInt32(0))
+        start.appendBigEndian(UInt32(100))
+        start.appendBigEndian(UInt32(1_000))
+        start.append(0)
+        start.append(0)
+        start.append(0)
+        start.append(0)
+        start.appendBigEndian(UInt16(4))
+        start.appendBigEndian(UInt32(4))
+        var assembler = PhoneProxyRequestAssembler()
+        XCTAssertNil(try assembler.consume(start))
+        var data = PhoneProxyProtocolV1.commonFrame(
+            type: .requestData, requestID: 3)
+        data.appendBigEndian(UInt32(1))
+        data.append(Data("test".utf8))
+        XCTAssertThrowsError(try assembler.consume(data))
+    }
+
+    func testPhoneProxyResponseFramesCarryOffsetsAndLengths() throws {
+        let head = try PhoneProxyProtocolV1.responseHead(
+            requestID: 9,
+            status: 200,
+            contentLength: 3,
+            contentType: "application/json",
+            date: "Sun, 09 Aug 2026 00:00:00 GMT")
+        XCTAssertEqual(head[5], PhoneProxyProtocolV1.FrameType.responseHead.rawValue)
+        XCTAssertEqual(head.readBigEndianUInt32(at: 6), 9)
+        XCTAssertEqual(head.readBigEndianUInt16(at: 10), 200)
+        XCTAssertEqual(head.readBigEndianUInt64(at: 12), 3)
+
+        let data = PhoneProxyProtocolV1.responseData(
+            requestID: 9, offset: 4, bytes: Data([1, 2, 3]))
+        XCTAssertEqual(data.readBigEndianUInt32(at: 10), 4)
+        XCTAssertEqual(data.suffix(3), Data([1, 2, 3]))
+        let end = PhoneProxyProtocolV1.responseEnd(requestID: 9, size: 7)
+        XCTAssertEqual(end.readBigEndianUInt32(at: 10), 7)
+    }
 }

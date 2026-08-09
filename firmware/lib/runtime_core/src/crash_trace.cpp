@@ -7,7 +7,7 @@ namespace runtime {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x43525443U;
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 3;
 
 std::uint32_t checksum(const CrashBootRecord &boot) {
     constexpr std::uint32_t kOffset = 2'166'136'261U;

@@ -387,13 +387,20 @@ void NetworkManager::disconnect(bool wait_for_event) {
 }
 
 void NetworkManager::shutdown() {
-    if (!wifi_started_) {
+    if (!initialized_) {
         return;
     }
-    disconnect(false);
-    esp_wifi_stop();
-    wifi_started_ = false;
-    state_.store(NetworkState::off, std::memory_order_release);
+    if (wifi_started_) {
+        disconnect(false);
+        esp_wifi_stop();
+        wifi_started_ = false;
+    }
+    // Stopping Wi-Fi keeps the driver and its internal DMA buffers. BLE can
+    // then have enough total memory but no block large enough for the vendor
+    // controller. Fully deinitialize the driver before BLE starts. A later
+    // initialize() call creates a fresh station instance.
+    clean_failed_initialize();
+    initialized_ = false;
 }
 
 NetworkState NetworkManager::state() const {

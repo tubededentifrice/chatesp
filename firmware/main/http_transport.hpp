@@ -87,6 +87,8 @@ public:
         const HttpRequest &request, ResponseSink &sink,
         agent::CancellationToken &cancellation);
 
+    [[nodiscard]] bool proxy_available() const;
+
     // This is safe to call from the action-button task.
     void cancel_active();
     // Call this after cancellation has completed or while no request is active.
@@ -104,6 +106,7 @@ private:
     std::mutex request_mutex_;
     std::mutex active_mutex_;
     esp_http_client_handle_t active_ = nullptr;
+    bool ble_proxy_active_ = false;
     esp_http_client_handle_t client_ = nullptr;
     ResponseHeaders response_headers_;
     agent::FixedText<max_http_url_bytes> origin_;

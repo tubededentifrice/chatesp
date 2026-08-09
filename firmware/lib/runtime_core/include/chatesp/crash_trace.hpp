@@ -15,8 +15,12 @@ enum class CrashEvent : std::uint16_t {
     wifi_connected,
     ble_start_begin,
     ble_start_complete,
+    ble_memory_recovery_restart,
     ble_stop_requested,
     ble_stop_task_start,
+    ble_disconnect_requested,
+    ble_disconnect_complete,
+    ble_disconnect_timeout,
     ble_host_stop_begin,
     ble_host_stop_complete,
     ble_store_capture_begin,
@@ -30,6 +34,9 @@ enum class CrashEvent : std::uint16_t {
     ble_passkey_complete,
     ble_connected,
     ble_secure,
+    ble_security_start_failed,
+    ble_security_failed,
+    ble_repeat_pairing,
     ble_disconnected,
     settings_transfer_begin,
     settings_packet_complete,
@@ -39,12 +46,29 @@ enum class CrashEvent : std::uint16_t {
     settings_ack_failed,
     settings_apply_begin,
     settings_apply_complete,
+    memory_command_begin,
+    memory_response_queued,
+    memory_indication_sent,
+    pwr_raw_press,
+    pwr_raw_release,
+    pwr_raw_short_press,
+    pwr_raw_long_press,
+    pwr_power_source_change,
+    pwr_press_accepted,
+    pwr_release_accepted,
+    pwr_release_unconfirmed,
+    sleep_button_request,
+    sleep_model_request,
     soft_sleep_begin,
     poweroff_begin,
+    display_sleep_complete,
+    display_wake_begin,
+    display_wake_complete,
+    display_wake_failed,
 };
 
 constexpr std::size_t kCrashTraceBootCount = 3;
-constexpr std::size_t kCrashTraceEventCount = 16;
+constexpr std::size_t kCrashTraceEventCount = 32;
 
 struct CrashEventRecord {
     std::uint32_t at_ms;

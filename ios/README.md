@@ -12,8 +12,12 @@ app can migrate the prior single-device record. It restores the active
 ChatESP device after iOS restarts it for Bluetooth work. Scan, connect,
 reconnect-scan, frame, and confirmation operations have fixed time limits. A
 reconnect retry scans for the saved Core Bluetooth identifier before it starts
-a new connection. Remove a device from the last row of its settings page to
-stop its BLE work and delete its overrides.
+a new connection. After one failed reconnect cycle, it waits 30 seconds before
+another bounded cycle. It does not require device removal when the selected
+device wakes after a long sleep. While the device sleeps, the status says that
+it is asleep or unavailable instead of claiming an active connection attempt.
+Remove a device from the last row of its settings page to stop its BLE work and
+delete its overrides.
 The app does not send settings after a Keychain read error. It retries the read
 when the app becomes active.
 
@@ -44,6 +48,14 @@ defaults when the app sends settings. Invalid nonempty values remain local and
 the status section identifies the field that needs attention.
 Selecting another device cancels an active settings transfer before the app
 changes the Bluetooth peripheral.
+
+While the secure BLE link is active, the app supplies the preferred network
+path for ChatESP cloud requests. The app accepts only bounded HTTPS request
+envelopes. It uses an ephemeral URL session, rejects non-HTTPS redirects, and
+follows no more than the device-specified two-redirect limit. It sends bulk
+response data with Core Bluetooth write-without-response flow control. It
+confirms response boundary frames. If this proxy is not ready, the firmware
+uses its configured Wi-Fi path.
 
 If the app lost its local revision record, current firmware can return the
 active revision and fingerprint in a flagged error.

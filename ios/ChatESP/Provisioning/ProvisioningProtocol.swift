@@ -750,3 +750,291 @@ extension Data {
         }
     }
 }
+
+enum PhoneProxyProtocolV1 {
+    static let version: UInt8 = 1
+    static let serviceUUID = "7B2E2100-6F3C-4B8A-9D71-4C4553500001"
+    static let requestUUID = "7B2E2101-6F3C-4B8A-9D71-4C4553500001"
+    static let responseUUID = "7B2E2102-6F3C-4B8A-9D71-4C4553500001"
+    static let commonHeaderSize = 10
+    static let dataHeaderSize = 14
+    static let maximumURLSize = 768
+    static let maximumEnvelopeSize = 1_100_000
+    static let maximumResponseSize = 2_160_000
+
+    enum FrameType: UInt8 {
+        case requestStart = 1
+        case requestData = 2
+        case requestEnd = 3
+        case responseHead = 0x11
+        case responseData = 0x12
+        case responseEnd = 0x13
+        case responseError = 0x14
+    }
+
+    static func commonFrame(type: FrameType, requestID: UInt32) -> Data {
+        var frame = Data("CEPX".utf8)
+        frame.append(version)
+        frame.append(type.rawValue)
+        frame.appendBigEndian(requestID)
+        return frame
+    }
+
+    static func validURL(_ data: Data) -> URL? {
+        guard !data.isEmpty, data.count <= maximumURLSize,
+              data.allSatisfy({ $0 >= 0x20 && $0 != 0x7f }),
+              let text = String(data: data, encoding: .utf8),
+              text.hasPrefix("https://"),
+              let components = URLComponents(string: text),
+              components.scheme == "https",
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil,
+              components.port == nil || components.port == 443,
+              let host = components.host?.lowercased(),
+              !host.isEmpty, host.utf8.count <= 253,
+              host != "localhost", !host.hasSuffix(".local") else {
+            return nil
+        }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard !labels.isEmpty,
+              labels.allSatisfy({ label in
+                  !label.isEmpty && label.utf8.count <= 63 &&
+                      label.first != "-" && label.last != "-" &&
+                      label.utf8.allSatisfy({ byte in
+                          (byte >= 0x30 && byte <= 0x39) ||
+                              (byte >= 0x61 && byte <= 0x7a) ||
+                              byte == 0x2d
+                      })
+              }),
+              host.utf8.contains(where: { byte in
+                  (byte >= 0x61 && byte <= 0x7a) || byte == 0x2d
+              }) else {
+            return nil
+        }
+        return components.url
+    }
+
+    static func validHeaderName(_ data: Data) -> Bool {
+        !data.isEmpty && data.count <= 40 && data.allSatisfy { byte in
+            (byte >= 0x30 && byte <= 0x39) ||
+                (byte >= 0x41 && byte <= 0x5a) ||
+                (byte >= 0x61 && byte <= 0x7a) || byte == 0x2d
+        }
+    }
+
+    static func validHeaderValue(_ data: Data) -> Bool {
+        data.count <= 1_024 && data.allSatisfy {
+            $0 >= 0x20 && $0 != 0x7f
+        }
+    }
+
+    static func responseHead(
+        requestID: UInt32,
+        status: Int,
+        contentLength: Int,
+        contentType: String,
+        date: String
+    ) throws -> Data {
+        guard (100...599).contains(status), contentLength >= 0,
+              let contentTypeData = contentType.data(using: .utf8),
+              let dateData = date.data(using: .utf8),
+              contentTypeData.count <= 95, dateData.count <= 63 else {
+            throw PhoneProxyError.invalidResponse
+        }
+        var frame = commonFrame(type: .responseHead, requestID: requestID)
+        frame.appendBigEndian(UInt16(status))
+        frame.appendBigEndian(UInt64(contentLength))
+        frame.append(UInt8(contentTypeData.count))
+        frame.append(UInt8(dateData.count))
+        frame.append(contentTypeData)
+        frame.append(dateData)
+        return frame
+    }
+
+    static func responseData(
+        requestID: UInt32, offset: Int, bytes: Data
+    ) -> Data {
+        var frame = commonFrame(type: .responseData, requestID: requestID)
+        frame.appendBigEndian(UInt32(offset))
+        frame.append(bytes)
+        return frame
+    }
+
+    static func responseEnd(requestID: UInt32, size: Int) -> Data {
+        var frame = commonFrame(type: .responseEnd, requestID: requestID)
+        frame.appendBigEndian(UInt32(size))
+        return frame
+    }
+
+    static func responseError(requestID: UInt32, code: UInt8) -> Data {
+        var frame = commonFrame(type: .responseError, requestID: requestID)
+        frame.append(code)
+        return frame
+    }
+}
+
+struct PhoneProxyRequest {
+    let requestID: UInt32
+    let request: URLRequest
+    let maximumResponseSize: Int
+    let allowsRedirects: Bool
+    let maximumRedirects: UInt8
+}
+
+enum PhoneProxyError: Error, Equatable {
+    case malformedFrame
+    case invalidRequest
+    case invalidResponse
+    case busy
+}
+
+struct PhoneProxyRequestAssembler {
+    private var requestID: UInt32?
+    private var envelopeSize = 0
+    private var bodySize = 0
+    private var maximumResponseSize = 0
+    private var timeoutMilliseconds: UInt32 = 0
+    private var method: UInt8 = 0
+    private var allowsRedirects = false
+    private var maximumRedirects: UInt8 = 0
+    private var headerCount = 0
+    private var urlSize = 0
+    private var metadataSize = 0
+    private var envelope = Data()
+
+    mutating func reset() {
+        requestID = nil
+        envelopeSize = 0
+        bodySize = 0
+        maximumResponseSize = 0
+        timeoutMilliseconds = 0
+        method = 0
+        allowsRedirects = false
+        maximumRedirects = 0
+        headerCount = 0
+        urlSize = 0
+        metadataSize = 0
+        envelope.removeAll(keepingCapacity: false)
+    }
+
+    mutating func consume(_ frame: Data) throws -> PhoneProxyRequest? {
+        guard frame.count >= PhoneProxyProtocolV1.commonHeaderSize,
+              frame.prefix(4) == Data("CEPX".utf8),
+              frame[4] == PhoneProxyProtocolV1.version,
+              let type = PhoneProxyProtocolV1.FrameType(rawValue: frame[5]) else {
+            throw PhoneProxyError.malformedFrame
+        }
+        let incomingID = frame.readBigEndianUInt32(at: 6)
+        switch type {
+        case .requestStart:
+            guard requestID == nil, incomingID != 0, frame.count == 36 else {
+                throw PhoneProxyError.busy
+            }
+            envelopeSize = Int(frame.readBigEndianUInt32(at: 10))
+            bodySize = Int(frame.readBigEndianUInt32(at: 14))
+            maximumResponseSize = Int(frame.readBigEndianUInt32(at: 18))
+            timeoutMilliseconds = frame.readBigEndianUInt32(at: 22)
+            method = frame[26]
+            allowsRedirects = frame[27] == 1
+            maximumRedirects = frame[28]
+            headerCount = Int(frame[29])
+            urlSize = Int(frame.readBigEndianUInt16(at: 30))
+            metadataSize = Int(frame.readBigEndianUInt32(at: 32))
+            guard envelopeSize > 0,
+                  envelopeSize <= PhoneProxyProtocolV1.maximumEnvelopeSize,
+                  bodySize <= envelopeSize,
+                  metadataSize == envelopeSize - bodySize,
+                  maximumResponseSize > 0,
+                  maximumResponseSize <= PhoneProxyProtocolV1.maximumResponseSize,
+                  timeoutMilliseconds > 0,
+                  method <= 1,
+                  frame[27] <= 1,
+                  maximumRedirects <= 2,
+                  headerCount <= 10,
+                  urlSize > 0,
+                  urlSize <= metadataSize else {
+                reset()
+                throw PhoneProxyError.invalidRequest
+            }
+            requestID = incomingID
+            envelope.reserveCapacity(envelopeSize)
+            return nil
+        case .requestData:
+            guard let requestID, requestID == incomingID,
+                  frame.count > PhoneProxyProtocolV1.dataHeaderSize,
+                  Int(frame.readBigEndianUInt32(at: 10)) == envelope.count,
+                  envelope.count + frame.count - PhoneProxyProtocolV1.dataHeaderSize <= envelopeSize else {
+                reset()
+                throw PhoneProxyError.malformedFrame
+            }
+            envelope.append(frame.dropFirst(PhoneProxyProtocolV1.dataHeaderSize))
+            return nil
+        case .requestEnd:
+            guard let requestID, requestID == incomingID,
+                  frame.count == PhoneProxyProtocolV1.commonHeaderSize,
+                  envelope.count == envelopeSize else {
+                reset()
+                throw PhoneProxyError.malformedFrame
+            }
+            let request = try buildRequest(requestID: requestID)
+            reset()
+            return request
+        default:
+            reset()
+            throw PhoneProxyError.malformedFrame
+        }
+    }
+
+    private func buildRequest(requestID: UInt32) throws -> PhoneProxyRequest {
+        guard let url = PhoneProxyProtocolV1.validURL(
+                envelope.subdata(in: 0..<urlSize)) else {
+            throw PhoneProxyError.invalidRequest
+        }
+        var cursor = urlSize
+        var headers: [(String, String)] = []
+        for _ in 0..<headerCount {
+            guard cursor + 3 <= metadataSize else {
+                throw PhoneProxyError.invalidRequest
+            }
+            let nameSize = Int(envelope[cursor])
+            let valueSize = Int(envelope.readBigEndianUInt16(at: cursor + 1))
+            cursor += 3
+            guard cursor + nameSize + valueSize <= metadataSize else {
+                throw PhoneProxyError.invalidRequest
+            }
+            let nameData = envelope.subdata(in: cursor..<cursor + nameSize)
+            let valueData = envelope.subdata(
+                in: cursor + nameSize..<cursor + nameSize + valueSize)
+            guard PhoneProxyProtocolV1.validHeaderName(nameData),
+                  PhoneProxyProtocolV1.validHeaderValue(valueData),
+                  let name = String(data: nameData, encoding: .utf8),
+                  let value = String(data: valueData, encoding: .utf8) else {
+                throw PhoneProxyError.invalidRequest
+            }
+            headers.append((name, value))
+            cursor += nameSize + valueSize
+        }
+        guard cursor == metadataSize,
+              envelope.count - metadataSize == bodySize else {
+            throw PhoneProxyError.invalidRequest
+        }
+        var request = URLRequest(
+            url: url,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: TimeInterval(timeoutMilliseconds) / 1_000)
+        request.httpMethod = method == 1 ? "POST" : "GET"
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        if bodySize != 0 {
+            request.httpBody = envelope.subdata(in: metadataSize..<envelope.count)
+        }
+        return PhoneProxyRequest(
+            requestID: requestID,
+            request: request,
+            maximumResponseSize: maximumResponseSize,
+            allowsRedirects: allowsRedirects,
+            maximumRedirects: maximumRedirects)
+    }
+}

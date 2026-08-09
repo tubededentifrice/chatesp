@@ -7,6 +7,7 @@ namespace chatesp {
 struct ButtonEdges {
     bool pressed = false;
     bool released = false;
+    bool short_press_confirmed = false;
 };
 
 class ButtonDebouncer {
@@ -32,8 +33,8 @@ public:
         }
 
         stable_pressed_ = candidate_pressed_;
-        return stable_pressed_ ? ButtonEdges{true, false}
-                               : ButtonEdges{false, true};
+        return stable_pressed_ ? ButtonEdges{true, false, false}
+                               : ButtonEdges{false, true, false};
     }
 
 private:

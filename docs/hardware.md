@@ -66,13 +66,23 @@ an edge sample that also contains a USB power-source event.
 ## Power behavior
 
 Before sleep, stop audio, radio work, display updates, touch, and unused
-peripherals. Turn the AMOLED off and request AXP2101 system-off. A PWR press
-then causes a cold boot and a new thread. Measure current on battery hardware
-before making a battery-life claim.
+peripherals. Set AMOLED brightness to zero, and request AXP2101 system-off in
+production. Development soft sleep keeps the CO5300 controller on at zero
+brightness. Repeated display-off and display-on commands can leave this panel
+black even when it accepts the display-on command. A PWR press then causes a
+cold production boot or a development display wake. Measure current on battery
+hardware before making a battery-life claim.
 
 The NimBLE shutdown completion wait has a one-second limit. A stalled shutdown
 must not block a development PWR-button wake or a production system-off
 request.
+
+When the authenticated iPhone phone proxy is ready, a cloud request keeps BLE
+active and does not start Wi-Fi. If that proxy is not ready after a two-second
+limit, the existing Wi-Fi path starts. A normal ChatESP idle sleep stops both
+radios. Phone distance cannot reconnect a device while it is in system-off or
+development soft sleep. A bottom PWR press wakes it, and the saved bond lets the
+app reconnect without a new pairing code.
 
 Clock keeps the AMOLED and BLE on. If local time is not ready, it keeps the
 startup Wi-Fi connection for at most 15 seconds. It stops Wi-Fi when local time
@@ -241,11 +251,11 @@ environment, and build-flag overrides for ChatESP device builds. It must reject 
 first-party eFuse write APIs. There is no user request, environment variable,
 or approval flag that can bypass this rule.
 
-Production BLE settings and BLE bonds use normal plaintext NVS. This is less
-secure than eFuse-backed encrypted NVS, but it is reversible. An attacker with
-physical flash access can read Wi-Fi and provider credentials. BLE transfer
-still requires an authenticated encrypted connection, and iOS secrets stay in
-Keychain.
+Production BLE settings and all BLE bonds use normal plaintext NVS. This is
+less secure than eFuse-backed encrypted NVS, but it is reversible. An attacker
+with physical flash access can read Wi-Fi and provider credentials. BLE
+transfer still requires an authenticated encrypted connection, and iOS secrets
+stay in Keychain.
 Saved memories also use plaintext NVS. Development and production use separate
 memory namespaces. Each update writes and reads back one complete inactive
 record before it changes the active slot. A person with physical flash access

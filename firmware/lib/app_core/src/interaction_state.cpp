@@ -35,7 +35,8 @@ void InteractionStateMachine::wake_button_down(std::uint32_t now_ms) {
     last_activity_at_ms_ = now_ms;
 }
 
-void InteractionStateMachine::button_up(std::uint32_t now_ms) {
+void InteractionStateMachine::button_up(
+    std::uint32_t now_ms, bool short_press_confirmed) {
     if (!button_down_) {
         return;
     }
@@ -48,7 +49,9 @@ void InteractionStateMachine::button_up(std::uint32_t now_ms) {
         return;
     }
     if (state_ == InteractionState::idle) {
-        if (!was_wake_press) {
+        if (!was_wake_press && short_press_confirmed &&
+            elapsed(now_ms, button_down_at_ms_) >=
+                config_.sleep_press_min_ms) {
             set_state(InteractionState::sleep_pending, now_ms);
         }
     }
