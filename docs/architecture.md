@@ -147,7 +147,10 @@ Development sleep keeps the CO5300 initialized and covers the UI with one full
 black frame. It does not send brightness zero. A successful CO5300 command does
 not prove that pixels are visible after a zero-brightness interval. Production
 uses brightness zero only when its cancel window has ended and system-off is
-the next state.
+the next state. The system-off request enables the AXP2101 internal discharge
+path for each switched DCDC and LDO output. Thus, stored charge or an IO path
+has less time to keep a peripheral partly powered after the PMIC turns the rail
+off.
 
 After BLE stops for a cloud request, the runtime reserves the controller restart
 block before TLS starts. The request can use the rest of the released Bluetooth
@@ -202,6 +205,12 @@ ChatESP mode uses a 30-second idle timer in development and production. Clock
 mode resets that idle gate and stays on. A short PWR-button press can still
 request sleep in either mode. Sleep stops BLE and Wi-Fi. The app reports the
 device as asleep or unavailable while it runs bounded reconnect attempts.
+Battery-powered production normally stops when the AXP2101 accepts system-off.
+USB can keep the ESP32 powered after that request. In this condition,
+production stays in the completed sleep state and repeats the system-off
+request once per second. A bottom PWR press cancels this state and wakes the
+app. If USB is removed, the next request turns the main rails off. Production
+does not restore the full runtime only because USB held the power rail on.
 
 Each turn first uses a short required-tool route. The route is direct answer,
 web search, image search, restricted Python, memory management, or one

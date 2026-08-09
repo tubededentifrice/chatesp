@@ -25,6 +25,7 @@ constexpr std::uint8_t kAxp2101IrqEnable2 = 0x41;
 constexpr std::uint8_t kAxp2101IrqStatus2 = 0x49;
 constexpr std::uint8_t kAxp2101BatteryPercent = 0xA4;
 constexpr std::uint8_t kAxp2101BatteryPresent = 1U << 3;
+constexpr std::uint8_t kAxp2101InternalOffDischarge = 1U << 5;
 constexpr std::uint8_t kAxp2101SoftwareOff = 1U << 0;
 constexpr std::uint8_t kAxp2101LegacyPowerKeyShutdown = 1U << 2;
 constexpr std::uint8_t kAxp2101LongHoldShutdown = 1U << 1;
@@ -422,8 +423,14 @@ esp_err_t power_off() {
         kTag,
         "AXP2101 config read failed");
     ESP_LOGI(kTag, "Requesting AXP2101 system off");
+    // Discharge each switched DCDC/LDO output after it turns off. This drains
+    // stored rail charge while the PMIC completes the system-off sequence.
+    const std::uint8_t power_off_config =
+        (common_config & static_cast<std::uint8_t>(
+             ~kAxp2101LegacyPowerKeyShutdown)) |
+        kAxp2101InternalOffDischarge | kAxp2101SoftwareOff;
     return write_axp2101(
-        kAxp2101CommonConfig, common_config | kAxp2101SoftwareOff);
+        kAxp2101CommonConfig, power_off_config);
 }
 
 }  // namespace chatesp::power

@@ -221,7 +221,10 @@ uv run --locked python tools/pio.py run -e watch_prod
 ```
 
 Both profiles keep BLE bonds. Production also enables persistent settings and
-AXP2101 system-off. Every device profile sets
+AXP2101 system-off. It turns off the main PMIC rails and keeps the bottom PWR
+button as the wake control. If USB keeps the controller powered after an off
+request, production stays in the completed sleep state and turns off when USB
+is removed. Every device profile sets
 `CHATESP_ALLOW_IRREVERSIBLE_DEVICE_WRITES=0`. The build stops if this lock is
 missing or changed.
 

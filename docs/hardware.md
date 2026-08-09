@@ -74,9 +74,20 @@ CO5300 initialized at its current brightness. The panel can accept a successful
 brightness or display-on command after brightness zero while its pixels stay
 black. Therefore, an in-session wake must not use this zero-to-nonzero path.
 Production sets brightness to zero only after the sleep cancel window, then it
-requests AXP2101 system-off. A PWR press causes a cold production boot or
-removes the development black frame. Measure current on battery hardware before
-making a battery-life claim.
+enables the AXP2101 internal output discharge and requests system-off. The PMIC
+turns off all switched outputs except RTCLDO. Its data sheet specifies 40
+microamps as typical battery-only system-off consumption, with only RTCLDO
+active. This value does not include the board RTC, battery protection, battery
+self-discharge, or board leakage. Measure complete board current on battery
+hardware before a battery-life claim.
+
+USB can keep the ESP32 powered after the PMIC accepts system-off. Production
+must stay in its completed sleep state and repeat the request at a one-second
+interval. It must not restore the display, radios, or normal runtime only
+because USB kept power present. A bottom PWR press cancels this state. USB
+removal lets the next request turn the main rails off. A PWR press causes a cold
+production boot or removes the development black frame. The top BOOT button is
+not a wake source. This keeps the same short-press and hold patterns.
 
 The NimBLE shutdown completion wait has a one-second limit. A stalled shutdown
 must not block a development PWR-button wake or a production system-off
@@ -227,6 +238,11 @@ The connected V2 board must pass these checks for this control change:
 - development model power-off enters soft sleep and a PWR press wakes it;
 - production model power-off requests AXP2101 system-off and a PWR press causes
   a cold start.
+- when production requests sleep with USB connected, the screen and radios
+  stay off, a bottom PWR press wakes the app, and USB removal causes system-off
+  in no more than one retry interval;
+- production system-off discharges the switched PMIC outputs and does not leave
+  the display, touch, codec, amplifier, radio, or ESP32 rail powered;
 
 The full-screen image path must pass these checks on the V2 AMOLED:
 
@@ -318,6 +334,9 @@ visible splash or ready view.
   reset, and with NVS write failure injection.
 - Verify model power-off confirmation, cancellation, production current, and
   bottom-PWR wake.
+- Measure production system-off current with USB disconnected. Record the
+  battery voltage, stable current after rail discharge, and wake result. Do not
+  use the AXP2101 40-microamp data-sheet value as a board measurement.
 - Measure ChatESP idle, continuous Clock, recording, Wi-Fi, playback, and
   deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,

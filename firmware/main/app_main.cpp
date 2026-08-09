@@ -23,6 +23,8 @@ constexpr char kTag[] = "chatesp";
 #endif
 
 constexpr bool kDevelopmentMode = CHATESP_DEVELOPMENT_MODE != 0;
+constexpr std::uint32_t kSystemOffRetryMs = 1'000;
+constexpr std::uint32_t kSystemOffPollMs = 50;
 
 std::uint32_t monotonic_ms() {
     return static_cast<std::uint32_t>(esp_timer_get_time() / 1'000ULL);
@@ -38,6 +40,44 @@ void show_start_error(const char *message) {
 void request_failure_sleep() {
     (void)chatesp::ui::sleep(false);
     (void)chatesp::power::power_off();
+}
+
+void wait_for_system_off_or_wake(chatesp::VoiceRuntime &runtime) {
+    // A connected USB source can keep the ESP32 powered after the AXP2101
+    // accepts system-off. Keep the production runtime latched in its cleaned
+    // sleep state. A bottom-button press still wakes at once. Otherwise,
+    // repeat the request so USB removal cannot leave the device awake.
+    std::uint32_t last_request_at_ms = monotonic_ms();
+    bool poll_error_reported = false;
+    while (runtime.poweroff_ready()) {
+        chatesp::ButtonEdges edges;
+        const std::uint32_t now_ms = monotonic_ms();
+        const esp_err_t poll_result = chatesp::power::poll(now_ms, &edges);
+        if (poll_result == ESP_OK) {
+            poll_error_reported = false;
+            if (edges.pressed) {
+                runtime.action_button_edge(true, now_ms);
+            }
+            if (edges.released) {
+                runtime.action_button_edge(
+                    false, now_ms, edges.short_press_confirmed);
+            }
+        } else if (!poll_error_reported) {
+            ESP_LOGE(kTag, "Power button read failed during system-off wait");
+            poll_error_reported = true;
+        }
+        if (!runtime.poweroff_ready()) {
+            return;
+        }
+        if (now_ms - last_request_at_ms >= kSystemOffRetryMs) {
+            last_request_at_ms = now_ms;
+            const esp_err_t result = chatesp::power::power_off();
+            if (result != ESP_OK) {
+                ESP_LOGE(kTag, "System-off retry failed");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(kSystemOffPollMs));
+    }
 }
 
 }  // namespace
@@ -193,33 +233,9 @@ extern "C" void app_main() {
                 ESP_LOGE(kTag, "System off failed");
                 runtime.poweroff_failed();
             } else {
-                // If AXP2101 system-off succeeds, execution stops. USB power
-                // can keep the MCU alive, so recover instead of becoming inert.
-                const std::uint32_t off_requested_at_ms = monotonic_ms();
-                while (monotonic_ms() - off_requested_at_ms < 1'000) {
-                    chatesp::ButtonEdges recovery_edges;
-                    const std::uint32_t recovery_now_ms = monotonic_ms();
-                    if (chatesp::power::poll(
-                            recovery_now_ms, &recovery_edges) == ESP_OK) {
-                        if (recovery_edges.pressed) {
-                            runtime.action_button_edge(
-                                true, recovery_now_ms);
-                        }
-                        if (recovery_edges.released) {
-                            runtime.action_button_edge(
-                                false, recovery_now_ms,
-                                recovery_edges.short_press_confirmed);
-                        }
-                    }
-                    if (!runtime.poweroff_ready()) {
-                        break;
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(15));
-                }
-                if (runtime.poweroff_ready()) {
-                    ESP_LOGE(kTag, "System off did not remove power");
-                    runtime.poweroff_failed();
-                }
+                // Battery power normally ends execution in power_off(). USB
+                // can keep the MCU alive after the PMIC accepts the request.
+                wait_for_system_off_or_wake(runtime);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(15));

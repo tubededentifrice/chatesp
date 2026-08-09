@@ -123,6 +123,32 @@ class PlatformioWrapperTests(unittest.TestCase):
         self.assertIn("repair_legacy_power_key_policy", source)
         self.assertIn("set_hardware_hold_shutdown(!pressed)", source)
 
+    def test_production_system_off_discharges_rails_and_stays_latched(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        power_source = (
+            root / "firmware" / "main" / "power_control.cpp"
+        ).read_text(encoding="utf-8")
+        app_source = (
+            root / "firmware" / "main" / "app_main.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("kAxp2101InternalOffDischarge = 1U << 5", power_source)
+        self.assertIn(
+            "kAxp2101InternalOffDischarge | kAxp2101SoftwareOff",
+            power_source,
+        )
+        wait_start = app_source.index("void wait_for_system_off_or_wake(")
+        wait_end = app_source.index("}  // namespace", wait_start)
+        wait_source = app_source[wait_start:wait_end]
+        self.assertIn("while (runtime.poweroff_ready())", wait_source)
+        self.assertIn("now_ms - last_request_at_ms", wait_source)
+        self.assertIn("chatesp::power::power_off()", wait_source)
+        self.assertIn("runtime.action_button_edge(true, now_ms)", wait_source)
+        self.assertNotIn("runtime.poweroff_failed()", wait_source)
+        self.assertNotIn("System off did not remove power", app_source)
+
     def test_development_sleep_keeps_the_panel_ready(self) -> None:
         root = Path(__file__).resolve().parents[1]
         runtime = (
