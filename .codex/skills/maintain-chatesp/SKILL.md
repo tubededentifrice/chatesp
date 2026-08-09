@@ -42,7 +42,8 @@ documentation contracts consistent.
 - Keep optional network, search, image, touch, IMU, RTC, and iOS failures from
   blocking sleep or a later voice interaction.
 - Use only a short top BOOT-button press to change ChatESP and Clock modes.
-  Keep long presses and sleeping-state presses unassigned.
+  Keep BOOT-only long presses and sleeping-state presses unassigned. A
+  five-second PWR-and-BOOT hold restarts the device.
 - Use authenticated encrypted BLE and Keychain for secrets. Production uses
   plaintext NVS because the project forbids the eFuse write that encrypted NVS
   can need. Do not describe device storage as encrypted.

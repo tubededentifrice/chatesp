@@ -193,6 +193,7 @@ extern "C" void app_main() {
         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
 
     chatesp::ShortPressGesture mode_button;
+    chatesp::RestartChordGesture restart_chord;
     bool mode_button_error_reported = false;
     bool power_poll_error_reported = false;
     while (true) {
@@ -246,6 +247,14 @@ extern "C" void app_main() {
             mode_button_error_reported = true;
             mode_button.cancel();
             runtime.mode_button_edge(false);
+        }
+        if (restart_chord.update(
+                chatesp::power::action_button_is_pressed(),
+                chatesp::power::mode_button_is_pressed(), now_ms)) {
+            chatesp::crash_diagnostics::mark(
+                chatesp::runtime::CrashEvent::restart_button_chord);
+            ESP_LOGI(kTag, "PWR and BOOT restart chord accepted");
+            esp_restart();
         }
         if (runtime.poweroff_ready()) {
             if (chatesp::power::action_button_is_pressed()) {

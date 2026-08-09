@@ -605,6 +605,30 @@ void test_mode_button_accepts_only_a_short_complete_press() {
     TEST_ASSERT_FALSE(button.release(1'010));
 }
 
+void test_restart_chord_requires_both_buttons_for_five_seconds() {
+    chatesp::RestartChordGesture chord;
+    TEST_ASSERT_FALSE(chord.update(true, false, 100));
+    TEST_ASSERT_FALSE(chord.update(true, true, 200));
+    TEST_ASSERT_FALSE(chord.update(true, true, 5'199));
+    TEST_ASSERT_TRUE(chord.update(true, true, 5'200));
+    TEST_ASSERT_FALSE(chord.update(true, true, 6'000));
+
+    TEST_ASSERT_FALSE(chord.update(true, false, 6'100));
+    TEST_ASSERT_FALSE(chord.update(true, true, 6'200));
+    TEST_ASSERT_FALSE(chord.update(false, true, 10'000));
+    TEST_ASSERT_FALSE(chord.update(true, true, 10'100));
+    TEST_ASSERT_TRUE(chord.update(true, true, 15'100));
+}
+
+void test_restart_chord_handles_millisecond_wrap() {
+    chatesp::RestartChordGesture chord;
+    const std::uint32_t start =
+        std::numeric_limits<std::uint32_t>::max() - 999;
+    TEST_ASSERT_FALSE(chord.update(true, true, start));
+    TEST_ASSERT_FALSE(chord.update(true, true, 3'999));
+    TEST_ASSERT_TRUE(chord.update(true, true, 4'000));
+}
+
 void test_clock_time_acquisition_has_a_bounded_network_window() {
     TEST_ASSERT_FALSE(chatesp::clock_network_shutdown_due(
         false, true, 0, 15'000));
@@ -736,6 +760,8 @@ int main(int, char **) {
     RUN_TEST(test_quick_controls_snap_to_valid_five_percent_steps);
     RUN_TEST(test_quick_controls_defer_flash_work_until_input_is_idle);
     RUN_TEST(test_mode_button_accepts_only_a_short_complete_press);
+    RUN_TEST(test_restart_chord_requires_both_buttons_for_five_seconds);
+    RUN_TEST(test_restart_chord_handles_millisecond_wrap);
     RUN_TEST(test_clock_time_acquisition_has_a_bounded_network_window);
     RUN_TEST(test_clock_path_changes_one_pixel_at_a_time);
     RUN_TEST(test_clock_configuration_and_time_text_are_bounded);

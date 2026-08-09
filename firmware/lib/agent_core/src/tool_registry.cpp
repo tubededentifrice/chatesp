@@ -1194,5 +1194,36 @@ Error PowerOffTool::execute(
         : Error::limit_exceeded;
 }
 
+const char *RestartDeviceTool::name() const { return "restart_device"; }
+
+const char *RestartDeviceTool::description() const {
+    return "Schedule a software restart only when the user explicitly asks "
+           "for it now.";
+}
+
+const char *RestartDeviceTool::parameters_schema() const {
+    return empty_object_schema;
+}
+
+Error RestartDeviceTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    const Error parse_error = parse_empty_object(arguments, size);
+    if (parse_error != Error::none) {
+        return parse_error;
+    }
+    if (cancellation.cancelled()) {
+        return Error::cancelled;
+    }
+    const Error error = provider_.schedule_restart();
+    if (error != Error::none) {
+        return error;
+    }
+    return result.append("{\"scheduled\":true,\"action\":\"restart\"}")
+        ? Error::none
+        : Error::limit_exceeded;
+}
+
 }  // namespace agent
 }  // namespace chatesp

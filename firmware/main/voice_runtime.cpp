@@ -429,6 +429,7 @@ public:
           brightness_tool_(device_control_),
           volume_tool_(device_control_),
           power_off_tool_(device_control_),
+          restart_device_tool_(device_control_),
           remember_memory_tool_(memory_store_),
           forget_memory_tool_(memory_store_),
           clear_memories_tool_(memory_store_),
@@ -450,6 +451,7 @@ public:
             tools_.add(brightness_tool_) == agent::Error::none &&
             tools_.add(volume_tool_) == agent::Error::none &&
             tools_.add(power_off_tool_) == agent::Error::none &&
+            tools_.add(restart_device_tool_) == agent::Error::none &&
             tools_.add(remember_memory_tool_) == agent::Error::none &&
             tools_.add(forget_memory_tool_) == agent::Error::none &&
             tools_.add(clear_memories_tool_) == agent::Error::none &&
@@ -634,7 +636,7 @@ public:
         }
         button_pressed_.store(pressed, std::memory_order_release);
         if (pressed) {
-            device_control_.cancel_power_off();
+            device_control_.cancel_pending_action();
             voice_priority_.store(true, std::memory_order_release);
             cancellation_.cancel();
             context_cancellation_.cancel();
@@ -2137,6 +2139,11 @@ private:
                 finish_model_power_off();
                 return;
             }
+            if (device_control_.restart_pending() &&
+                !cancellation_.cancelled()) {
+                finish_model_restart();
+                return;
+            }
             if (error == agent::Error::cancelled ||
                 cancellation_.cancelled()) {
                 cancel_current();
@@ -2168,6 +2175,11 @@ private:
             if (device_control_.power_off_pending() &&
                 !cancellation_.cancelled()) {
                 finish_model_power_off();
+                return;
+            }
+            if (device_control_.restart_pending() &&
+                !cancellation_.cancelled()) {
+                finish_model_restart();
                 return;
             }
             fail("THE DEVICE COULD NOT QUEUE THE COMPLETE ANSWER");
@@ -2209,6 +2221,10 @@ private:
 
         if (device_control_.power_off_pending()) {
             finish_model_power_off();
+            return;
+        }
+        if (device_control_.restart_pending()) {
+            finish_model_restart();
             return;
         }
 
@@ -2284,6 +2300,18 @@ private:
         ESP_LOGI(kTag, "The model scheduled device power-off");
     }
 
+    [[noreturn]] void finish_model_restart() {
+        crash_diagnostics::mark(
+            runtime::CrashEvent::restart_model_request);
+        timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
+        log_turn_timing();
+        voice_priority_.store(false, std::memory_order_release);
+        ESP_LOGI(kTag, "The model scheduled a device restart");
+        vTaskDelay(pdMS_TO_TICKS(50));
+        esp_restart();
+        __builtin_unreachable();
+    }
+
     void finish_with_error(agent::Error error) {
         if (error == agent::Error::cancelled || cancellation_.cancelled()) {
             cancel_current();
@@ -2293,7 +2321,7 @@ private:
     }
 
     void cancel_current() {
-        device_control_.cancel_power_off();
+        device_control_.cancel_pending_action();
         memory_store_.clear_turn_state();
         capture_.discard();
         speech_channel_.cancel();
@@ -2311,7 +2339,7 @@ private:
     }
 
     void fail(const char *message) {
-        device_control_.cancel_power_off();
+        device_control_.cancel_pending_action();
         memory_store_.clear_turn_state();
         capture_.discard();
         speech_channel_.cancel();
@@ -2376,7 +2404,7 @@ private:
     }
 
     void enter_sleep() {
-        device_control_.cancel_power_off();
+        device_control_.cancel_pending_action();
         memory_store_.clear_turn_state();
         display_available_.store(false, std::memory_order_release);
         app_mode_.store(AppMode::chat, std::memory_order_release);
@@ -2596,7 +2624,7 @@ private:
 
     void recover_poweroff(std::uint32_t now_ms) {
         low_battery_poweroff_pending_ = false;
-        device_control_.cancel_power_off();
+        device_control_.cancel_pending_action();
         display_available_.store(true, std::memory_order_release);
         display_sleep_pending_ = false;
         ensure_ble_started();
@@ -2640,6 +2668,7 @@ private:
     agent::SetBrightnessTool brightness_tool_;
     agent::SetVolumeTool volume_tool_;
     agent::PowerOffTool power_off_tool_;
+    agent::RestartDeviceTool restart_device_tool_;
     agent::RememberMemoryTool remember_memory_tool_;
     agent::ForgetMemoryTool forget_memory_tool_;
     agent::ClearMemoriesTool clear_memories_tool_;

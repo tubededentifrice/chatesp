@@ -221,6 +221,11 @@ public:
         return failure;
     }
 
+    Error schedule_restart() override {
+        ++restart_calls;
+        return failure;
+    }
+
     DeviceStatus status_value{};
     PowerOffMode power_mode = PowerOffMode::system_off;
     Error failure = Error::none;
@@ -228,6 +233,7 @@ public:
     int brightness_calls = 0;
     int volume_calls = 0;
     int power_off_calls = 0;
+    int restart_calls = 0;
     std::uint8_t last_brightness = 0;
     std::uint8_t last_volume = 0;
     bool persist_changes = true;
@@ -402,6 +408,9 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(
         std::strstr(routing_prompt(), "do not call run_python again"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "explicitly asks"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "restart_device"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(answer_prompt, "If a restart is scheduled"));
     TEST_ASSERT_NULL(std::strstr(system_prompt, "Never save a password"));
     TEST_ASSERT_NULL(std::strstr(routing_prompt(), "Never save secrets"));
     char memory_count[48]{};
@@ -995,6 +1004,27 @@ void test_power_off_tool_is_strict_and_cancellable() {
     TEST_ASSERT_EQUAL_INT(1, provider.power_off_calls);
 }
 
+void test_restart_device_tool_is_strict_and_cancellable() {
+    TestDeviceControl provider;
+    RestartDeviceTool tool(provider);
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+
+    assert_error(
+        Error::none, tool.execute("{}", 2, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.restart_calls);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"scheduled\":true,\"action\":\"restart\"}",
+        result.c_str());
+    assert_error(
+        Error::invalid_argument,
+        tool.execute("{\"delay\":1}", 11, result, cancellation));
+    cancellation.value = true;
+    assert_error(
+        Error::cancelled, tool.execute("{}", 2, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.restart_calls);
+}
+
 void test_python_tool_returns_output_and_one_plot() {
     TestPythonExecution provider;
     provider.next_execution.output.assign("42\n");
@@ -1124,6 +1154,7 @@ void test_registry_holds_search_and_device_tools() {
     SetBrightnessTool brightness(device_provider);
     SetVolumeTool volume(device_provider);
     PowerOffTool power_off(device_provider);
+    RestartDeviceTool restart(device_provider);
     RunPythonTool python(python_provider);
     RememberMemoryTool remember(memory_provider);
     ForgetMemoryTool forget(memory_provider);
@@ -1137,13 +1168,14 @@ void test_registry_holds_search_and_device_tools() {
     assert_error(Error::none, registry.add(brightness));
     assert_error(Error::none, registry.add(volume));
     assert_error(Error::none, registry.add(power_off));
+    assert_error(Error::none, registry.add(restart));
     assert_error(Error::none, registry.add(python));
     assert_error(Error::none, registry.add(remember));
     assert_error(Error::none, registry.add(forget));
     assert_error(Error::none, registry.add(clear));
     assert_error(Error::none, registry.add(compact));
-    TEST_ASSERT_EQUAL_UINT32(11, registry.size());
-    TEST_ASSERT_EQUAL_UINT32(11, Limits::max_tool_count);
+    TEST_ASSERT_EQUAL_UINT32(12, registry.size());
+    TEST_ASSERT_EQUAL_UINT32(12, Limits::max_tool_count);
 }
 
 void test_memory_tool_text_uses_configured_limits() {
@@ -1977,6 +2009,7 @@ int main(int, char **) {
     RUN_TEST(test_device_status_tool_returns_bounded_status);
     RUN_TEST(test_device_setting_tools_validate_and_report_persistence);
     RUN_TEST(test_power_off_tool_is_strict_and_cancellable);
+    RUN_TEST(test_restart_device_tool_is_strict_and_cancellable);
     RUN_TEST(test_python_tool_returns_output_and_one_plot);
     RUN_TEST(test_python_tool_reports_limits_and_validates_exact_input);
     RUN_TEST(test_python_tool_bounds_escaped_output_and_arguments);

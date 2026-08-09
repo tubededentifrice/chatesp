@@ -37,7 +37,9 @@ static constexpr char system_prompt[] =
     "before a relative brightness or volume "
     "change. Power off only when the user explicitly asks to turn this device "
     "off now. Do not infer power-off from a greeting, farewell, hypothetical "
-    "question, or uncertain transcript.";
+    "question, or uncertain transcript. Restart only when the user explicitly "
+    "asks to restart this device now. Do not infer a restart from a greeting, "
+    "farewell, hypothetical question, or uncertain transcript.";
 
 inline const char *routing_prompt() {
     static const std::array<char, 2'048> prompt = [] {
@@ -69,6 +71,9 @@ inline const char *routing_prompt() {
             "set_volume only when the user clearly asks for that change. Call "
             "power_off only when the user explicitly asks to turn this device "
             "off now. Do not infer power-off from a greeting, farewell, "
+            "hypothetical question, or uncertain transcript. Call "
+            "restart_device only when the user explicitly asks to restart this "
+            "device now. Do not infer a restart from a greeting, farewell, "
             "hypothetical question, or uncertain transcript. Return one tool "
             "call only. Do not answer the user and do not expose reasoning.",
             Limits::max_memory_facts, Limits::max_memory_fact_bytes,
@@ -97,6 +102,7 @@ static constexpr char answer_prompt[] =
     "true, state briefly that the plot is displayed. If power-off is scheduled, "
     "give one short confirmation and no other content. If the user asks how "
     "to turn it on again, include that one bottom PWR-button press does this. "
+    "If a restart is scheduled, give one short confirmation and no other content. "
     "If a device change was not persistent, say that the change is temporary. "
     "If a memory result reports storage_failure, say that the requested "
     "memory change was not saved. If compacted is true, say briefly that the "

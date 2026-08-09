@@ -9,6 +9,12 @@
 
 namespace chatesp {
 
+enum class PendingDeviceAction : std::uint8_t {
+    none,
+    power_off,
+    restart,
+};
+
 class DeviceControl final : public agent::DeviceControlProvider {
 public:
     DeviceControl(
@@ -22,6 +28,7 @@ public:
     agent::Error set_volume(
         std::uint8_t percent, bool &persisted) override;
     agent::Error schedule_power_off(agent::PowerOffMode &mode) override;
+    agent::Error schedule_restart() override;
 
     // Apply touch-control previews without a flash write. Persist once after
     // the user releases the active control.
@@ -36,10 +43,16 @@ public:
         return volume_percent_.load(std::memory_order_acquire);
     }
     [[nodiscard]] bool power_off_pending() const {
-        return power_off_pending_.load(std::memory_order_acquire);
+        return pending_action_.load(std::memory_order_acquire) ==
+            PendingDeviceAction::power_off;
     }
-    void cancel_power_off() {
-        power_off_pending_.store(false, std::memory_order_release);
+    [[nodiscard]] bool restart_pending() const {
+        return pending_action_.load(std::memory_order_acquire) ==
+            PendingDeviceAction::restart;
+    }
+    void cancel_pending_action() {
+        pending_action_.store(
+            PendingDeviceAction::none, std::memory_order_release);
     }
 
 private:
@@ -49,7 +62,8 @@ private:
     std::atomic<std::uint8_t> brightness_percent_;
     std::atomic<std::uint8_t> volume_percent_;
     std::atomic<bool> values_persisted_;
-    std::atomic<bool> power_off_pending_{false};
+    std::atomic<PendingDeviceAction> pending_action_{
+        PendingDeviceAction::none};
     bool development_mode_ = false;
 };
 

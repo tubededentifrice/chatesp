@@ -112,6 +112,8 @@ const char *event_name(runtime::CrashEvent event) {
             return "phone_proxy_grace_begin";
         case Event::phone_proxy_ready: return "phone_proxy_ready";
         case Event::phone_proxy_fallback: return "phone_proxy_fallback";
+        case Event::restart_model_request: return "restart_model_request";
+        case Event::restart_button_chord: return "restart_button_chord";
     }
     return "unknown";
 }

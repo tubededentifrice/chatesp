@@ -32,7 +32,7 @@ ChatESP.*
   sentence starts speech early. One second request contains the complete
   remaining spoken answer.
 - **Useful tools:** Search the web, find and show images, run bounded
-  calculations, draw line plots, and control the device by voice.
+  calculations, draw line plots, and control or restart the device by voice.
 - **Short follow-up chat:** Continue the same conversation for 30 seconds. The
   device then clears the thread and sleeps.
 - **Travel Clock:** Use the large AMOLED as a landscape 24-hour clock with a
@@ -75,7 +75,8 @@ photos.*
 
 A short top-button press changes between ChatESP and Clock. A short PWR-button
 press without a recording requests sleep. Pull down from the top edge for the
-brightness and volume controls.
+brightness and volume controls. Hold PWR and BOOT together for five seconds to
+restart the device.
 
 ## Hardware
 

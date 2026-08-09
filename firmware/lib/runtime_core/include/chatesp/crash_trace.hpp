@@ -77,6 +77,8 @@ enum class CrashEvent : std::uint16_t {
     phone_proxy_grace_begin,
     phone_proxy_ready,
     phone_proxy_fallback,
+    restart_model_request,
+    restart_button_chord,
 };
 
 constexpr std::size_t kCrashTraceBootCount = 3;

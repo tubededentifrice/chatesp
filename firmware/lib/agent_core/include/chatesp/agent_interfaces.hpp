@@ -24,6 +24,7 @@ public:
     virtual Error set_volume(
         std::uint8_t percent, bool &persisted) = 0;
     virtual Error schedule_power_off(PowerOffMode &mode) = 0;
+    virtual Error schedule_restart() = 0;
 };
 
 class MemoryControlProvider {

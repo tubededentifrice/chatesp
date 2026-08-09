@@ -56,9 +56,15 @@ is pressed. This lets a recording continue for more than six seconds. It
 restores hardware long-hold shutdown when the button is released and at each
 idle start. The top BOOT button is active-low GPIO0. After boot, a debounced
 press from 30 through 700 ms changes between ChatESP and Clock. A shorter
-electrical pulse or a longer press has no app action. The button is not a sleep
-wake source. Its boot-strapping function stays available for firmware
-recovery. Firmware uses the EXIO4 level only to detect a held key at start.
+electrical pulse or a BOOT-only longer press has no app action. The button is
+not a sleep wake source. Its boot-strapping function stays available for
+firmware recovery. Firmware uses the EXIO4 level only to detect a held key at
+start.
+Holding PWR and BOOT together for five seconds calls the ESP software-restart
+path. The timer starts only when both debounced buttons are down. Releasing
+either button cancels and resets the timer. A PWR-only hold keeps its recording
+action. A BOOT-only long press stays unassigned. The recovery check runs in the
+main button poll and does not need the display, agent, or network.
 It rejects that level when the PMU start status contains a completed release or
 short-press event. This is necessary because EXIO4 can stay active after a
 battery-powered release. During operation, it uses AXP2101 PWRON edge events.
@@ -141,7 +147,8 @@ recording at the normal threshold. ChatESP requests sleep after 30 seconds
 without input. Only a short top BOOT-button press enters Clock.
 
 The model can request device status, set display brightness from 5 through 100
-percent, set playback volume from 0 through 100 percent, and request power-off.
+percent, set playback volume from 0 through 100 percent, request power-off, and
+request a software restart.
 The user can also open a top touch panel and change brightness or volume in
 five-percent steps. The panel follows a downward finger movement. A press or a
 drag in the 352-by-64-pixel invisible row around either track sets its value.
@@ -157,6 +164,12 @@ power-off first completes a short spoken confirmation. Production then uses the
 same system-off cleanup as the PWR button and inactivity timer. One bottom PWR
 press starts the board again. Development firmware uses soft sleep so that USB
 upload stays available; one bottom PWR press wakes it.
+
+A model restart first completes a short spoken confirmation and then calls the
+ESP software-restart path. It keeps saved settings, memories, and BLE bonds. A
+new PWR-button action cancels the pending restart. The call does not depend on
+the display task, so it can recover the runtime when the AMOLED stays black but
+voice input and speech output still work.
 
 The connected V2 board must pass these checks for this control change:
 
@@ -202,6 +215,11 @@ The connected V2 board must pass these checks for this control change:
 - an electrical top-button pulse shorter than 30 ms does not change mode;
 - a long top-button press and a top-button press during development soft sleep
   do not change application state;
+- holding PWR and BOOT together for less than five seconds does not restart;
+- holding PWR and BOOT together for five seconds causes one software restart;
+- releasing either button resets the restart timer;
+- the five-second restart button combination works when the AMOLED stays black
+  but the main button poll still runs;
 - Clock rotates 90 degrees counterclockwise, has the USB port at the bottom,
   and maps the touch control panel to that orientation;
 - a BLE pairing code uses the portrait ChatESP orientation with the buttons on
@@ -283,6 +301,12 @@ The connected V2 board must pass these checks for this control change:
 - a farewell, a hypothetical statement, or an uncertain transcript does not
   schedule power-off;
 - a new PWR-button action cancels a pending model power-off;
+- an explicit model restart gives one short confirmation and then starts the
+  normal boot splash;
+- a farewell, a hypothetical statement, or an uncertain transcript does not
+  schedule a restart;
+- a new PWR-button action cancels a pending model restart;
+- a model restart keeps settings, memories, and BLE bonds;
 - development model power-off enters soft sleep and a PWR press wakes it;
 - production model power-off requests AXP2101 system-off and a PWR press causes
   a cold start.
@@ -355,8 +379,9 @@ visible splash or ready view.
 ## Physical acceptance gates
 
 - Identify the connected board revision.
-- Verify both buttons, short and long top-button presses, sleeping-state top
-  input, and the selected wake source.
+- Verify both buttons, short and long top-button presses, the five-second
+  restart button combination, sleeping-state top input, and the selected wake
+  source.
 - Verify AMOLED black level, both mode rotations, rounded Clock rendering,
   rotated touch mapping, full-screen image, and full-screen Python plot.
 - Record and replay speech through the ES8311 path without clipping.

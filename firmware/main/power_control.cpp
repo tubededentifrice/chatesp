@@ -53,6 +53,7 @@ esp_io_expander_handle_t io_expander = nullptr;
 i2c_master_dev_handle_t axp2101 = nullptr;
 bool initialized = false;
 bool mode_button_initialized = false;
+bool mode_button_stably_pressed = false;
 bool hardware_hold_shutdown_suppressed = false;
 bool action_button_stably_pressed = false;
 bool hold_policy_error_reported = false;
@@ -320,6 +321,7 @@ esp_err_t initialize() {
         bool mode_pressed = false;
         if (bsp_mode_button_is_pressed(&mode_pressed) == ESP_OK) {
             mode_button.reset(mode_pressed, monotonic_ms());
+            mode_button_stably_pressed = mode_pressed;
             mode_button_initialized = true;
         }
     }
@@ -423,11 +425,21 @@ esp_err_t poll_mode_button(std::uint32_t now_ms, ButtonEdges *edges) {
     ESP_RETURN_ON_ERROR(
         bsp_mode_button_is_pressed(&pressed), kTag, "Mode button read failed");
     *edges = mode_button.update(pressed, now_ms);
+    if (edges->pressed) {
+        mode_button_stably_pressed = true;
+    } else if (edges->released) {
+        mode_button_stably_pressed = false;
+    }
     return ESP_OK;
 }
 
 bool action_button_is_pressed() {
     return initialized && action_button_stably_pressed;
+}
+
+bool mode_button_is_pressed() {
+    return initialized && mode_button_initialized &&
+        mode_button_stably_pressed;
 }
 
 std::optional<BatteryStatus> battery_status() {

@@ -34,8 +34,8 @@ Some files can be absent during initial setup. Read them when they exist.
   Show the short answer and speak it.
 - Keep one chat thread during the 30-second follow-up window. When the window
   expires, request sleep and discard the thread. Only a short BOOT-button press
-  enters Clock mode. Clock mode has no idle timeout. A PWR-button cold start
-  starts a new thread.
+  enters Clock mode. A five-second PWR-and-BOOT hold restarts the device. Clock
+  mode has no idle timeout. A PWR-button cold start starts a new thread.
 - Use an all-black terminal-style interface. Use motion only to communicate
   state or progress. Avoid decorative motion.
 - Instruct the chat model to answer in concise, natural speech.
@@ -44,7 +44,8 @@ Some files can be absent during initial setup. Read them when they exist.
 - Support web search and image search first. A selected image can fill the
   screen. Do not add more tools without a clear product need.
 - Use a short top BOOT-button press to change between ChatESP and Clock modes.
-  Ignore a long press and all presses while the device sleeps.
+  Ignore a BOOT-only long press and all BOOT-only presses while the device
+  sleeps. Hold PWR and BOOT together for five seconds to restart the device.
 
 ## Hardware and security constraints
 

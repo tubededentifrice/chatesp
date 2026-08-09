@@ -8,6 +8,7 @@ namespace chatesp {
 
 constexpr std::uint32_t kModeButtonMinimumPressMs = 30;
 constexpr std::uint32_t kModeButtonMaximumPressMs = 700;
+constexpr std::uint32_t kRestartChordHoldMs = 5'000;
 
 enum class AppMode : std::uint8_t {
     chat,
@@ -124,6 +125,38 @@ private:
     std::uint32_t minimum_press_ms_ = kModeButtonMinimumPressMs;
     std::uint32_t pressed_at_ms_ = 0;
     bool pressed_ = false;
+};
+
+class RestartChordGesture {
+public:
+    explicit constexpr RestartChordGesture(
+        std::uint32_t hold_ms = kRestartChordHoldMs)
+        : hold_ms_(hold_ms) {}
+
+    [[nodiscard]] bool update(
+        bool power_pressed, bool mode_pressed, std::uint32_t now_ms) {
+        if (!power_pressed || !mode_pressed) {
+            active_ = false;
+            triggered_ = false;
+            return false;
+        }
+        if (!active_) {
+            active_ = true;
+            started_at_ms_ = now_ms;
+            return false;
+        }
+        if (triggered_ || now_ms - started_at_ms_ < hold_ms_) {
+            return false;
+        }
+        triggered_ = true;
+        return true;
+    }
+
+private:
+    std::uint32_t hold_ms_ = kRestartChordHoldMs;
+    std::uint32_t started_at_ms_ = 0;
+    bool active_ = false;
+    bool triggered_ = false;
 };
 
 [[nodiscard]] constexpr bool clock_network_shutdown_due(

@@ -58,9 +58,16 @@ restores the Clock orientation when it closes. A voice button press always
 hides the passkey view.
 
 A debounced top GPIO0 press from 30 through 700 ms changes between ChatESP and
-Clock. A shorter electrical pulse or a longer press has no app action. A
-top-button press has no effect during soft sleep, and GPIO0 is not a production
-wake source. This short BOOT-button press is the only action that enters Clock.
+Clock. A shorter electrical pulse or a BOOT-only longer press has no app
+action. A top-button press has no effect during soft sleep, and GPIO0 is not a
+production wake source. This short BOOT-button press is the only action that
+enters Clock. A separate recovery button combination tracks both buttons. When
+the debounced PWR and BOOT states stay pressed together for five seconds, the
+main button poll records the controlled event and calls the ESP software-restart
+path. Releasing either button resets the timer. A PWR-only or BOOT-only hold
+does not start this restart path. The check runs outside the voice and display
+tasks, so it can recover a black or unresponsive display while the main button
+poll still runs.
 A switch to Clock cancels active voice work and clears the
 in-memory thread. If local time is not ready, Clock keeps the startup Wi-Fi
 connection for at most 15 seconds while NTP and the timezone lookup finish. It
@@ -449,7 +456,7 @@ normal answer must fit a spoken interaction.
 
 ## Tools
 
-Version 1 has eleven tools:
+Version 1 has twelve tools:
 
 - `search_web(query)`: returns a small list of titles, URLs, and snippets.
 - `search_images(query)`: returns a small list with short result IDs.
@@ -458,6 +465,8 @@ Version 1 has eleven tools:
 - `set_brightness(percent)`: applies and stores a value from 5 through 100.
 - `set_volume(percent)`: applies and stores a value from 0 through 100.
 - `power_off()`: schedules power-off only after an explicit current request.
+- `restart_device()`: schedules a software restart only after an explicit
+  current request.
 - `run_python(code)`: runs bounded MicroPython for short calculations. Printed
   text enters the tool result. `plot.line(x, y, title)` can select one line
   plot with 2 through 128 entries and a title of at most 48 bytes. Each x value
@@ -494,6 +503,13 @@ short confirmation before the runtime starts the normal sleep cleanup. A new
 PWR-button action cancels a pending model power-off. Development mode enters
 recoverable soft sleep. Production mode requests AXP2101 system-off. A bottom
 PWR-button press wakes either mode; production wake is a cold start.
+
+The restart prompt accepts only a clear request to restart the current device.
+The final answer gives one short spoken confirmation. The runtime then records
+the controlled action and calls the ESP software-restart path. The action does
+not erase settings, memories, or BLE bonds. A new PWR-button action cancels a
+restart that is still pending. The restart path does not depend on a working
+display task, so voice control can recover a device whose AMOLED stays black.
 
 Brightness starts at 65 percent and volume starts at 70 percent when no valid
 record exists. The record has a fixed eight-byte, version-1 format and strict

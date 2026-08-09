@@ -79,7 +79,14 @@ agent::Error DeviceControl::schedule_power_off(agent::PowerOffMode &mode) {
     mode = development_mode_
         ? agent::PowerOffMode::development_sleep
         : agent::PowerOffMode::system_off;
-    power_off_pending_.store(true, std::memory_order_release);
+    pending_action_.store(
+        PendingDeviceAction::power_off, std::memory_order_release);
+    return agent::Error::none;
+}
+
+agent::Error DeviceControl::schedule_restart() {
+    pending_action_.store(
+        PendingDeviceAction::restart, std::memory_order_release);
     return agent::Error::none;
 }
 
