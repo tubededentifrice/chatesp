@@ -5,8 +5,9 @@
 #include <unity.h>
 
 #include "chatesp/app_mode.hpp"
-#include "chatesp/button_debouncer.hpp"
+#include "chatesp/battery_status.hpp"
 #include "chatesp/ble_shutdown.hpp"
+#include "chatesp/button_debouncer.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/power_button_filter.hpp"
 #include "chatesp/quick_controls.hpp"
@@ -372,6 +373,14 @@ void test_power_button_filter_ignores_two_key_edges_in_one_poll() {
     TEST_ASSERT_FALSE(button.update(false, false, false, 500).pressed);
 }
 
+void test_axp2101_charge_state_uses_current_direction() {
+    TEST_ASSERT_TRUE(chatesp::power::axp2101_status_is_charging(0x20));
+    TEST_ASSERT_TRUE(chatesp::power::axp2101_status_is_charging(0x3f));
+    TEST_ASSERT_FALSE(chatesp::power::axp2101_status_is_charging(0x00));
+    TEST_ASSERT_FALSE(chatesp::power::axp2101_status_is_charging(0x40));
+    TEST_ASSERT_FALSE(chatesp::power::axp2101_status_is_charging(0x60));
+}
+
 void test_short_wake_press_returns_to_idle() {
     InteractionStateMachine machine;
     machine.ready(100);
@@ -653,6 +662,7 @@ int main(int, char **) {
     RUN_TEST(test_power_button_filter_keeps_a_press_across_usb_removal);
     RUN_TEST(test_power_button_filter_rejects_key_edges_with_a_usb_event);
     RUN_TEST(test_power_button_filter_ignores_two_key_edges_in_one_poll);
+    RUN_TEST(test_axp2101_charge_state_uses_current_direction);
     RUN_TEST(test_short_wake_press_returns_to_idle);
     RUN_TEST(test_held_wake_press_records_until_release);
     RUN_TEST(test_quick_controls_open_only_from_top_and_continues_below_target);

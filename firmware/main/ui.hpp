@@ -68,7 +68,7 @@ void show_model_progress(std::string_view detail);
 void show_ble_passkey(std::uint32_t passkey, bool visible);
 void show_footer(
     WifiIndicator wifi, bool battery_available,
-    std::uint8_t battery_percent);
+    std::uint8_t battery_percent, bool battery_charging);
 [[nodiscard]] bool show_fullscreen_image(image::Rgb565Frame &&frame);
 [[nodiscard]] bool show_fullscreen_plot(const agent::PlotData &plot);
 void hide_fullscreen_image();

@@ -1383,30 +1383,38 @@ private:
         if (!with_display([this, wifi]() {
             ui::show_footer(
                 wifi,
-                battery_percent_.has_value(),
-                battery_percent_.value_or(0));
+                battery_status_.has_value(),
+                battery_status_.has_value()
+                    ? battery_status_->percent
+                    : 0,
+                battery_status_.has_value() &&
+                    battery_status_->charging);
         })) {
             return;
         }
         shown_wifi_ = wifi;
-        shown_battery_percent_ = battery_percent_;
+        shown_battery_status_ = battery_status_;
         footer_shown_ = true;
     }
 
     void refresh_footer(std::uint32_t now_ms, bool force) {
+        const std::uint32_t source_revision =
+            power::power_source_revision();
         const bool battery_due = force || !battery_checked_ ||
-            now_ms - battery_checked_at_ms_ >= kBatteryRefreshMs;
+            now_ms - battery_checked_at_ms_ >= kBatteryRefreshMs ||
+            source_revision != battery_power_source_revision_;
         if (battery_due &&
             !button_pressed_.load(std::memory_order_acquire) &&
             !voice_priority_.load(std::memory_order_acquire)) {
-            battery_percent_ = power::battery_percent();
+            battery_status_ = power::battery_status();
             battery_checked_ = true;
             battery_checked_at_ms_ = now_ms;
+            battery_power_source_revision_ = source_revision;
         }
         const ui::WifiIndicator wifi = wifi_indicator(
             network_.state(), settings_.has_wifi_credentials());
         if (force || !footer_shown_ || wifi != shown_wifi_ ||
-            battery_percent_ != shown_battery_percent_) {
+            battery_status_ != shown_battery_status_) {
             draw_footer(wifi);
         }
     }
@@ -2642,6 +2650,7 @@ private:
     std::uint32_t display_sleep_attempted_at_ms_ = 0;
     std::uint32_t footer_checked_at_ms_ = 0;
     std::uint32_t battery_checked_at_ms_ = 0;
+    std::uint32_t battery_power_source_revision_ = 0;
     std::uint32_t stream_text_refreshed_at_ms_ = 0;
     std::uint32_t applied_revision_ = 0;
     std::uint32_t mode_display_attempted_at_ms_ = 0;
@@ -2669,8 +2678,8 @@ private:
     std::uint32_t clock_network_stop_started_at_ms_ = 0;
     bool mode_display_pending_ = false;
     ui::WifiIndicator shown_wifi_ = ui::WifiIndicator::off;
-    std::optional<std::uint8_t> battery_percent_;
-    std::optional<std::uint8_t> shown_battery_percent_;
+    std::optional<power::BatteryStatus> battery_status_;
+    std::optional<power::BatteryStatus> shown_battery_status_;
 };
 
 VoiceRuntime::VoiceRuntime() = default;

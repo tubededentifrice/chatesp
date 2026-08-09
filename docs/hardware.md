@@ -171,7 +171,8 @@ The connected V2 board must pass these checks for this control change:
 - 30 seconds after the final voice interaction, ChatESP sleeps, Wi-Fi stops,
   and the prior thread is not available;
 - the footer shows Wi-Fi connection state and a valid battery percentage, or a
-  clear unavailable value;
+  clear unavailable value. While the battery charges, its icon and percentage
+  are green and a charge mark is visible;
 - model text grows on the display before the complete answer is available;
 - smart quotation marks, long dashes, bullets, and ellipses in model text have
   the correct visible glyphs;

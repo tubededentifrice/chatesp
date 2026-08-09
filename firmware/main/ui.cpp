@@ -118,7 +118,7 @@ std::array<char, kMaximumAnswerBytes + 1> content_buffer{};
 std::array<char, kMaximumProgressBytes + 1> hint_buffer{};
 std::array<char, 7> passkey_buffer{};
 std::array<char, kMaximumWifiStatusBytes + 1> wifi_status_buffer{};
-std::array<char, 12> battery_status_buffer{};
+std::array<char, 13> battery_status_buffer{};
 std::array<char, 6> clock_time_buffer{'-', '-', ':', '-', '-', '\0'};
 QuickControlsGesture controls_gesture;
 QuickControlsCallback controls_callback = nullptr;
@@ -1217,7 +1217,7 @@ void create_screen() {
     lv_obj_set_style_text_align(
         battery_status_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_align(battery_status_label, LV_ALIGN_BOTTOM_RIGHT, -30, -20);
-    show_footer(WifiIndicator::off, false, 0);
+    show_footer(WifiIndicator::off, false, 0, false);
 
     image_overlay = lv_image_create(screen);
     lv_obj_set_size(
@@ -1614,7 +1614,7 @@ void show_ble_passkey(std::uint32_t passkey, bool visible) {
 
 void show_footer(
     WifiIndicator wifi, bool battery_available,
-    std::uint8_t battery_percent) {
+    std::uint8_t battery_percent, bool battery_charging) {
     const char *wifi_text = LV_SYMBOL_WIFI " OFF";
     switch (wifi) {
         case WifiIndicator::setup:
@@ -1650,7 +1650,19 @@ void show_footer(
     } else if (battery_available && battery_percent >= 10) {
         battery_icon = LV_SYMBOL_BATTERY_1;
     }
-    if (battery_available && battery_percent <= 100) {
+    const bool charging = battery_available && battery_charging;
+    lv_obj_set_style_text_color(
+        battery_status_label,
+        lv_color_hex(charging ? 0x00ff66 : 0x777777),
+        LV_PART_MAIN);
+    if (battery_available && battery_percent <= 100 && charging) {
+        std::snprintf(
+            battery_status_buffer.data(),
+            battery_status_buffer.size(),
+            "%s" LV_SYMBOL_CHARGE " %u%%",
+            battery_icon,
+            static_cast<unsigned>(battery_percent));
+    } else if (battery_available && battery_percent <= 100) {
         std::snprintf(
             battery_status_buffer.data(),
             battery_status_buffer.size(),

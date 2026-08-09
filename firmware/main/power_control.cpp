@@ -1,5 +1,6 @@
 #include "power_control.hpp"
 
+#include <atomic>
 #include <cstdint>
 
 #include "bsp/esp-bsp.h"
@@ -19,6 +20,7 @@ constexpr std::uint16_t kAxp2101Address = 0x34;
 constexpr std::uint8_t kAxp2101CommonConfig = 0x10;
 constexpr std::uint8_t kAxp2101PowerOffEnable = 0x22;
 constexpr std::uint8_t kAxp2101Status1 = 0x00;
+constexpr std::uint8_t kAxp2101Status2 = 0x01;
 constexpr std::uint8_t kAxp2101IrqEnable2 = 0x41;
 constexpr std::uint8_t kAxp2101IrqStatus2 = 0x49;
 constexpr std::uint8_t kAxp2101BatteryPercent = 0xA4;
@@ -52,6 +54,7 @@ bool hardware_hold_shutdown_suppressed = false;
 bool action_button_stably_pressed = false;
 bool hold_policy_error_reported = false;
 std::uint32_t hold_policy_error_reported_at_ms = 0;
+std::atomic<std::uint32_t> source_revision{0};
 
 std::uint32_t monotonic_ms() {
     return static_cast<std::uint32_t>(esp_timer_get_time() / 1000ULL);
@@ -309,6 +312,7 @@ esp_err_t poll(std::uint32_t now_ms, ButtonEdges *edges) {
         crash_diagnostics::mark(runtime::CrashEvent::pwr_raw_long_press);
     }
     if (power_source_event) {
+        source_revision.fetch_add(1, std::memory_order_relaxed);
         crash_diagnostics::mark(
             runtime::CrashEvent::pwr_power_source_change);
     }
@@ -377,7 +381,7 @@ bool action_button_is_pressed() {
     return initialized && action_button_stably_pressed;
 }
 
-std::optional<std::uint8_t> battery_percent() {
+std::optional<BatteryStatus> battery_status() {
     if (!initialized) {
         return std::nullopt;
     }
@@ -391,7 +395,22 @@ std::optional<std::uint8_t> battery_percent() {
         percent > 100) {
         return std::nullopt;
     }
-    return percent;
+    std::uint8_t status2 = 0;
+    const bool charging =
+        read_axp2101(kAxp2101Status2, &status2) == ESP_OK &&
+        axp2101_status_is_charging(status2);
+    return BatteryStatus{percent, charging};
+}
+
+std::optional<std::uint8_t> battery_percent() {
+    const auto status = battery_status();
+    return status.has_value()
+        ? std::optional<std::uint8_t>{status->percent}
+        : std::nullopt;
+}
+
+std::uint32_t power_source_revision() {
+    return source_revision.load(std::memory_order_relaxed);
 }
 
 esp_err_t power_off() {
