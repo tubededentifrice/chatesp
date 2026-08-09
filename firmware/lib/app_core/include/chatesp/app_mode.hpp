@@ -30,13 +30,11 @@ struct ClockStyle {
     std::uint32_t time_rgb = 0xffffff;
     std::uint32_t seconds_rgb = 0xffffff;
     std::uint16_t corner_radius_px = 48;
-    std::uint8_t edge_inset_px = 10;
 
     [[nodiscard]] constexpr bool valid() const {
         return background_rgb <= 0xffffff && time_rgb <= 0xffffff &&
             seconds_rgb <= 0xffffff && corner_radius_px >= 16 &&
-            corner_radius_px <= 120 && edge_inset_px >= 4 &&
-            edge_inset_px <= 24;
+            corner_radius_px <= 120;
     }
 };
 

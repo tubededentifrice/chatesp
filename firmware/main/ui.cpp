@@ -67,11 +67,16 @@ struct ControlSlider {
     std::uint8_t minimum_percent = 0;
     std::uint8_t value_percent = 0;
 };
-constexpr std::size_t kMaximumClockPathPointCount = 1'600;
+constexpr std::size_t kMaximumClockPathPointCount = 1'632;
 constexpr std::uint32_t kClockPathRefreshMs = 16;
 constexpr std::int32_t kClockWidth = image::kDisplayHeight;
 constexpr std::int32_t kClockHeight = image::kDisplayWidth;
+constexpr std::int32_t kClockRight = kClockWidth - 1;
+constexpr std::int32_t kClockBottom = kClockHeight - 1;
 constexpr double kPi = 3.14159265358979323846;
+static_assert(
+    kMaximumClockPathPointCount >=
+    2U * static_cast<std::size_t>(kClockRight + kClockBottom));
 
 lv_obj_t *status_label = nullptr;
 lv_obj_t *hint_label = nullptr;
@@ -351,11 +356,10 @@ void apply_display_orientation() {
 }
 
 void rounded_clock_point(double distance, double &x, double &y) {
-    const double inset = clock_style.edge_inset_px;
-    const double left = inset;
-    const double top = inset;
-    const double right = static_cast<double>(kClockWidth) - inset;
-    const double bottom = static_cast<double>(kClockHeight) - inset;
+    constexpr double left = 0.0;
+    constexpr double top = 0.0;
+    constexpr double right = kClockRight;
+    constexpr double bottom = kClockBottom;
     const double radius = clock_style.corner_radius_px;
     const double half_top = (right - left - 2.0 * radius) / 2.0;
     const double vertical = bottom - top - 2.0 * radius;
@@ -423,12 +427,11 @@ void layout_clock_path() {
         clock_path_point_count = 0;
         return;
     }
-    const double inset = clock_style.edge_inset_px;
     const double radius = clock_style.corner_radius_px;
     const double horizontal =
-        static_cast<double>(kClockWidth) - 2.0 * inset - 2.0 * radius;
+        static_cast<double>(kClockRight) - 2.0 * radius;
     const double vertical =
-        static_cast<double>(kClockHeight) - 2.0 * inset - 2.0 * radius;
+        static_cast<double>(kClockBottom) - 2.0 * radius;
     const double perimeter =
         2.0 * horizontal + 2.0 * vertical + 2.0 * kPi * radius;
     const std::size_t sample_count = static_cast<std::size_t>(

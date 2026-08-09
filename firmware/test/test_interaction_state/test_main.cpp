@@ -577,7 +577,7 @@ void test_clock_path_changes_one_pixel_at_a_time() {
 void test_clock_configuration_and_time_text_are_bounded() {
     TEST_ASSERT_TRUE(chatesp::ClockStyle{}.valid());
     chatesp::ClockStyle invalid;
-    invalid.edge_inset_px = 25;
+    invalid.corner_radius_px = 121;
     TEST_ASSERT_FALSE(invalid.valid());
 
     const auto available = chatesp::clock_time_text(

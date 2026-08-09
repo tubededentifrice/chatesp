@@ -145,10 +145,10 @@ void render_clock(std::ostringstream &output, const Snapshot &snapshot) {
               60'000)
         : ClockPathSpan{};
     if (span.count != 0) {
-        output << "<path d=\"M224 10 H390 Q438 10 438 58 V310 "
-                  "Q438 358 390 358 H58 Q10 358 10 310 V58 Q10 10 58 10 Z\" "
+        output << "<path d=\"M224 0 H399 Q447 0 447 48 V319 "
+                  "Q447 367 399 367 H48 Q0 367 0 319 V48 Q0 0 48 0 Z\" "
                   "pathLength=\"60000\" fill=\"none\" stroke=\"white\" "
-                  "stroke-width=\"1\" "
+                  "stroke-width=\"1\" shape-rendering=\"crispEdges\" "
                   "stroke-dasharray=\""
                << static_cast<unsigned>(span.count) << ' '
                << static_cast<unsigned>(60'000U - span.count)

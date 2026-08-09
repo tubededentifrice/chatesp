@@ -147,7 +147,7 @@
   <g transform="translate(1248 72)" filter="url(#screen-shadow)">
     <rect width="448" height="368" rx="48" fill="#000" stroke="#303033" stroke-width="2"/>
     <rect x="162" y="8" width="44" height="4" rx="2" fill="#6b6b70" transform="translate(40 0)"/>
-    <path d="M224 10 H390 A48 48 0 0 1 438 58 V310 A48 48 0 0 1 390 358 H58 A48 48 0 0 1 10 310 V58 A48 48 0 0 1 58 10 Z" fill="none" stroke="#fff" stroke-width="1"/>
+    <path d="M224 0 H399 A48 48 0 0 1 447 48 V319 A48 48 0 0 1 399 367 H48 A48 48 0 0 1 0 319 V48 A48 48 0 0 1 48 0 Z" fill="none" stroke="#fff" stroke-width="1" shape-rendering="crispEdges"/>
 
     <text class="clock-time" x="224" y="250" text-anchor="middle">11:24</text>
   </g>
