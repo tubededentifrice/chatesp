@@ -39,8 +39,10 @@ ChatESP.*
 - **Travel Clock:** Use the large AMOLED as a landscape 24-hour clock with a
   one-pixel seconds line. Clock sleeps after five minutes on battery and stays
   on while external power is connected.
-- **Touch controls:** Pull down the top handle to change brightness or volume.
-  You can also change both values by voice.
+- **Touch interaction:** Drag long answers directly under your finger. The text
+  keeps its momentum and resists the top and bottom edges. Pull down the top
+  handle to change brightness or volume. You can also change both values by
+  voice.
 - **Clear radio and power state:** The footer shows the active Wi-Fi or secure
   BLE link, three Wi-Fi signal levels, battery charge state, and battery
   percentage. Development firmware also shows `DEV` at the footer center.

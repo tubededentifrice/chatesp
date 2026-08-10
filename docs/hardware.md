@@ -285,6 +285,11 @@ The connected V2 board must pass these checks for this control change:
   prevents this request;
 - after sleep starts, the firmware does not read the battery gauge;
 - model text grows on the display before the complete answer is available;
+- a long transcript, answer, or error scrolls vertically under the finger,
+  keeps release momentum, resists both ends, and shows its scroll indicator
+  only during movement;
+- the first text of a new view starts at the top, and a streamed answer update
+  does not change the user's current scroll position;
 - smart quotation marks, long dashes, bullets, and ellipses in model text have
   the correct visible glyphs;
 - on a held cold start, Wi-Fi setup starts only after 100 ms of valid audio and

@@ -61,6 +61,13 @@ enum class ControlKind : std::uint8_t {
     volume,
 };
 
+enum class ContentKind : std::uint8_t {
+    none,
+    transcript,
+    answer,
+    error,
+};
+
 struct ControlSlider {
     ControlKind kind = ControlKind::brightness;
     lv_obj_t *touch_target = nullptr;
@@ -84,6 +91,7 @@ static_assert(
 
 lv_obj_t *status_label = nullptr;
 lv_obj_t *hint_label = nullptr;
+lv_obj_t *content_viewport = nullptr;
 lv_obj_t *content_label = nullptr;
 lv_obj_t *activity_spinner = nullptr;
 lv_obj_t *wifi_status_label = nullptr;
@@ -122,6 +130,7 @@ image::Rgb565Frame image_frame;
 lv_image_dsc_t image_descriptor{};
 
 std::array<char, kMaximumAnswerBytes + 1> content_buffer{};
+ContentKind shown_content_kind = ContentKind::none;
 std::array<char, kMaximumProgressBytes + 1> hint_buffer{};
 std::array<char, 7> passkey_buffer{};
 std::array<char, kMaximumWifiStatusBytes + 1> wifi_status_buffer{};
@@ -283,10 +292,32 @@ void set_static_text(lv_obj_t *label, const char *text) {
     }
 }
 
-void set_content(std::string_view text, std::size_t maximum_bytes) {
+void stop_content_scroll() {
+    lv_indev_t *input = lv_indev_get_next(nullptr);
+    while (input != nullptr) {
+        lv_indev_t *next = lv_indev_get_next(input);
+        if (lv_indev_get_scroll_obj(input) == content_viewport) {
+            lv_indev_reset(input, content_viewport);
+        }
+        input = next;
+    }
+}
+
+void set_content(
+    std::string_view text,
+    std::size_t maximum_bytes,
+    ContentKind kind) {
+    const bool reset_scroll = shown_content_kind != kind;
+    if (reset_scroll) {
+        stop_content_scroll();
+    }
     copy_bounded(
         text, content_buffer.data(), content_buffer.size(), maximum_bytes);
     set_static_text(content_label, content_buffer.data());
+    shown_content_kind = kind;
+    if (reset_scroll && content_viewport != nullptr) {
+        lv_obj_scroll_to_y(content_viewport, 0, LV_ANIM_OFF);
+    }
 }
 
 void set_hint(std::string_view text) {
@@ -1189,9 +1220,30 @@ void create_startup_screen() {
 void create_runtime_screen() {
     lv_obj_t *screen = active_screen();
 
-    content_label = lv_label_create(screen);
-    lv_obj_set_size(content_label, 336, 270);
+    content_viewport = lv_obj_create(screen);
+    lv_obj_remove_style_all(content_viewport);
+    lv_obj_set_size(content_viewport, 336, 270);
+    lv_obj_align(content_viewport, LV_ALIGN_TOP_LEFT, 16, 126);
+    lv_obj_set_scroll_dir(content_viewport, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(content_viewport, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_add_flag(content_viewport, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(content_viewport, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_add_flag(content_viewport, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_add_flag(content_viewport, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(content_viewport, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_style_width(content_viewport, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(
+        content_viewport, lv_color_hex(0x777777), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(
+        content_viewport, LV_OPA_70, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(
+        content_viewport, LV_RADIUS_CIRCLE, LV_PART_SCROLLBAR);
+
+    content_label = lv_label_create(content_viewport);
+    lv_obj_set_width(content_label, 336);
+    lv_obj_set_height(content_label, LV_SIZE_CONTENT);
     lv_label_set_long_mode(content_label, LV_LABEL_LONG_WRAP);
+    lv_obj_clear_flag(content_label, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_text_color(
         content_label, lv_color_hex(0xffffff), LV_PART_MAIN);
     lv_obj_set_style_text_font(
@@ -1199,7 +1251,7 @@ void create_runtime_screen() {
     lv_obj_set_style_text_line_space(content_label, 7, LV_PART_MAIN);
     lv_obj_set_style_text_align(
         content_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_align(content_label, LV_ALIGN_TOP_LEFT, 16, 126);
+    lv_obj_set_pos(content_label, 0, 0);
     set_static_text(content_label, content_buffer.data());
 
     recording_spectrum::create(screen);
@@ -1492,6 +1544,7 @@ void show_app_mode(AppMode mode, InteractionState chat_state) {
     if (mode == AppMode::clock) {
         hide_fullscreen_visual();
         clock_mode = true;
+        set_hidden(content_viewport, true);
         if (clock_path_point_count == 0) {
             apply_clock_style(true);
         }
@@ -1512,6 +1565,7 @@ void show_app_mode(AppMode mode, InteractionState chat_state) {
     }
 
     clock_mode = false;
+    set_hidden(content_viewport, false);
     if (clock_path_timer != nullptr) {
         lv_timer_pause(clock_path_timer);
     }
@@ -1606,7 +1660,7 @@ void show_state(InteractionState state) {
     if (state == InteractionState::booting ||
         state == InteractionState::recording ||
         state == InteractionState::sleep_pending) {
-        set_content({}, kMaximumAnswerBytes);
+        set_content({}, kMaximumAnswerBytes, ContentKind::none);
     }
     set_static_text(status_label, status(state));
     set_static_text(hint_label, hint(state));
@@ -1625,7 +1679,8 @@ void show_transcript(std::string_view transcript) {
     show_activity(false);
     set_static_text(status_label, "YOU");
     set_static_text(hint_label, "TRANSCRIPT");
-    set_content(transcript, kMaximumTranscriptBytes);
+    set_content(
+        transcript, kMaximumTranscriptBytes, ContentKind::transcript);
 }
 
 void show_answer_stream(std::string_view answer) {
@@ -1633,7 +1688,7 @@ void show_answer_stream(std::string_view answer) {
     show_activity(false);
     set_static_text(status_label, "ANSWER");
     set_static_text(hint_label, "RECEIVING");
-    set_content(answer, kMaximumAnswerBytes);
+    set_content(answer, kMaximumAnswerBytes, ContentKind::answer);
 }
 
 void show_answer(std::string_view answer) {
@@ -1641,7 +1696,7 @@ void show_answer(std::string_view answer) {
     show_activity(false);
     set_static_text(status_label, "ANSWER");
     set_static_text(hint_label, "PREPARING SPEECH");
-    set_content(answer, kMaximumAnswerBytes);
+    set_content(answer, kMaximumAnswerBytes, ContentKind::answer);
 }
 
 void show_answer_notice(std::string_view answer, std::string_view notice) {
@@ -1649,7 +1704,7 @@ void show_answer_notice(std::string_view answer, std::string_view notice) {
     show_activity(false);
     set_static_text(status_label, "ANSWER");
     set_hint(notice);
-    set_content(answer, kMaximumAnswerBytes);
+    set_content(answer, kMaximumAnswerBytes, ContentKind::answer);
 }
 
 void show_error(std::string_view error) {
@@ -1657,7 +1712,7 @@ void show_error(std::string_view error) {
     show_activity(false);
     set_static_text(status_label, "REQUEST FAILED");
     set_static_text(hint_label, "ERROR DETAILS");
-    set_content(error, kMaximumErrorBytes);
+    set_content(error, kMaximumErrorBytes, ContentKind::error);
 }
 
 void show_wifi_progress(std::string_view detail) {
@@ -1946,7 +2001,7 @@ esp_err_t wake(
     }
     lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
     hide_fullscreen_visual();
-    set_content({}, kMaximumAnswerBytes);
+    set_content({}, kMaximumAnswerBytes, ContentKind::none);
     show_app_mode(mode, state);
     // A command acknowledgement does not prove that the CO5300 output stage
     // is active. Replay its bounded initialization table on each deliberate

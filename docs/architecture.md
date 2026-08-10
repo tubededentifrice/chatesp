@@ -324,6 +324,14 @@ Unicode General Punctuation glyphs. Common model punctuation, such as smart
 quotation marks, long dashes, bullets, and ellipses, appears as text instead of
 a missing-glyph box.
 
+The answer area becomes vertically scrollable only when its wrapped text is
+taller than the visible area. It uses direct finger tracking, vertical axis
+lock, release momentum, and elastic resistance at the first and last line. A
+thin scroll indicator is visible only during movement. A new transcript,
+answer, or error starts at its first line. Partial updates for the same streamed
+answer keep the current scroll position, so incoming text does not move text
+that the user reads.
+
 The answer stream starts the first speech request at a question mark,
 exclamation mark, newline, or safe period. A 160-byte limit splits a long first
 sentence at a complete UTF-8 word. The stream then keeps all remaining spoken
