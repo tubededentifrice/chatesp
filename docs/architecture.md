@@ -392,9 +392,10 @@ boot and creates a new thread.
 - `ui`: terminal layout, rotated Clock face, streamed text, radio and battery
   footer, and state-specific motion. The radio footer shows the active Wi-Fi or
   secure BLE link and three Wi-Fi signal levels. The battery footer becomes
-  green and adds a charge mark while external power is connected. It uses good
-  VBUS or active battery charge current as the connection signal. Development
-  builds show a small `DEV` marker at the footer center.
+  green and centers a white charge mark over its battery-level icon while
+  external power is connected. It uses good VBUS or active battery charge
+  current as the connection signal. Development builds show a small `DEV`
+  marker at the footer center.
   Production builds omit this marker. The UI also owns the bounded top control
   panel and touch gesture presentation.
 - `provisioning`: versioned BLE packets, authenticated encrypted transfer,

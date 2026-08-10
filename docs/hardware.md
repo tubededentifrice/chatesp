@@ -272,9 +272,10 @@ The connected V2 board must pass these checks for this control change:
   and the prior thread is not available;
 - the footer shows the active Wi-Fi or secure BLE icon. Connected Wi-Fi shows
   one through three signal bars. The footer shows a valid battery percentage
-  or a clear unavailable value. While external power is connected, its icon
-  and percentage are green and a charge mark is visible. This state stays
-  correct when the battery is full and charge current stops;
+  or a clear unavailable value. While external power is connected, its
+  battery-level icon and percentage are green, and a white charge mark is
+  centered over the battery icon. This state stays correct when the battery is
+  full and charge current stops;
 - after a PWR wake with USB still connected, the footer updates the charging
   state after button priority ends and before the next idle sleep;
 - development firmware shows a small `DEV` marker at the footer center, and

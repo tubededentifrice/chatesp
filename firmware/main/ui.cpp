@@ -87,6 +87,8 @@ lv_obj_t *hint_label = nullptr;
 lv_obj_t *content_label = nullptr;
 lv_obj_t *activity_spinner = nullptr;
 lv_obj_t *wifi_status_label = nullptr;
+lv_obj_t *battery_icon_label = nullptr;
+lv_obj_t *battery_charge_label = nullptr;
 lv_obj_t *battery_status_label = nullptr;
 lv_obj_t *image_overlay = nullptr;
 lv_obj_t *plot_overlay = nullptr;
@@ -123,7 +125,7 @@ std::array<char, kMaximumAnswerBytes + 1> content_buffer{};
 std::array<char, kMaximumProgressBytes + 1> hint_buffer{};
 std::array<char, 7> passkey_buffer{};
 std::array<char, kMaximumWifiStatusBytes + 1> wifi_status_buffer{};
-std::array<char, 13> battery_status_buffer{};
+std::array<char, 5> battery_status_buffer{};
 std::array<char, 6> clock_time_buffer{'-', '-', ':', '-', '-', '\0'};
 QuickControlsGesture controls_gesture;
 QuickControlsCallback controls_callback = nullptr;
@@ -1230,7 +1232,7 @@ void create_runtime_screen() {
     lv_obj_align(wifi_status_label, LV_ALIGN_BOTTOM_LEFT, 30, -20);
 
     battery_status_label = lv_label_create(screen);
-    lv_obj_set_width(battery_status_label, 80);
+    lv_obj_set_width(battery_status_label, 48);
     lv_obj_set_style_text_color(
         battery_status_label, lv_color_hex(0x777777), LV_PART_MAIN);
     lv_obj_set_style_text_font(
@@ -1238,6 +1240,43 @@ void create_runtime_screen() {
     lv_obj_set_style_text_align(
         battery_status_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_align(battery_status_label, LV_ALIGN_BOTTOM_RIGHT, -30, -20);
+
+    battery_icon_label = lv_label_create(screen);
+    lv_obj_set_width(battery_icon_label, 24);
+    set_static_text(battery_icon_label, LV_SYMBOL_BATTERY_EMPTY);
+    lv_obj_set_style_text_color(
+        battery_icon_label, lv_color_hex(0x777777), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        battery_icon_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        battery_icon_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align_to(
+        battery_icon_label,
+        battery_status_label,
+        LV_ALIGN_OUT_LEFT_MID,
+        -4,
+        0);
+
+    // LVGL supplies separate standard battery and charge glyphs. Scale and
+    // center the charge glyph to make one compact charging-battery symbol.
+    battery_charge_label = lv_label_create(screen);
+    lv_obj_set_width(battery_charge_label, 24);
+    set_static_text(battery_charge_label, LV_SYMBOL_CHARGE);
+    lv_obj_set_style_text_color(
+        battery_charge_label, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        battery_charge_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        battery_charge_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_x(
+        battery_charge_label, 12, LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_y(
+        battery_charge_label, 7, LV_PART_MAIN);
+    lv_obj_set_style_transform_scale(
+        battery_charge_label, 160, LV_PART_MAIN);
+    lv_obj_align_to(
+        battery_charge_label, battery_icon_label, LV_ALIGN_CENTER, 0, 0);
+    set_hidden(battery_charge_label, true);
 
 #if CHATESP_DEVELOPMENT_MODE
     lv_obj_t *development_status_label = lv_label_create(screen);
@@ -1707,36 +1746,26 @@ void show_footer(
         battery_icon = LV_SYMBOL_BATTERY_1;
     }
     lv_obj_set_style_text_color(
+        battery_icon_label,
+        lv_color_hex(external_power_connected ? 0x00ff66 : 0x777777),
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
         battery_status_label,
         lv_color_hex(external_power_connected ? 0x00ff66 : 0x777777),
         LV_PART_MAIN);
-    if (battery_available && battery_percent <= 100 &&
-        external_power_connected) {
+    set_static_text(battery_icon_label, battery_icon);
+    set_hidden(battery_charge_label, !external_power_connected);
+    if (battery_available && battery_percent <= 100) {
         std::snprintf(
             battery_status_buffer.data(),
             battery_status_buffer.size(),
-            "%s" LV_SYMBOL_CHARGE " %u%%",
-            battery_icon,
-            static_cast<unsigned>(battery_percent));
-    } else if (external_power_connected) {
-        std::snprintf(
-            battery_status_buffer.data(),
-            battery_status_buffer.size(),
-            "%s" LV_SYMBOL_CHARGE " --%%",
-            battery_icon);
-    } else if (battery_available && battery_percent <= 100) {
-        std::snprintf(
-            battery_status_buffer.data(),
-            battery_status_buffer.size(),
-            "%s %u%%",
-            battery_icon,
+            "%u%%",
             static_cast<unsigned>(battery_percent));
     } else {
         std::snprintf(
             battery_status_buffer.data(),
             battery_status_buffer.size(),
-            "%s --%%",
-            battery_icon);
+            "--%%");
     }
     set_static_text(battery_status_label, battery_status_buffer.data());
 }
