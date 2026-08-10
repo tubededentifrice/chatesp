@@ -12,7 +12,9 @@ from tools.model_conformance import (
     FIXED_UTC_MINUTE,
     IMAGE_PROMPT,
     IMAGE_RESULT_IDS,
+    MATH_PROMPT,
     PLOT_PROMPT,
+    CaseResult,
     ConformanceError,
     ToolCall,
     build_route_request,
@@ -23,6 +25,7 @@ from tools.model_conformance import (
     run_live,
     valid_image_query,
     valid_image_selection,
+    valid_calculation,
     valid_plot,
     plot_validation_error,
 )
@@ -128,7 +131,6 @@ class ModelConformanceTests(unittest.TestCase):
                 "search_web",
                 "search_images",
                 "run_python",
-                "plot_line",
                 "get_device_status",
                 "set_brightness",
                 "set_volume",
@@ -141,15 +143,20 @@ class ModelConformanceTests(unittest.TestCase):
             ],
             [tool.name for tool in self.contract.tools],
         )
-        plot_tool = next(
-            tool for tool in self.contract.tools if tool.name == "plot_line"
+        python_tool = next(
+            tool for tool in self.contract.tools if tool.name == "run_python"
         )
-        self.assertEqual(["plot"], plot_tool.parameters["required"])
+        plot_branch = python_tool.parameters["oneOf"][1]
+        self.assertEqual(["plot"], plot_branch["required"])
         self.assertEqual(
             24,
-            plot_tool.parameters["properties"]["plot"]["properties"]["x"][
+            python_tool.parameters["properties"]["plot"]["properties"]["x"][
                 "maxItems"
             ],
+        )
+        self.assertEqual(
+            1536,
+            python_tool.parameters["properties"]["code"]["maxLength"],
         )
         self.assertEqual(192, self.contract.route_output_tokens)
         self.assertEqual(128, self.contract.tools[-1].parameters["properties"]["memories"]["items"]["properties"]["fact"]["maxLength"])
@@ -172,10 +179,10 @@ class ModelConformanceTests(unittest.TestCase):
     def test_sse_parser_reassembles_split_tool_deltas(self) -> None:
         arguments = json.dumps({"plot": VALID_PLOT})
 
-        call = parse_sse(split_tool_sse("plot_line", arguments))
+        call = parse_sse(split_tool_sse("run_python", arguments))
 
         self.assertEqual("call-1", call.call_id)
-        self.assertEqual("plot_line", call.name)
+        self.assertEqual("run_python", call.name)
         self.assertEqual(arguments, call.arguments)
 
     def test_sse_parser_rejects_an_incomplete_private_response(self) -> None:
@@ -251,10 +258,10 @@ class ModelConformanceTests(unittest.TestCase):
 
     def test_plot_argument_invariants(self) -> None:
         self.assertTrue(valid_plot(json.dumps({"plot": VALID_PLOT})))
-        self.assertTrue(
+        self.assertFalse(
             valid_plot(json.dumps({"plot": {"x": [-1, 0, 1], "y": [-1, None, 1]}}))
         )
-        self.assertTrue(
+        self.assertFalse(
             valid_plot(
                 json.dumps(
                     {
@@ -287,6 +294,7 @@ class ModelConformanceTests(unittest.TestCase):
                 }
             },
             {"plot": {"x": [-1, float("nan"), 1], "y": [-1, None, 1]}},
+            {"plot": {"x": [-1, 10**1000, 1], "y": [-1, None, 1]}},
             {
                 "plot": {
                     "x": [-1, *([0] * 23), 1],
@@ -311,6 +319,18 @@ class ModelConformanceTests(unittest.TestCase):
             ),
         )
 
+    def test_calculation_argument_invariants(self) -> None:
+        self.assertTrue(valid_calculation('{"code":"print(37 * 58)"}'))
+        self.assertTrue(
+            valid_calculation(
+                '{"code":"answer = 58*37\\nprint(answer)"}'
+            )
+        )
+        self.assertFalse(valid_calculation('{"plot":{}}'))
+        self.assertFalse(valid_calculation('{"code":"37 * 58"}'))
+        self.assertFalse(valid_calculation('{"code":"print(37 + 58)"}'))
+        self.assertFalse(valid_calculation('{"code":"print(37 * 58)","x":1}'))
+
     def test_image_argument_invariants(self) -> None:
         self.assertTrue(valid_image_query('{"query":"red apple"}'))
         self.assertTrue(valid_image_query('{"query":"photo de pomme rouge"}'))
@@ -325,7 +345,8 @@ class ModelConformanceTests(unittest.TestCase):
         payloads: list[dict[str, object]] = []
         calls = iter(
             (
-                ToolCall("plot-1", "plot_line", json.dumps({"plot": VALID_PLOT})),
+                ToolCall("plot-1", "run_python", json.dumps({"plot": VALID_PLOT})),
+                ToolCall("math-1", "run_python", '{"code":"print(37 * 58)"}'),
                 ToolCall("image-1", "search_images", '{"query":"red apple"}'),
                 ToolCall("select-1", "search_images", '{"select":"image-2"}'),
             )
@@ -345,12 +366,13 @@ class ModelConformanceTests(unittest.TestCase):
             caller,
         )
 
-        self.assertEqual(3, len(results))
+        self.assertEqual(4, len(results))
         self.assertTrue(all(result.passed for result in results))
-        self.assertEqual([1, 1, 1], [result.trial for result in results])
+        self.assertEqual([1, 1, 1, 1], [result.trial for result in results])
         self.assertEqual(PLOT_PROMPT, payloads[0]["messages"][1]["content"])
-        self.assertEqual(IMAGE_PROMPT, payloads[1]["messages"][1]["content"])
-        selection_messages = payloads[2]["messages"]
+        self.assertEqual(MATH_PROMPT, payloads[1]["messages"][1]["content"])
+        self.assertEqual(IMAGE_PROMPT, payloads[2]["messages"][1]["content"])
+        selection_messages = payloads[3]["messages"]
         self.assertEqual("image-1", selection_messages[2]["tool_calls"][0]["id"])
         self.assertEqual("search_images", selection_messages[3]["name"])
 
@@ -359,6 +381,7 @@ class ModelConformanceTests(unittest.TestCase):
         calls = iter(
             (
                 ToolCall("plot-1", private_name, "{}"),
+                ToolCall("math-1", "run_python", '{"code":"print(37 * 58)"}'),
                 ToolCall("image-1", "search_images", '{"query":"red apple"}'),
                 ToolCall("select-1", "search_images", '{"select":"image-1"}'),
             )
@@ -417,7 +440,46 @@ class ModelConformanceTests(unittest.TestCase):
         self.assertNotIn(private_key, output.getvalue())
         self.assertNotIn(private_answer, output.getvalue())
         self.assertNotIn(PLOT_PROMPT, output.getvalue())
+        self.assertNotIn(MATH_PROMPT, output.getvalue())
         self.assertNotIn(IMAGE_PROMPT, output.getvalue())
+
+    def test_cli_requires_four_passing_cases_per_trial(self) -> None:
+        results = [
+            CaseResult(1, "plot", "run_python", "run_python", True, True),
+            CaseResult(
+                1, "calculation", "run_python", "run_python", True, True
+            ),
+            CaseResult(
+                1, "image_query", "search_images", "search_images", True, True
+            ),
+            CaseResult(
+                1,
+                "image_selection",
+                "search_images",
+                "search_images",
+                True,
+                True,
+            ),
+        ]
+        output = io.StringIO()
+        with (
+            patch(
+                "tools.model_conformance._read_settings",
+                return_value={
+                    "CHAT_ENDPOINT": "https://service.example/v1",
+                    "OPENROUTER_API_KEY": "router-token-placeholder",
+                },
+            ),
+            patch("tools.model_conformance.run_live", return_value=results),
+            redirect_stdout(output),
+        ):
+            exit_code = main(["--trials", "1"])
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            {"passed": True, "cases": 4},
+            json.loads(output.getvalue().splitlines()[-1]),
+        )
 
     def test_trials_are_bounded(self) -> None:
         output = io.StringIO()

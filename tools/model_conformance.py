@@ -22,9 +22,11 @@ else:
 MAX_RESPONSE_BYTES = 128_000
 MAX_REQUEST_BYTES = 32_768
 MAX_SSE_LINE_BYTES = 16_384
-MAX_TOOL_ARGUMENT_BYTES = 6_176
+MAX_TOOL_ARGUMENT_BYTES = 9_248
+MAX_PYTHON_SOURCE_BYTES = 1_536
 FIXED_UTC_MINUTE = "2026-01-15 12:00 UTC (Thursday)"
 PLOT_PROMPT = "Trace la courbe y egal un sur x pour x entre moins 1 et 1"
+MATH_PROMPT = "Calcule 37 fois 58 avec Python"
 IMAGE_PROMPT = "Affiche moi la photo d'une pomme rouge"
 IMAGE_RESULT_IDS = ("image-1", "image-2")
 
@@ -254,7 +256,6 @@ def load_route_contract(repository: Path) -> RouteContract:
         "query_schema",
         "image_action_schema",
         "python_schema",
-        "plot_schema",
         "empty_object_schema",
         "brightness_schema",
         "volume_schema",
@@ -520,10 +521,27 @@ def valid_image_selection(arguments: str, current_ids: tuple[str, ...]) -> bool:
 
 
 def _numeric(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def valid_calculation(arguments: str) -> bool:
+    value = _json_object(arguments)
+    if value is None or set(value) != {"code"}:
+        return False
+    code = value["code"]
+    if not isinstance(code, str):
+        return False
+    encoded = code.encode("utf-8")
     return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
+        0 < len(encoded) <= MAX_PYTHON_SOURCE_BYTES
+        and "\0" not in code
+        and re.search(r"\bprint\s*\(", code) is not None
+        and re.search(r"(?:37\s*\*\s*58|58\s*\*\s*37)", code) is not None
     )
 
 
@@ -571,6 +589,8 @@ def plot_validation_error(arguments: str) -> str | None:
     ):
         return "plot_domain"
     gap_separates_branches = False
+    negative_segment = False
+    positive_segment = False
     for index, (x_item, y_item) in enumerate(zip(numeric_x, y_values)):
         if y_item is None:
             gap_separates_branches = (
@@ -586,7 +606,16 @@ def plot_validation_error(arguments: str) -> str | None:
         expected = 1.0 / x_item
         if abs(float(y_item) - expected) > max(0.01, abs(expected) * 0.005):
             return "plot_reciprocal"
-    return None if gap_separates_branches else "plot_gap"
+        if index > 0 and y_values[index - 1] is not None:
+            negative_segment = negative_segment or (
+                numeric_x[index - 1] < 0 and x_item < 0
+            )
+            positive_segment = positive_segment or (
+                numeric_x[index - 1] > 0 and x_item > 0
+            )
+    if not gap_separates_branches:
+        return "plot_gap"
+    return None if negative_segment and positive_segment else "plot_branches"
 
 
 def valid_plot(arguments: str) -> bool:
@@ -652,7 +681,7 @@ def run_live(
         plot = request(
             trial,
             "plot",
-            "plot_line",
+            "run_python",
             [{"role": "user", "content": PLOT_PROMPT}],
         )
         if plot is not None:
@@ -661,11 +690,28 @@ def run_live(
                 _case_result(
                     trial,
                     "plot",
-                    "plot_line",
+                    "run_python",
                     plot,
                     plot_error is None,
                     known_tools,
                     plot_error,
+                )
+            )
+        calculation = request(
+            trial,
+            "calculation",
+            "run_python",
+            [{"role": "user", "content": MATH_PROMPT}],
+        )
+        if calculation is not None:
+            results.append(
+                _case_result(
+                    trial,
+                    "calculation",
+                    "run_python",
+                    calculation,
+                    valid_calculation(calculation.arguments),
+                    known_tools,
                 )
             )
         image_query = request(
@@ -820,7 +866,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for result in results:
         print(json.dumps(result.summary(), separators=(",", ":")))
-    expected_cases = arguments.trials * 3
+    expected_cases = arguments.trials * 4
     passed = len(results) == expected_cases and all(result.passed for result in results)
     print(json.dumps({"passed": passed, "cases": len(results)}, separators=(",", ":")))
     return 0 if passed else 1

@@ -382,7 +382,7 @@ not stop speech. The device publishes the image only after speech ends.
 
 Restricted Python runs in the voice worker before the final answer. It uses one
 fixed 256 KiB PSRAM heap, a 12 KiB stack limit, a 2,048-byte output limit, a
-1,024-byte source limit, a one-second wall-clock limit, and a 250,000-hook
+1,536-byte source limit, a one-second wall-clock limit, and a 250,000-hook
 operation limit. Bytecode jumps, returns, garbage collection, and iterator
 steps check the limits and button cancellation. The interpreter has no file,
 network, hardware, persistence, native-code, `eval`, or `exec` access. It wipes
@@ -391,14 +391,15 @@ within 4,096 bytes. It marks printed text as truncated if JSON escaping cannot
 fit the complete bounded output. A failed optional Python heap allocation
 removes this tool but does not disable the other voice tools.
 
-The model route uses a structured plot action instead of generated Python
-syntax. It supplies 2 through 24 matching literal x and y points plus an
-optional printable ASCII title. A null y point makes a gap. The tool validates
-strictly increasing x points, matching lengths, finite values, the title, and
-at least one line segment before
-it publishes plot data. Thus, a model cannot use the route response budget on
-unavailable imports or invalid loop syntax. The interpreter keeps its separate
-1,024-byte hard source limit for other bounded calculations.
+For a plot, the model gives the `run_python` tool 2 through 24 matching literal
+x and y points plus an optional printable ASCII title. A null y point makes a
+gap. The tool validates strictly increasing x points, matching lengths, finite
+values, the title, and at least one line segment. It then builds bounded
+MicroPython source that calls the built-in `plot.line` function. The existing
+interpreter runs this source and returns the plot data. Thus, the model does not
+need to generate imports or loop syntax, but each plot still uses the same
+MicroPython interpreter. The interpreter keeps its 1,536-byte source limit for
+all runs.
 
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
@@ -521,7 +522,7 @@ normal answer must fit a spoken interaction.
 
 ## Tools
 
-Version 1 has thirteen tools:
+Version 1 has twelve tools:
 
 - `search_web(query)`: returns a small list of titles, URLs, and snippets.
 - `search_images(query)`: returns a small list with short result IDs.
@@ -532,14 +533,14 @@ Version 1 has thirteen tools:
 - `power_off()`: schedules power-off only after an explicit current request.
 - `restart_device()`: schedules a software restart only after an explicit
   current request.
-- `run_python(code)`: runs bounded MicroPython code for short calculations.
-  Printed calculation text enters the tool result. Code can also use the
-  internal plot store with 2 through 128 entries.
-- `plot_line(plot)`: validates one structured line plot without generated
-  Python syntax. A model plot has 2 through 24 increasing literal entries and a
-  printable ASCII title of at most 48 bytes. Each x value and each defined y
-  value must be finite. A null y value makes a gap for an undefined function
-  value, such as zero in a plot of `1/x`.
+- `run_python(code | plot)`: runs bounded MicroPython for short calculations
+  and plots. Printed calculation text enters the tool result. Code can use the
+  internal plot store with 2 through 128 entries. For a model plot, the tool
+  validates 2 through 24 increasing literal entries and a printable ASCII title
+  of at most 48 bytes. It builds bounded MicroPython that calls `plot.line` and
+  runs it in the same interpreter. Each x value and each defined y value must be
+  finite. A null y value makes a gap for an undefined function value, such as
+  zero in a plot of `1/x`.
 - `remember_memory(fact)`: saves one concise fact only after an explicit user
   request. An exact duplicate returns `unchanged` without a write.
 - `forget_memory(id)`: removes one fact by the ID in the current prompt.

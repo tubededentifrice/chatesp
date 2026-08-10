@@ -21,13 +21,13 @@ struct Limits {
     static constexpr std::size_t max_chat_request_bytes = 32'768;
     static constexpr std::size_t max_chat_response_bytes = 128'000;
     static constexpr std::size_t max_sse_line_bytes = 16'384;
-    static constexpr std::size_t max_tool_count = 13;
+    static constexpr std::size_t max_tool_count = 12;
     static constexpr std::size_t max_tool_rounds = 3;
     static constexpr std::size_t max_tool_name_bytes = 32;
     static constexpr std::size_t max_tool_description_bytes = 192;
     static constexpr std::size_t max_tool_schema_bytes = 768;
     static constexpr std::size_t max_tool_call_id_bytes = 96;
-    static constexpr std::size_t max_python_source_bytes = 1'024;
+    static constexpr std::size_t max_python_source_bytes = 1'536;
     static constexpr std::size_t max_tool_arguments_bytes =
         max_python_source_bytes * 6 + 32;
     static constexpr std::size_t max_tool_result_bytes = 4'096;

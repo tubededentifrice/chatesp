@@ -139,7 +139,7 @@ public:
         ++route_calls;
         route.kind = TurnRouteKind::tool_call;
         route.tool_call.id.assign("plot_call");
-        route.tool_call.name.assign("plot_line");
+        route.tool_call.name.assign("run_python");
         route.tool_call.arguments.assign(
             "{\"plot\":{\"title\":\"1/x\",\"y\":[-1,-2,null,2,1],"
             "\"x\":[-1,-0.5,0,0.5,1]}}");
@@ -432,7 +432,6 @@ void test_prompt_is_short_and_voice_focused() {
         std::strstr(system_prompt, "Never claim that search is unsupported"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "get_device_status"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "run_python"));
-    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "plot_line"));
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "2 to 24"));
     TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "null"));
     TEST_ASSERT_NOT_NULL(
@@ -442,7 +441,7 @@ void test_prompt_is_short_and_voice_focused() {
     TEST_ASSERT_NOT_NULL(
         std::strstr(routing_prompt(), "Do not give Python code for a plot"));
     TEST_ASSERT_NOT_NULL(
-        std::strstr(routing_prompt(), "plot_line call completes routing"));
+        std::strstr(routing_prompt(), "run_python call completes routing"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "explicitly asks"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "restart_device"));
     TEST_ASSERT_NOT_NULL(
@@ -695,7 +694,20 @@ void test_agent_loop_stops_after_three_tool_rounds() {
 }
 
 void test_agent_loop_finishes_after_one_structured_plot() {
-    PlotLineTool tool;
+    TestPythonExecution provider;
+    provider.next_execution.plot.count = 5;
+    provider.next_execution.plot.x[0] = -1.0;
+    provider.next_execution.plot.x[1] = -0.5;
+    provider.next_execution.plot.x[2] = 0.0;
+    provider.next_execution.plot.x[3] = 0.5;
+    provider.next_execution.plot.x[4] = 1.0;
+    provider.next_execution.plot.y[0] = -1.0;
+    provider.next_execution.plot.y[1] = -2.0;
+    provider.next_execution.plot.y[2] = NAN;
+    provider.next_execution.plot.y[3] = 2.0;
+    provider.next_execution.plot.y[4] = 1.0;
+    provider.next_execution.plot.title.assign("1/x");
+    RunPythonTool tool(provider);
     ToolRegistry registry;
     assert_error(Error::none, registry.add(tool));
     RepeatingPythonRouteChat chat;
@@ -710,6 +722,11 @@ void test_agent_loop_finishes_after_one_structured_plot() {
         loop.run(request, sizeof(request) - 1, answer, cancellation));
     TEST_ASSERT_EQUAL_INT(1, chat.route_calls);
     TEST_ASSERT_EQUAL_INT(1, chat.answer_calls);
+    TEST_ASSERT_EQUAL_INT(1, provider.calls);
+    TEST_ASSERT_EQUAL_STRING(
+        "import plot\nplot.line([-1,-0.5,0,0.5,1],"
+        "[-1,-2,None,2,1],\"1/x\")",
+        provider.last_source.c_str());
     TEST_ASSERT_EQUAL_STRING("The plot is displayed.", answer.c_str());
 
     PlotData plot;
@@ -1060,8 +1077,12 @@ void test_python_tool_returns_output_and_one_plot() {
     provider.next_execution.plot.title.assign("Squares");
     RunPythonTool tool(provider);
     TEST_ASSERT_NOT_NULL(
-        std::strstr(tool.description(), "numeric calculation"));
+        std::strstr(tool.description(), "calculations with code"));
+    TEST_ASSERT_NOT_NULL(std::strstr(tool.description(), "2 to 24"));
+    TEST_ASSERT_NOT_NULL(std::strstr(tool.parameters_schema(), "\"oneOf\""));
     TEST_ASSERT_NOT_NULL(std::strstr(tool.parameters_schema(), "\"code\""));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(tool.parameters_schema(), "\"maxItems\":24"));
     TestCancellation cancellation;
     FixedText<Limits::max_tool_result_bytes> result;
     constexpr char arguments[] =
@@ -1127,22 +1148,39 @@ void test_python_tool_reports_limits_and_validates_exact_input() {
 }
 
 void test_python_tool_accepts_structured_plot_in_any_key_order() {
-    PlotLineTool tool;
+    TestPythonExecution provider;
+    provider.next_execution.plot.count = 4;
+    provider.next_execution.plot.x[0] = -1.0;
+    provider.next_execution.plot.x[1] = 0.0;
+    provider.next_execution.plot.x[2] = 1.0;
+    provider.next_execution.plot.x[3] = 2.0;
+    provider.next_execution.plot.y[0] = 1.0;
+    provider.next_execution.plot.y[1] = NAN;
+    provider.next_execution.plot.y[2] = 3.0;
+    provider.next_execution.plot.y[3] = 40.0;
+    provider.next_execution.plot.title.assign("Interpreter result");
+    RunPythonTool tool(provider);
     TEST_ASSERT_NOT_NULL(std::strstr(tool.description(), "2 to 24"));
-    TEST_ASSERT_NOT_NULL(std::strstr(tool.description(), "null y point"));
     TEST_ASSERT_NOT_NULL(
         std::strstr(tool.parameters_schema(), "\"maxItems\":24"));
     TestCancellation cancellation;
     FixedText<Limits::max_tool_result_bytes> result;
     constexpr char arguments[] =
-        "{\"plot\":{\"y\":[1,null,3,4],\"title\":\"Line\","
+        "{\"plot\":{\"y\":[1,null,3,4],"
+        "\"title\":\"A \\\"quote\\\" \\\\ path\","
         "\"x\":[-1,0,1,2]}}";
 
     assert_error(
         Error::none,
         tool.execute(arguments, sizeof(arguments) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(1, provider.calls);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"status\":\"ok\",\"plot_ready\":true}",
+        "import plot\nplot.line([-1,0,1,2],[1,None,3,4],"
+        "\"A \\\"quote\\\" \\\\ path\")",
+        provider.last_source.c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"status\":\"ok\",\"output\":\"\","
+        "\"output_truncated\":false,\"plot_ready\":true}",
         result.c_str());
 
     PlotData plot;
@@ -1150,12 +1188,13 @@ void test_python_tool_accepts_structured_plot_in_any_key_order() {
     TEST_ASSERT_EQUAL_UINT32(4, plot.count);
     TEST_ASSERT_TRUE(plot.x[0] == -1.0);
     TEST_ASSERT_TRUE(std::isnan(plot.y[1]));
-    TEST_ASSERT_TRUE(plot.y[3] == 4.0);
-    TEST_ASSERT_EQUAL_STRING("Line", plot.title.c_str());
+    TEST_ASSERT_TRUE(plot.y[3] == 40.0);
+    TEST_ASSERT_EQUAL_STRING("Interpreter result", plot.title.c_str());
 }
 
 void test_python_tool_rejects_invalid_structured_plots() {
-    PlotLineTool tool;
+    TestPythonExecution provider;
+    RunPythonTool tool(provider);
     TestCancellation cancellation;
     FixedText<Limits::max_tool_result_bytes> result;
     constexpr const char *invalid[] = {
@@ -1190,6 +1229,7 @@ void test_python_tool_rejects_invalid_structured_plots() {
         Error::invalid_argument,
         tool.execute(
             over_limit, sizeof(over_limit) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_INT(0, provider.calls);
 }
 
 void test_python_tool_bounds_escaped_output_and_arguments() {
@@ -1247,7 +1287,6 @@ void test_registry_holds_search_and_device_tools() {
     PowerOffTool power_off(device_provider);
     RestartDeviceTool restart(device_provider);
     RunPythonTool python(python_provider);
-    PlotLineTool plot;
     RememberMemoryTool remember(memory_provider);
     ForgetMemoryTool forget(memory_provider);
     ClearMemoriesTool clear(memory_provider);
@@ -1262,13 +1301,12 @@ void test_registry_holds_search_and_device_tools() {
     assert_error(Error::none, registry.add(power_off));
     assert_error(Error::none, registry.add(restart));
     assert_error(Error::none, registry.add(python));
-    assert_error(Error::none, registry.add(plot));
     assert_error(Error::none, registry.add(remember));
     assert_error(Error::none, registry.add(forget));
     assert_error(Error::none, registry.add(clear));
     assert_error(Error::none, registry.add(compact));
-    TEST_ASSERT_EQUAL_UINT32(13, registry.size());
-    TEST_ASSERT_EQUAL_UINT32(13, Limits::max_tool_count);
+    TEST_ASSERT_EQUAL_UINT32(12, registry.size());
+    TEST_ASSERT_EQUAL_UINT32(12, Limits::max_tool_count);
 }
 
 void test_memory_tool_text_uses_configured_limits() {

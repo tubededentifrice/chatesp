@@ -26,19 +26,14 @@ constexpr char image_action_schema[] =
 
 constexpr char python_schema[] =
     "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\","
-    "\"maxLength\":1024}},\"required\":[\"code\"],"
-    "\"additionalProperties\":false}";
-
-constexpr char plot_schema[] =
-    "{\"type\":\"object\",\"properties\":{\"plot\":{\"type\":\"object\","
-    "\"properties\":{"
+    "\"maxLength\":1536},\"plot\":{\"type\":\"object\",\"properties\":{"
     "\"x\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":24,\"items\":{"
     "\"type\":\"number\"}},\"y\":{\"type\":\"array\",\"minItems\":2,"
     "\"maxItems\":24,\"items\":{\"type\":[\"number\",\"null\"]}},"
     "\"title\":{\"type\":\"string\",\"maxLength\":48,"
     "\"pattern\":\"^[ -~]{0,48}$\"}},"
     "\"required\":[\"x\",\"y\"],\"additionalProperties\":false}},"
-    "\"required\":[\"plot\"],"
+    "\"oneOf\":[{\"required\":[\"code\"]},{\"required\":[\"plot\"]}],"
     "\"additionalProperties\":false}";
 
 constexpr char empty_object_schema[] =
@@ -170,6 +165,16 @@ Error parse_query(
 }
 
 constexpr std::size_t max_structured_plot_points = 24;
+constexpr std::size_t max_structured_plot_number_bytes = 24;
+constexpr std::size_t max_structured_plot_generated_bytes =
+    sizeof("import plot\nplot.line([") - 1 +
+    (2 * max_structured_plot_points * max_structured_plot_number_bytes) +
+    (2 * (max_structured_plot_points - 1)) + sizeof("],[") - 1 +
+    sizeof("],\"") - 1 + (2 * Limits::max_plot_title_bytes) +
+    sizeof("\")") - 1;
+static_assert(
+    Limits::max_python_source_bytes >= max_structured_plot_generated_bytes,
+    "Structured plot source must fit the MicroPython source limit");
 
 enum class PythonActionKind : std::uint8_t { code, plot };
 
@@ -343,6 +348,69 @@ Error parse_python_action(
         }
     }
     return Error::none;
+}
+
+bool append_python_number(
+    FixedText<Limits::max_python_source_bytes> &source, double value) {
+    char number[max_structured_plot_number_bytes + 1]{};
+    const int size = std::snprintf(number, sizeof(number), "%.17g", value);
+    return size > 0 && static_cast<std::size_t>(size) < sizeof(number) &&
+        source.append(number, static_cast<std::size_t>(size));
+}
+
+bool build_structured_plot_source(
+    const PlotData &plot,
+    FixedText<Limits::max_python_source_bytes> &source) {
+    source.clear();
+    if (!source.append("import plot\nplot.line([")) {
+        return false;
+    }
+    for (std::size_t index = 0; index < plot.count; ++index) {
+        if ((index != 0 && !source.push_back(',')) ||
+            !append_python_number(source, plot.x[index])) {
+            source.clear();
+            return false;
+        }
+    }
+    if (!source.append("],[")) {
+        source.clear();
+        return false;
+    }
+    for (std::size_t index = 0; index < plot.count; ++index) {
+        if (index != 0 && !source.push_back(',')) {
+            source.clear();
+            return false;
+        }
+        if (std::isnan(plot.y[index])) {
+            if (!source.append("None")) {
+                source.clear();
+                return false;
+            }
+        } else if (!append_python_number(source, plot.y[index])) {
+            source.clear();
+            return false;
+        }
+    }
+    if (!source.append("],\"")) {
+        source.clear();
+        return false;
+    }
+    for (std::size_t index = 0; index < plot.title.size(); ++index) {
+        const char value = plot.title.data()[index];
+        if ((value == '\\' || value == '\"') && !source.push_back('\\')) {
+            source.clear();
+            return false;
+        }
+        if (!source.push_back(value)) {
+            source.clear();
+            return false;
+        }
+    }
+    if (!source.append("\")")) {
+        source.clear();
+        return false;
+    }
+    return true;
 }
 
 Error parse_image_action(
@@ -922,8 +990,8 @@ const char *SearchImagesTool::parameters_schema() const {
 const char *RunPythonTool::name() const { return "run_python"; }
 
 const char *RunPythonTool::description() const {
-    return "Run bounded Python code for a numeric calculation. Print each "
-           "value needed for the answer.";
+    return "Run bounded calculations with code. For a plot, give 2 to 24 "
+           "increasing literal x/y points and null y values for gaps.";
 }
 
 const char *RunPythonTool::parameters_schema() const { return python_schema; }
@@ -1037,20 +1105,24 @@ Error RunPythonTool::execute(
     CancellationToken &cancellation) {
     pending_plot_.clear();
     PythonAction action;
+    PlotData requested_plot;
     Error error = parse_python_action(
-        arguments, size, action, pending_plot_);
+        arguments, size, action, requested_plot);
     if (error != Error::none) {
-        pending_plot_.clear();
         return error;
     }
     if (cancellation.cancelled()) {
-        pending_plot_.clear();
+        action.source.clear();
+        requested_plot.clear();
         return Error::cancelled;
     }
     if (action.kind == PythonActionKind::plot) {
-        pending_plot_.clear();
-        return Error::invalid_argument;
+        if (!build_structured_plot_source(requested_plot, action.source)) {
+            requested_plot.clear();
+            return Error::limit_exceeded;
+        }
     }
+    requested_plot.clear();
     PythonExecution execution;
     error = provider_.execute(
         action.source.data(), action.source.size(), execution, cancellation);
@@ -1089,51 +1161,6 @@ bool RunPythonTool::take_plot(PlotData &plot) {
 }
 
 void RunPythonTool::clear_plot() { pending_plot_.clear(); }
-
-const char *PlotLineTool::name() const { return "plot_line"; }
-
-const char *PlotLineTool::description() const {
-    return "Show one line plot from 2 to 24 increasing literal x points and "
-           "matching y points. Use a null y point for a visible gap.";
-}
-
-const char *PlotLineTool::parameters_schema() const { return plot_schema; }
-
-Error PlotLineTool::execute(
-    const char *arguments, std::size_t size,
-    FixedText<Limits::max_tool_result_bytes> &result,
-    CancellationToken &cancellation) {
-    pending_plot_.clear();
-    PythonAction action;
-    Error error = parse_python_action(
-        arguments, size, action, pending_plot_);
-    if (error != Error::none || action.kind != PythonActionKind::plot) {
-        pending_plot_.clear();
-        return error != Error::none ? error : Error::invalid_argument;
-    }
-    if (cancellation.cancelled()) {
-        pending_plot_.clear();
-        return Error::cancelled;
-    }
-    if (!result.append(
-            "{\"status\":\"ok\",\"plot_ready\":true}")) {
-        pending_plot_.clear();
-        return Error::limit_exceeded;
-    }
-    return Error::none;
-}
-
-bool PlotLineTool::take_plot(PlotData &plot) {
-    if (!pending_plot_.ready()) {
-        plot.clear();
-        return false;
-    }
-    plot = pending_plot_;
-    pending_plot_.clear();
-    return true;
-}
-
-void PlotLineTool::clear_plot() { pending_plot_.clear(); }
 
 Error SearchImagesTool::execute(
     const char *arguments, std::size_t size,

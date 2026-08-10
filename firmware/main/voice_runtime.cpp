@@ -437,7 +437,6 @@ public:
           web_tool_(web_provider_),
           image_tool_(image_provider_),
           python_tool_(python_executor_),
-          plot_tool_(),
           device_status_tool_(device_control_),
           brightness_tool_(device_control_),
           volume_tool_(device_control_),
@@ -460,7 +459,6 @@ public:
             tools_.add(image_tool_) == agent::Error::none &&
             (!python_executor_.available() ||
              tools_.add(python_tool_) == agent::Error::none) &&
-            tools_.add(plot_tool_) == agent::Error::none &&
             tools_.add(device_status_tool_) == agent::Error::none &&
             tools_.add(brightness_tool_) == agent::Error::none &&
             tools_.add(volume_tool_) == agent::Error::none &&
@@ -866,8 +864,7 @@ private:
     void prepare_visual() {
         pending_plot_.clear();
         clear_runtime_image_state();
-        if (plot_tool_.take_plot(pending_plot_) ||
-            python_tool_.take_plot(pending_plot_)) {
+        if (python_tool_.take_plot(pending_plot_)) {
             return;
         }
         const bool requested =
@@ -1392,7 +1389,6 @@ private:
         agent_loop_->clear_thread();
         clear_all_image_state();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         pending_plot_.clear();
         const bool local_time_ready = utc_clock_.has_local_time();
         const bool wifi_configured = settings_.has_wifi_credentials();
@@ -2077,7 +2073,6 @@ private:
         capture_.discard();
         clear_all_image_state();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         pending_plot_.clear();
         cancellation_.reset();
         if (capture_.start() != ESP_OK) {
@@ -2266,7 +2261,6 @@ private:
         memory_store_.clear_turn_state();
         image_tool_.clear_results();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         error = request_cancellation.normalize(error);
         if (error != agent::Error::none) {
             speech_segmenter_.reset();
@@ -2455,7 +2449,6 @@ private:
             runtime::CrashEvent::sleep_model_request);
         clear_all_image_state();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         pending_plot_.clear();
         with_display([]() {
             ui::show_answer_notice("TURNING OFF", "POWER OFF");
@@ -2495,7 +2488,6 @@ private:
         pcm_sink_.cancel_and_stop();
         clear_all_image_state();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         pending_plot_.clear();
         hide_visual();
         interaction_.ready(monotonic_ms());
@@ -2512,7 +2504,6 @@ private:
         pcm_sink_.cancel_and_stop();
         clear_all_image_state();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         pending_plot_.clear();
         interaction_.fail(monotonic_ms());
         previous_state_ = interaction_.state();
@@ -2560,7 +2551,6 @@ private:
         agent_loop_->clear_thread();
         clear_all_image_state();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         pending_plot_.clear();
         hide_visual();
         with_display([this]() {
@@ -2621,7 +2611,6 @@ private:
         agent_loop_->clear_thread();
         clear_all_image_state();
         python_tool_.clear_plot();
-        plot_tool_.clear_plot();
         pending_plot_.clear();
         hide_visual();
         if (network_initialized_) {
@@ -2837,7 +2826,6 @@ private:
     agent::SearchWebTool web_tool_;
     agent::SearchImagesTool image_tool_;
     agent::RunPythonTool python_tool_;
-    agent::PlotLineTool plot_tool_;
     agent::GetDeviceStatusTool device_status_tool_;
     agent::SetBrightnessTool brightness_tool_;
     agent::SetVolumeTool volume_tool_;

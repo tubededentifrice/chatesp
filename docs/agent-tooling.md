@@ -74,10 +74,11 @@ uv run --locked python tools/model_conformance.py --trials 10
 
 The command derives the prompt, default model, registered tools, descriptions,
 and schemas from the firmware source. It uses the firmware streaming request
-shape. Each trial checks the exact French reciprocal-plot and red-apple image
-requests. It also checks image result selection with current result IDs. Output
-contains only trial numbers, tool names, argument-valid flags, and fixed error
-categories. It does not print prompts, generated code, search queries, answers,
+shape. Each trial checks the exact French reciprocal-plot, multiplication, and
+red-apple image requests. It also checks image result selection with current
+result IDs. Output contains only trial numbers, tool names, argument-valid
+flags, and fixed error categories. It does not print prompts, generated code,
+search queries, answers,
 or credentials.
 
 Use `--model PROVIDER/MODEL` for a bounded comparison. A pass requires all
