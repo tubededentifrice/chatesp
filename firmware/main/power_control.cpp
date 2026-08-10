@@ -11,6 +11,7 @@
 #include "esp_check.h"
 #include "esp_io_expander.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 namespace chatesp::power {
@@ -57,6 +58,7 @@ bool mode_button_stably_pressed = false;
 bool hardware_hold_shutdown_suppressed = false;
 bool action_button_stably_pressed = false;
 bool hold_policy_error_reported = false;
+bool startup_power_key_wake = false;
 std::uint32_t hold_policy_error_reported_at_ms = 0;
 std::atomic<std::uint32_t> source_revision{0};
 
@@ -157,12 +159,12 @@ esp_err_t prepare_power_key_events(
     bool *startup_press_event,
     bool *startup_release_event,
     bool *startup_short_press_event,
-    bool *startup_vbus_remove_event) {
+    bool *startup_power_source_event) {
     ESP_RETURN_ON_FALSE(
         startup_press_event != nullptr &&
             startup_release_event != nullptr &&
             startup_short_press_event != nullptr &&
-            startup_vbus_remove_event != nullptr,
+            startup_power_source_event != nullptr,
         ESP_ERR_INVALID_ARG,
         kTag,
         "No startup PWR event output");
@@ -189,8 +191,8 @@ esp_err_t prepare_power_key_events(
         (status & kAxp2101PowerKeyPositiveEdge) != 0;
     *startup_short_press_event =
         (status & kAxp2101PowerKeyShortPress) != 0;
-    *startup_vbus_remove_event =
-        (status & kAxp2101VbusRemoveEvent) != 0;
+    *startup_power_source_event =
+        (status & kAxp2101PowerSourceEventMask) != 0;
     // IRQ status bits are write-one-to-clear. Clear only observed events so an
     // event that arrives after the read stays available to the first poll.
     const std::uint8_t observed = status &
@@ -282,11 +284,11 @@ esp_err_t initialize() {
     bool startup_press_event = false;
     bool startup_release_event = false;
     bool startup_short_press_event = false;
-    bool startup_vbus_remove_event = false;
+    bool startup_power_source_event = false;
     ESP_RETURN_ON_ERROR(
         prepare_power_key_events(
             &startup_press_event, &startup_release_event,
-            &startup_short_press_event, &startup_vbus_remove_event),
+            &startup_short_press_event, &startup_power_source_event),
         kTag,
         "PWR event setup failed");
 
@@ -297,7 +299,27 @@ esp_err_t initialize() {
         "PWR button start read failed");
     const bool pressed = startup_power_button_pressed(
         level_pressed, startup_press_event, startup_release_event,
-        startup_short_press_event, startup_vbus_remove_event);
+        startup_short_press_event, startup_power_source_event);
+    std::uint8_t power_status = 0;
+    const bool power_status_valid =
+        read_axp2101(kAxp2101Status1, &power_status) == ESP_OK;
+    startup_power_key_wake = confirmed_battery_power_key_wake({
+        esp_reset_reason() == ESP_RST_POWERON,
+        level_pressed,
+        startup_press_event,
+        startup_release_event,
+        startup_short_press_event,
+        startup_power_source_event,
+        power_status_valid,
+        power_status_valid &&
+            axp2101_status_has_external_power(power_status),
+    });
+    if (startup_power_key_wake) {
+        crash_diagnostics::mark(runtime::CrashEvent::startup_pwr_credit);
+        ESP_LOGI(
+            kTag, "Confirmed battery PWR wake with %u ms hold credit",
+            static_cast<unsigned>(kAxp2101FastPowerOnMs));
+    }
     if (level_pressed && !pressed) {
         ESP_LOGW(
             kTag,
@@ -440,6 +462,18 @@ bool action_button_is_pressed() {
 bool mode_button_is_pressed() {
     return initialized && mode_button_initialized &&
         mode_button_stably_pressed;
+}
+
+bool startup_power_key_wake_confirmed() {
+    return initialized && startup_power_key_wake;
+}
+
+std::uint32_t startup_button_started_at_ms(
+    std::uint32_t observed_at_ms) {
+    return observed_at_ms -
+        (startup_power_key_wake_confirmed()
+             ? kAxp2101FastPowerOnMs
+             : 0U);
 }
 
 std::optional<BatteryStatus> battery_status() {

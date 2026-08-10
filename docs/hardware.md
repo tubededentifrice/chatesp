@@ -120,25 +120,37 @@ The production profile does not run the optional full-PSRAM start test. It uses
 a speed-optimized bootloader that reports only warnings and failures.
 Development keeps the PSRAM start test and normal boot reports so firmware work
 still checks the fixed memory part. The UI sends the reliable two-frame splash
-before it probes touch, builds hidden Clock, plot, and control views, or loads
-saved memories. It defers the rounded Clock path buffer and calculation until
-the first Clock entry. Thus, touch and Clock work do not delay the first visible
-feedback. These start changes do not change system-off current or steady active
-settings. Measure PWR-to-pixels time and complete interaction energy on the
-board.
+while a low-priority task loads the small display-preference record. It then
+builds only the capture, footer, passkey, and sleep views. It defers touch and
+control views until voice work is idle. It builds Clock only on an explicit
+BOOT-button action. It builds plot and image overlays after capture stops and
+after it shows the transcript. It also defers saved settings and memories to a
+bounded startup task that runs while a PWR hold can start capture. It defers
+the rounded Clock path buffer and calculation until the first Clock entry.
+Thus, optional flash, touch, and Clock work do not delay the first visible
+feedback or the first microphone sample. These start changes do not change
+system-off current or steady active settings. Measure PWR-to-pixels time and
+complete interaction energy on the board.
 
 An active PWR press does not replay the panel initialization table before the
 firmware knows its action. A short press draws the black sleep frame without an
-intermediate panel restart. If the press reaches the recording threshold,
-microphone capture starts first and the bounded panel recovery follows. A wake
-from development soft sleep or USB-held production system-off still requests
-panel recovery at once.
+intermediate panel restart. After an accepted press, firmware can allocate and
+clear the capture buffer. It does not change the codec, open it, or read a
+sample before the recording threshold. If the press reaches that threshold,
+microphone capture owns the audio session, sets the input gain, and starts
+without waiting for the persistent display or BLE controller. A wake from
+development soft sleep or USB-held production system-off still requests panel
+recovery at once.
 
 The 128 ms PWR-on setting is a reversible PMIC register change. It stays set
 through normal AXP2101 system-off and does not enable a processor timer, poll,
 or switched rail while off. Thus, it does not add system-off current. A complete
 PMIC power loss can restore the factory PWR-on time until the next firmware
 start writes the fast value again.
+The timestamp credit also depends on the AXP2101 press IRQ staying latched
+through system-off and on the ESP32 reporting a power-on reset. Verify both
+facts on the V2 board. If either fact is absent, firmware safely gives no
+credit.
 
 USB can keep the ESP32 powered after the PMIC accepts system-off. Production
 must stay in its completed sleep state and repeat the request at a one-second
@@ -239,6 +251,19 @@ The connected V2 board must pass these checks for this control change:
   `settings_apply_complete` and does not reset after `settings_apply_begin`;
 - a held battery-powered PWR cold start uses saved production settings before
   it sends a cloud request;
+- on a production V2 board without USB, 20 short and 20 held cold starts record
+  PWR-to-first-pixel, PWR-to-`LISTENING`, and PWR-to-first-sample time. Report
+  the median and worst time against the prior firmware;
+- no production cold-start microphone sample or codec-open event occurs before
+  350 ms of physical hold time. Each short cold press leaves BLE off, keeps the
+  AMOLED black after sleep, and returns the prepared PSRAM buffer;
+- a software reset, watchdog reset, brownout, battery insertion, USB insertion,
+  or USB-held wake gets no 128 ms startup credit;
+- with touch disconnected, a held PWR press can still record and a short PWR
+  press can still sleep;
+- 100 short sleep/wake cycles and 100 held recording cycles have no late panel
+  wake, late BLE start, task-stack overflow, internal-memory loss, or PSRAM
+  loss;
 - a short top-button press changes between portrait ChatESP and Clock;
 - an electrical top-button pulse shorter than 30 ms does not change mode;
 - a long top-button press and a top-button press during development soft sleep

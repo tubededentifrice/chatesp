@@ -52,6 +52,7 @@ constexpr std::size_t kMaximumDataFrameSize =
 constexpr std::uint32_t kStopTaskStackBytes = 4 * 1024;
 constexpr UBaseType_t kStopTaskPriority = 5;
 constexpr std::uint32_t kStopTaskReclaimDelayMs = 10;
+constexpr std::uint32_t kLifecyclePollMs = 1;
 constexpr std::uint32_t kDisconnectTimeoutMs = 2'000;
 constexpr std::uint32_t kAdvertiseRetryMs = 100;
 constexpr std::uint8_t kAdvertiseRetryLimit = 5;
@@ -198,6 +199,12 @@ std::size_t s_cached_memory_response_size = 0;
 std::uint16_t s_cached_memory_connection = kNoConnection;
 std::uint8_t s_address_type = 0;
 std::atomic<bool> s_running{false};
+enum class LifecycleState : std::uint8_t {
+    idle,
+    starting,
+    stopping,
+};
+std::atomic<LifecycleState> s_lifecycle{LifecycleState::idle};
 std::atomic<bool> s_bond_available{false};
 ble_npl_callout s_advertise_retry_callout{};
 bool s_advertise_retry_initialized = false;
@@ -224,6 +231,23 @@ QueueHandle_t s_http_proxy_response_queue = nullptr;
 struct HttpProxyFrame {
     std::uint16_t size = 0;
     std::array<std::uint8_t, kMaximumHttpProxyFrameSize> data{};
+};
+
+class StartGateGuard {
+public:
+    explicit StartGateGuard(bool active) : active_(active) {}
+    ~StartGateGuard() {
+        if (active_) {
+            s_lifecycle.store(
+                LifecycleState::idle, std::memory_order_release);
+        }
+    }
+
+    StartGateGuard(const StartGateGuard &) = delete;
+    StartGateGuard &operator=(const StartGateGuard &) = delete;
+
+private:
+    bool active_ = false;
 };
 
 void delete_http_proxy_resources() {
@@ -1261,6 +1285,7 @@ esp_err_t consume_stop_result() {
     // task one bounded interval to reclaim that stack before the caller starts
     // another memory-heavy worker or initializes Bluetooth again.
     vTaskDelay(pdMS_TO_TICKS(kStopTaskReclaimDelayMs));
+    s_lifecycle.store(LifecycleState::idle, std::memory_order_release);
     return result;
 }
 
@@ -1679,14 +1704,21 @@ esp_err_t start(
         device_context_callback == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_stop_gate.running()) {
-        return ESP_ERR_INVALID_STATE;
-    }
     if (s_stop_gate.completed()) {
         const esp_err_t prior_stop_result = consume_stop_result();
         if (s_running.load(std::memory_order_acquire)) {
             return prior_stop_result;
         }
+    }
+    LifecycleState expected = LifecycleState::idle;
+    if (!s_lifecycle.compare_exchange_strong(
+            expected, LifecycleState::starting,
+            std::memory_order_acq_rel)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    StartGateGuard start_gate(true);
+    if (s_stop_gate.running()) {
+        return ESP_ERR_INVALID_STATE;
     }
     if (s_running.load(std::memory_order_acquire)) {
         return ESP_ERR_INVALID_STATE;
@@ -1910,17 +1942,50 @@ esp_err_t stop(std::uint32_t timeout_ms) {
     if (s_stop_gate.completed()) {
         return consume_stop_result();
     }
-    if (!s_running.load(std::memory_order_acquire)) {
+    const TickType_t started = xTaskGetTickCount();
+    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    if (timeout_ms != 0 && timeout_ticks == 0) {
+        timeout_ticks = 1;
+    }
+    TickType_t poll_ticks = pdMS_TO_TICKS(kLifecyclePollMs);
+    if (poll_ticks == 0) {
+        poll_ticks = 1;
+    }
+
+    bool owns_stop_gate = false;
+    while (!s_stop_gate.running()) {
+        if (s_stop_gate.completed()) {
+            return consume_stop_result();
+        }
+        LifecycleState expected = LifecycleState::idle;
+        if (s_lifecycle.compare_exchange_strong(
+                expected, LifecycleState::stopping,
+                std::memory_order_acq_rel)) {
+            owns_stop_gate = true;
+            break;
+        }
+        if (xTaskGetTickCount() - started >= timeout_ticks) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(poll_ticks);
+    }
+
+    if (owns_stop_gate && !s_running.load(std::memory_order_acquire)) {
+        s_lifecycle.store(LifecycleState::idle, std::memory_order_release);
         return ESP_OK;
     }
-    if (!s_stop_gate.running()) {
+    if (owns_stop_gate) {
         if (s_stop_done == nullptr) {
             s_stop_done = xSemaphoreCreateBinary();
             if (s_stop_done == nullptr) {
+                s_lifecycle.store(
+                    LifecycleState::idle, std::memory_order_release);
                 return ESP_ERR_NO_MEM;
             }
         }
         if (!s_stop_gate.begin()) {
+            s_lifecycle.store(
+                LifecycleState::idle, std::memory_order_release);
             return ESP_ERR_INVALID_STATE;
         }
         crash_diagnostics::mark(runtime::CrashEvent::ble_stop_requested);
@@ -1929,16 +1994,26 @@ esp_err_t stop(std::uint32_t timeout_ms) {
             kStopTaskPriority, nullptr);
         if (task_result != pdPASS) {
             (void)s_stop_gate.cancel_begin();
+            s_lifecycle.store(
+                LifecycleState::idle, std::memory_order_release);
             return ESP_ERR_NO_MEM;
         }
     }
-    if (xSemaphoreTake(s_stop_done, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+    const TickType_t elapsed = xTaskGetTickCount() - started;
+    const TickType_t remaining =
+        elapsed < timeout_ticks ? timeout_ticks - elapsed : 0;
+    if (xSemaphoreTake(s_stop_done, remaining) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     return consume_stop_result();
 }
 
 bool running() { return s_running.load(std::memory_order_acquire); }
+
+bool starting() {
+    return s_lifecycle.load(std::memory_order_acquire) ==
+        LifecycleState::starting;
+}
 
 bool bond_available() {
     return s_bond_available.load(std::memory_order_acquire);

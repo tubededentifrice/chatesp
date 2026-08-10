@@ -359,6 +359,96 @@ void test_axp2101_fast_power_on_keeps_other_key_timings() {
         128, chatesp::power::kAxp2101FastPowerOnMs);
 }
 
+void test_cold_battery_pwr_wake_gets_recognition_credit() {
+    const chatesp::power::StartupPowerWakeEvidence evidence{
+        true, true, true, false, false, false, true, false};
+    TEST_ASSERT_TRUE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+    TEST_ASSERT_EQUAL_UINT32(
+        872,
+        chatesp::power::credited_startup_button_at_ms(1'000, evidence));
+}
+
+void test_ambiguous_startup_sources_do_not_get_recognition_credit() {
+    const chatesp::power::StartupPowerWakeEvidence confirmed{
+        true, true, true, false, false, false, true, false};
+    auto evidence = confirmed;
+    evidence.press_event = false;
+    TEST_ASSERT_FALSE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+
+    evidence = confirmed;
+    evidence.power_on_reset = false;
+    TEST_ASSERT_FALSE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+
+    evidence = confirmed;
+    evidence.power_source_event = true;
+    TEST_ASSERT_FALSE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+
+    evidence = confirmed;
+    evidence.external_power_present = true;
+    TEST_ASSERT_FALSE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+
+    evidence = confirmed;
+    evidence.power_status_valid = false;
+    TEST_ASSERT_FALSE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+
+    evidence = confirmed;
+    evidence.release_event = true;
+    TEST_ASSERT_FALSE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+
+    evidence = confirmed;
+    evidence.short_press_event = true;
+    TEST_ASSERT_FALSE(
+        chatesp::power::confirmed_battery_power_key_wake(evidence));
+
+    TEST_ASSERT_EQUAL_UINT32(
+        1'000,
+        chatesp::power::credited_startup_button_at_ms(1'000, evidence));
+}
+
+void test_pwr_wake_credit_handles_wrap_and_hold_boundary() {
+    const chatesp::power::StartupPowerWakeEvidence evidence{
+        true, true, true, false, false, false, true, false};
+    TEST_ASSERT_EQUAL_UINT32(
+        std::numeric_limits<std::uint32_t>::max() - 63U,
+        chatesp::power::credited_startup_button_at_ms(64, evidence));
+
+    InteractionStateMachine credited;
+    credited.ready(800);
+    credited.wake_button_down(
+        chatesp::power::credited_startup_button_at_ms(1'000, evidence));
+    credited.tick(1'221);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(credited.state()));
+    credited.tick(1'222);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::recording),
+        static_cast<int>(credited.state()));
+
+    auto no_credit_evidence = evidence;
+    no_credit_evidence.power_on_reset = false;
+    InteractionStateMachine no_credit;
+    no_credit.ready(800);
+    no_credit.wake_button_down(
+        chatesp::power::credited_startup_button_at_ms(
+            1'000, no_credit_evidence));
+    no_credit.tick(1'349);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(no_credit.state()));
+    no_credit.tick(1'350);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::recording),
+        static_cast<int>(no_credit.state()));
+}
+
 void test_power_button_filter_accepts_pmu_edges() {
     chatesp::PowerButtonFilter button{30};
     button.reset(false, 100);
@@ -808,6 +898,9 @@ int main(int, char **) {
     RUN_TEST(test_startup_power_button_keeps_a_held_battery_wake);
     RUN_TEST(test_startup_power_button_rejects_a_usb_removal_latch);
     RUN_TEST(test_axp2101_fast_power_on_keeps_other_key_timings);
+    RUN_TEST(test_cold_battery_pwr_wake_gets_recognition_credit);
+    RUN_TEST(test_ambiguous_startup_sources_do_not_get_recognition_credit);
+    RUN_TEST(test_pwr_wake_credit_handles_wrap_and_hold_boundary);
     RUN_TEST(test_power_button_filter_accepts_pmu_edges);
     RUN_TEST(test_power_button_filter_confirms_only_a_pmu_short_press);
     RUN_TEST(test_power_button_filter_quarantines_adjacent_usb_press_noise);

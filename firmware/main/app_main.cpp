@@ -26,9 +26,33 @@ constexpr char kTag[] = "chatesp";
 constexpr bool kDevelopmentMode = CHATESP_DEVELOPMENT_MODE != 0;
 constexpr std::uint32_t kSystemOffRetryMs = 1'000;
 constexpr std::uint32_t kSystemOffPollMs = 50;
+constexpr UBaseType_t kPreferenceLoadPriority = 1;
+constexpr std::uint32_t kPreferenceLoadStackBytes = 4 * 1024;
+
+struct PreferenceLoadContext {
+    chatesp::DevicePreferencesStore *store = nullptr;
+    TaskHandle_t waiter = nullptr;
+    esp_err_t result = ESP_ERR_INVALID_STATE;
+};
 
 std::uint32_t monotonic_ms() {
     return static_cast<std::uint32_t>(esp_timer_get_time() / 1'000ULL);
+}
+
+void preference_load_task(void *context) {
+    auto *load = static_cast<PreferenceLoadContext *>(context);
+    load->result = load->store->initialize();
+    xTaskNotifyGive(load->waiter);
+    vTaskDelete(nullptr);
+}
+
+esp_err_t finish_preference_load(
+    PreferenceLoadContext &load, bool task_started) {
+    if (!task_started) {
+        return load.store->initialize();
+    }
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    return load.result;
 }
 
 void show_start_error(const char *message) {
@@ -120,11 +144,34 @@ extern "C" void app_main() {
     enforce_startup_battery_limit();
     const bool startup_button_down =
         chatesp::power::action_button_is_pressed();
-    const std::uint32_t startup_button_at_ms = monotonic_ms();
+    const std::uint32_t startup_button_at_ms =
+        chatesp::power::startup_button_started_at_ms(monotonic_ms());
 
     static chatesp::DevicePreferencesStore device_preferences_store;
-    const esp_err_t preferences_result =
-        device_preferences_store.initialize();
+    PreferenceLoadContext preference_load{
+        &device_preferences_store, xTaskGetCurrentTaskHandle()};
+    const bool preference_task_started = xTaskCreate(
+        preference_load_task,
+        "device_preferences",
+        kPreferenceLoadStackBytes,
+        &preference_load,
+        kPreferenceLoadPriority,
+        nullptr) == pdPASS;
+
+    // Panel initialization contains a required 100 ms sleep-out delay. Load
+    // the small device preference record during this delay. The startup frame
+    // stays at zero brightness until the selected value is available.
+    if (!chatesp::ui::start_hidden()) {
+        (void)finish_preference_load(
+            preference_load, preference_task_started);
+        ESP_LOGE(kTag, "Display hidden start failed");
+        return;
+    }
+    chatesp::crash_diagnostics::mark(
+        chatesp::runtime::CrashEvent::startup_panel_ready);
+
+    const esp_err_t preferences_result = finish_preference_load(
+        preference_load, preference_task_started);
     if (preferences_result != ESP_OK) {
         ESP_LOGW(
             kTag,
@@ -134,10 +181,13 @@ extern "C" void app_main() {
     const chatesp::runtime::DevicePreferences device_preferences =
         device_preferences_store.preferences();
 
-    if (!chatesp::ui::start(device_preferences.brightness_percent)) {
-        ESP_LOGE(kTag, "Display start failed");
+    if (!chatesp::ui::publish_startup(
+            device_preferences.brightness_percent)) {
+        ESP_LOGE(kTag, "Display startup publish failed");
         return;
     }
+    chatesp::crash_diagnostics::mark(
+        chatesp::runtime::CrashEvent::startup_first_pixel);
     ESP_LOGI(
         kTag,
         "Display ready at %u percent",
@@ -145,16 +195,14 @@ extern "C" void app_main() {
     chatesp::crash_diagnostics::mark(
         chatesp::runtime::CrashEvent::display_ready);
 
-    // Saved memories are not needed to draw the startup view. Load them only
-    // after the reliable splash is visible so flash work does not delay it.
-    static chatesp::DeviceMemoryStore device_memory_store;
-    const esp_err_t memory_result = device_memory_store.initialize();
-    if (memory_result != ESP_OK) {
-        ESP_LOGW(
-            kTag,
-            "Saved memories are unavailable (category %s)",
-            esp_err_to_name(memory_result));
+    if (!chatesp::ui::prepare_capture_views()) {
+        ESP_LOGE(kTag, "Capture views start failed");
+        return;
     }
+
+    // The voice runtime loads saved memories after capture can start. Keep the
+    // static store alive for the runtime and its deferred startup worker.
+    static chatesp::DeviceMemoryStore device_memory_store;
 
     static chatesp::VoiceRuntime runtime;
     const esp_err_t runtime_result = runtime.start(
@@ -184,6 +232,8 @@ extern "C" void app_main() {
             vTaskDelay(pdMS_TO_TICKS(15));
         }
     }
+    chatesp::crash_diagnostics::mark(
+        chatesp::runtime::CrashEvent::startup_capture_ready);
     ESP_LOGI(kTag, "Voice runtime ready");
     chatesp::crash_diagnostics::mark(
         chatesp::runtime::CrashEvent::runtime_ready);

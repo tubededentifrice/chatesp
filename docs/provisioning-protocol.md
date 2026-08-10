@@ -46,11 +46,13 @@ write can cause the system pairing prompt.
 
 ## Transfer
 
-The button-wake path starts BLE before the hold becomes a recording. The
-ChatESP device keeps BLE active for the full recording when a complete saved
-bond is present. It starts a two-second phone-proxy limit when the button is
-released. If the proxy is still not ready, it stops BLE before it starts Wi-Fi
-for the cloud TLS request. This fallback closes an active phone connection.
+The button-wake path posts BLE-on work without blocking microphone capture.
+One persistent controller serializes all BLE start and stop calls and applies
+only the latest requested generation. The ChatESP device keeps BLE active for
+the full recording when a complete saved bond is present. It starts a
+two-second phone-proxy limit when the button is released. If the proxy is still
+not ready, it stops BLE before it starts Wi-Fi for the cloud TLS request. This
+fallback closes an active phone connection.
 The ChatESP device starts advertising again when it returns to idle. The iOS
 app must treat this as a normal, recoverable disconnect. A bounded reconnect
 retry scans for the saved Core Bluetooth identifier before it starts a new
@@ -75,11 +77,12 @@ Development and production builds keep BLE bonds in plaintext NVS. This lets
 the phone reconnect after a cold start or a development firmware upload. The
 device still needs one new pairing after an older development image loses its
 RAM-only bond. A development build keeps BLE-provisioned settings in RAM.
-At a production cold start, the firmware reads and applies the last valid NVS
-settings record on the voice-runtime task before it processes a startup
-PWR-button command. A wake hold does not wait for a new iPhone settings
-transfer before it can use the saved service key. The smaller main startup
-task does not apply the complete record.
+At a production cold start, a bounded startup task reads the last valid NVS
+settings record and saved memories. A startup PWR hold can start capture while
+this work runs. Release cannot start a cloud request or BLE memory work until
+the voice-runtime task applies the saved record. A wake hold does not wait for
+a new iPhone settings transfer before it can use the saved service key. The
+smaller main startup task does not apply the complete record.
 
 One transfer contains one complete settings packet. The maximum packet size is
 1,024 bytes. iOS sends one control frame and then ordered data frames. It waits

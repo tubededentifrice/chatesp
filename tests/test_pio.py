@@ -213,7 +213,19 @@ class PlatformioWrapperTests(unittest.TestCase):
         ui = (root / "firmware" / "main" / "ui.cpp").read_text(
             encoding="utf-8"
         )
-        self.assertIn("display_sleep_result = ui::sleep(true)", runtime)
+        sleep = runtime[
+            runtime.index("void enter_sleep()") :
+            runtime.index("bool stop_ble_for_request()")
+        ]
+        controller = runtime[
+            runtime.index("void perform_display_request(") :
+            runtime.index("void run_display_controller()")
+        ]
+        self.assertIn("display_sleep_keep_panel_ready_ = true", sleep)
+        self.assertIn(
+            "false, display_sleep_keep_panel_ready_, monotonic_ms()", sleep
+        )
+        self.assertIn("result = ui::sleep(", controller)
         self.assertIn("if (kDevelopmentMode)", runtime)
         self.assertIn("if (!low_battery_poweroff_pending_)", runtime)
         self.assertIn("sleep_overlay", ui)
@@ -333,22 +345,27 @@ class PlatformioWrapperTests(unittest.TestCase):
         run_start = source.index("void run()")
         loop_start = source.index("while (true)", run_start)
         startup_source = source[run_start:loop_start]
-        self.assertIn("ensure_ble_started();", startup_source)
+        self.assertNotIn("ensure_ble_started", startup_source)
         self.assertNotIn("start_network_early", startup_source)
         warm_start = source.index("void start_network_during_recording()")
         warm_end = source.index("void run_network_warm_worker()", warm_start)
         warm_source = source[warm_start:warm_end]
         self.assertLess(
             warm_source.index("kPhoneProxyConnectGraceMs"),
-            warm_source.index("stop_ble_for_request()"),
+            warm_source.index("request_ble(false)"),
         )
         self.assertLess(
-            warm_source.index("stop_ble_for_request()"),
+            warm_source.index("ble_request_complete("),
             warm_source.index("xTaskCreatePinnedToCore("),
         )
         self.assertIn("ble_provisioning::bond_available()", warm_source)
         self.assertIn("runtime::keep_ble_during_recording(", warm_source)
-        self.assertIn("proxy_wait_started_ms = monotonic_ms()", source)
+        self.assertIn("released_at_ms = monotonic_ms()", source)
+        self.assertIn(
+            "monotonic_ms() - released_at_ms <\n"
+            "                   kPhoneProxyConnectGraceMs",
+            source,
+        )
         wake_start = source.index("void wake_for_button(")
         wake_end = source.index("void request_display_wake(", wake_start)
         self.assertIn("ensure_ble_started()", source[wake_start:wake_end])
@@ -359,11 +376,22 @@ class PlatformioWrapperTests(unittest.TestCase):
         ble_start = source.index("bool ensure_ble_started()")
         ble_start_end = source.index("void recover_poweroff", ble_start)
         ble_start_source = source[ble_start:ble_start_end]
+        ble_controller_start = source[
+            source.index("void perform_ble_request(") :
+            source.index("void run_ble_controller()")
+        ]
         self.assertIn("network_.shutdown()", ble_start_source)
         self.assertIn("kBleControllerMinimumLargestBlockBytes", ble_start_source)
-        self.assertIn("kBleControllerMinimumFreeInternalBytes", ble_start_source)
+        self.assertIn(
+            "kBleControllerMinimumFreeInternalBytes", ble_controller_start
+        )
         self.assertIn("reserve_ble_restart_memory()", source)
-        self.assertIn("release_ble_restart_memory();", ble_start_source)
+        self.assertIn("release_ble_restart_memory();", ble_controller_start)
+        controller_start = source.index("void perform_ble_request(")
+        controller_end = source.index("void run_ble_controller()", controller_start)
+        controller_source = source[controller_start:controller_end]
+        self.assertIn("ble_provisioning::start(", controller_source)
+        self.assertIn("ble_provisioning::stop(", controller_source)
         self.assertIn("ble_memory_recovery_restart", source)
         self.assertIn("esp_restart();", source)
         network_source = (

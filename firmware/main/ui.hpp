@@ -31,10 +31,35 @@ struct QuickControlsUpdate {
 
 using QuickControlsCallback = void (*)(
     const QuickControlsUpdate &update, void *context);
+using DeferredWorkCancelled = bool (*)(void *context);
 
-// Start the display and show the full-boot splash. Do not use this function
-// for an in-session display wake.
-bool start(std::uint8_t brightness_percent);
+// Start the display at zero brightness and flush the full-boot splash while
+// the panel is hidden. Do not use this function for an in-session display
+// wake.
+bool start_hidden();
+
+// Make the hidden startup splash visible with the selected brightness and
+// send the required second complete frame.
+bool publish_startup(std::uint8_t brightness_percent);
+
+// Build the small set of views that voice capture, BLE pairing, and sleep can
+// need at once. This function is idempotent.
+bool prepare_capture_views();
+
+// Build the image and plot overlays after capture has stopped. This function
+// is idempotent and owns the BSP display lock while it runs.
+bool prepare_visual_views();
+
+// Build the Clock view on its first explicit use. This function is idempotent
+// and owns the BSP display lock while it runs.
+bool prepare_clock_view();
+
+// Probe optional touch and build its control views. This function is
+// idempotent and owns the BSP display lock while it runs. It checks the
+// cancellation callback before I2C work and before object construction.
+bool prepare_deferred_views(
+    DeferredWorkCancelled cancelled = nullptr,
+    void *cancellation_context = nullptr);
 
 // Install the non-blocking control callback after the runtime can accept
 // updates. The callback runs from the LVGL task and must not block.

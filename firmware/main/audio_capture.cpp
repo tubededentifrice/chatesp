@@ -46,34 +46,56 @@ esp_err_t AudioCapture::initialize() {
     return codec_ != nullptr ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-esp_err_t AudioCapture::start() {
+esp_err_t AudioCapture::prepare() {
     if (active_) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (prepared_ &&
+        !cancelled_.load(std::memory_order_acquire)) {
+        return ESP_OK;
     }
 
     release_buffer();
     budget_.reset();
     cancelled_.store(false, std::memory_order_release);
 
-    if (!shared_audio_session_gate().try_acquire(AudioSession::capture)) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    session_acquired_ = true;
-
     samples_ = static_cast<std::int16_t *>(heap_caps_calloc(
         kMaximumSamples, sizeof(std::int16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (samples_ == nullptr) {
-        release_session();
         return ESP_ERR_NO_MEM;
     }
 
     const esp_err_t initialize_result = initialize();
     if (initialize_result != ESP_OK) {
         release_buffer();
-        release_session();
         return initialize_result;
     }
+
+    prepared_ = true;
+    return ESP_OK;
+}
+
+esp_err_t AudioCapture::start() {
+    if (active_) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!prepared_) {
+        const esp_err_t prepare_result = prepare();
+        if (prepare_result != ESP_OK) {
+            return prepare_result;
+        }
+    }
+    if (cancelled_.load(std::memory_order_acquire)) {
+        release_buffer();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!shared_audio_session_gate().try_acquire(AudioSession::capture)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    session_acquired_ = true;
 
     const int gain_result =
         esp_codec_dev_set_in_gain(codec_handle(codec_), kMicrophoneGainDb);
@@ -97,7 +119,14 @@ esp_err_t AudioCapture::start() {
         release_session();
         return static_cast<esp_err_t>(open_result);
     }
+    if (cancelled_.load(std::memory_order_acquire)) {
+        (void)esp_codec_dev_close(codec_handle(codec_));
+        release_buffer();
+        release_session();
+        return ESP_ERR_INVALID_STATE;
+    }
 
+    prepared_ = false;
     active_ = true;
     return ESP_OK;
 }
@@ -164,6 +193,8 @@ const std::int16_t *AudioCapture::samples() const { return samples_; }
 
 std::size_t AudioCapture::sample_count() const { return budget_.used(); }
 
+bool AudioCapture::prepared() const { return prepared_; }
+
 bool AudioCapture::active() const { return active_; }
 
 bool AudioCapture::cancelled() const {
@@ -171,6 +202,7 @@ bool AudioCapture::cancelled() const {
 }
 
 void AudioCapture::release_buffer() {
+    prepared_ = false;
     if (samples_ == nullptr) {
         return;
     }

@@ -114,6 +114,17 @@ const char *event_name(runtime::CrashEvent event) {
         case Event::phone_proxy_fallback: return "phone_proxy_fallback";
         case Event::restart_model_request: return "restart_model_request";
         case Event::restart_button_chord: return "restart_button_chord";
+        case Event::startup_pwr_credit: return "startup_pwr_credit";
+        case Event::startup_panel_ready: return "startup_panel_ready";
+        case Event::startup_first_pixel: return "startup_first_pixel";
+        case Event::startup_capture_ready: return "startup_capture_ready";
+        case Event::startup_services_ready: return "startup_services_ready";
+        case Event::audio_prepare_begin: return "audio_prepare_begin";
+        case Event::audio_prepare_complete: return "audio_prepare_complete";
+        case Event::audio_capture_open: return "audio_capture_open";
+        case Event::audio_capture_read_begin:
+            return "audio_capture_read_begin";
+        case Event::audio_first_chunk: return "audio_first_chunk";
     }
     return "unknown";
 }

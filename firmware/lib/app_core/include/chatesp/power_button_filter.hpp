@@ -8,18 +8,18 @@ namespace chatesp {
 
 // The IO-expander PWR level can stay active after a battery-powered release.
 // A completed PMU release is authoritative at startup. Keep a held press only
-// when the PMU has not reported its release. A USB-removal level needs a new
-// PWR press event because both events can occur while the board loses VBUS.
+// when the PMU has not reported its release. A USB-source level needs a new
+// PWR press event because both events can occur near a VBUS change.
 [[nodiscard]] constexpr bool startup_power_button_pressed(
     bool io_level_pressed,
     bool press_event,
     bool release_event,
     bool short_press_event,
-    bool vbus_remove_event) {
+    bool power_source_event) {
     if (!io_level_pressed || release_event || short_press_event) {
         return false;
     }
-    return !vbus_remove_event || press_event;
+    return !power_source_event || press_event;
 }
 
 // The PMU reports PWR-key edges and USB power-source edges in one status byte.

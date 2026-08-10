@@ -128,6 +128,10 @@ lv_obj_t *passkey_title_label = nullptr;
 lv_obj_t *passkey_hint_label = nullptr;
 lv_obj_t *sleep_overlay = nullptr;
 bool touch_available = false;
+bool touch_start_attempted = false;
+bool capture_views_ready = false;
+bool deferred_views_ready = false;
+bool visual_views_ready = false;
 lv_obj_t *controls_edge_target = nullptr;
 lv_obj_t *controls_edge_handle = nullptr;
 lv_obj_t *controls_backdrop = nullptr;
@@ -1524,6 +1528,62 @@ void create_runtime_screen() {
 #endif
     show_footer(RadioIndicator::off, 0, false, 0, false);
 
+    // BLE can request a passkey as soon as its deferred start completes. Keep
+    // this small view ready before the voice runtime can start that work.
+    passkey_overlay = lv_obj_create(screen);
+    lv_obj_remove_style_all(passkey_overlay);
+    lv_obj_set_size(passkey_overlay, 368, 448);
+    lv_obj_set_style_bg_color(
+        passkey_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(passkey_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(passkey_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(passkey_overlay);
+
+    passkey_title_label = lv_label_create(passkey_overlay);
+    set_static_text(passkey_title_label, "PAIRING CODE");
+    lv_obj_set_style_text_color(
+        passkey_title_label, lv_color_hex(0x777777), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        passkey_title_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(
+        passkey_title_label, 1, LV_PART_MAIN);
+    lv_obj_align(passkey_title_label, LV_ALIGN_CENTER, 0, -42);
+
+    passkey_label = lv_label_create(passkey_overlay);
+    set_static_text(passkey_label, passkey_buffer.data());
+    lv_obj_set_style_text_color(
+        passkey_label, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        passkey_label, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(passkey_label, 5, LV_PART_MAIN);
+    lv_obj_align(passkey_label, LV_ALIGN_CENTER, 0, 0);
+
+    passkey_hint_label = lv_label_create(passkey_overlay);
+    set_static_text(passkey_hint_label, "ENTER THIS CODE ON IPHONE");
+    lv_obj_set_style_text_color(
+        passkey_hint_label, lv_color_hex(0x777777), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        passkey_hint_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(passkey_hint_label, LV_ALIGN_CENTER, 0, 44);
+    hide_passkey();
+
+    // A short cold-start press can request sleep before optional views exist.
+    sleep_overlay = lv_obj_create(screen);
+    lv_obj_remove_style_all(sleep_overlay);
+    lv_obj_set_size(sleep_overlay, 368, 448);
+    lv_obj_set_style_bg_color(
+        sleep_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        sleep_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(sleep_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(sleep_overlay);
+    lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
+    apply_chat_font_scale();
+}
+
+void create_visual_screen() {
+    lv_obj_t *screen = active_screen();
+
     image_overlay = lv_image_create(screen);
     lv_obj_set_size(
         image_overlay, image::kDisplayWidth, image::kDisplayHeight);
@@ -1598,66 +1658,14 @@ void create_runtime_screen() {
     lv_obj_align(plot_y_range_label, LV_ALIGN_BOTTOM_MID, 0, -22);
     hide_fullscreen_plot();
 
-    create_quick_controls(screen);
-
-    passkey_overlay = lv_obj_create(screen);
-    lv_obj_remove_style_all(passkey_overlay);
-    lv_obj_set_size(passkey_overlay, 368, 448);
-    lv_obj_set_style_bg_color(
-        passkey_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(passkey_overlay, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_clear_flag(passkey_overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_center(passkey_overlay);
-
-    passkey_title_label = lv_label_create(passkey_overlay);
-    set_static_text(passkey_title_label, "PAIRING CODE");
-    lv_obj_set_style_text_color(
-        passkey_title_label, lv_color_hex(0x777777), LV_PART_MAIN);
-    lv_obj_set_style_text_font(
-        passkey_title_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(
-        passkey_title_label, 1, LV_PART_MAIN);
-    lv_obj_align(passkey_title_label, LV_ALIGN_CENTER, 0, -42);
-
-    passkey_label = lv_label_create(passkey_overlay);
-    set_static_text(passkey_label, passkey_buffer.data());
-    lv_obj_set_style_text_color(
-        passkey_label, lv_color_hex(0xffffff), LV_PART_MAIN);
-    lv_obj_set_style_text_font(
-        passkey_label, &lv_font_montserrat_24, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(passkey_label, 5, LV_PART_MAIN);
-    lv_obj_align(passkey_label, LV_ALIGN_CENTER, 0, 0);
-
-    passkey_hint_label = lv_label_create(passkey_overlay);
-    set_static_text(passkey_hint_label, "ENTER THIS CODE ON IPHONE");
-    lv_obj_set_style_text_color(
-        passkey_hint_label, lv_color_hex(0x777777), LV_PART_MAIN);
-    lv_obj_set_style_text_font(
-        passkey_hint_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(passkey_hint_label, LV_ALIGN_CENTER, 0, 44);
-    hide_passkey();
-    create_clock_face(screen);
-
-    sleep_overlay = lv_obj_create(screen);
-    lv_obj_remove_style_all(sleep_overlay);
-    lv_obj_set_size(sleep_overlay, 368, 448);
-    lv_obj_set_style_bg_color(
-        sleep_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(
-        sleep_overlay, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_clear_flag(sleep_overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_center(sleep_overlay);
-    lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
     apply_chat_font_scale();
 }
 
 }  // namespace
 
-bool start(std::uint8_t brightness_percent) {
-    if (!runtime::DevicePreferences{
-            brightness_percent,
-            runtime::DevicePreferences::default_volume_percent}.valid()) {
-        return false;
+bool start_hidden() {
+    if (display_handle != nullptr) {
+        return true;
     }
     lv_display_t *display = bsp_display_start();
     if (display == nullptr || bsp_display_backlight_off() != ESP_OK) {
@@ -1671,9 +1679,15 @@ bool start(std::uint8_t brightness_percent) {
     show_state(InteractionState::booting);
     lv_refr_now(display);
     bsp_display_unlock();
-    const esp_err_t wake_error =
-        bsp_display_brightness_set(brightness_percent);
-    if (wake_error != ESP_OK) {
+    return true;
+}
+
+bool publish_startup(std::uint8_t brightness_percent) {
+    if (display_handle == nullptr ||
+        !runtime::DevicePreferences{
+            brightness_percent,
+            runtime::DevicePreferences::default_volume_percent}.valid() ||
+        bsp_display_brightness_set(brightness_percent) != ESP_OK) {
         return false;
     }
     // Send one more complete startup frame after panel-on. Do this before the
@@ -1683,23 +1697,93 @@ bool start(std::uint8_t brightness_percent) {
         return false;
     }
     lv_obj_invalidate(active_screen());
-    lv_refr_now(display);
+    lv_refr_now(display_handle);
     bsp_display_unlock();
     if (bsp_display_brightness_set(brightness_percent) != ESP_OK) {
         return false;
     }
+    return true;
+}
 
-    // Touch is not needed for the startup view. Probe it only after the first
-    // reliable pixels are visible so its I2C transactions do not delay the
-    // user's first feedback from a cold start.
-    touch_available = bsp_display_start_touch(display) == ESP_OK;
-
-    if (!bsp_display_lock(1000)) {
-        (void)bsp_display_backlight_off();
+bool prepare_capture_views() {
+    if (display_handle == nullptr) {
         return false;
     }
-    create_runtime_screen();
+    if (!bsp_display_lock(1000)) {
+        return false;
+    }
+    if (!capture_views_ready) {
+        create_runtime_screen();
+        capture_views_ready = true;
+    }
     show_state(InteractionState::booting);
+    bsp_display_unlock();
+    return true;
+}
+
+bool prepare_visual_views() {
+    if (display_handle == nullptr || !capture_views_ready) {
+        return false;
+    }
+    if (!bsp_display_lock(1000)) {
+        return false;
+    }
+    if (!visual_views_ready) {
+        create_visual_screen();
+        visual_views_ready = true;
+    }
+    bsp_display_unlock();
+    return true;
+}
+
+bool prepare_clock_view() {
+    if (display_handle == nullptr || !capture_views_ready) {
+        return false;
+    }
+    if (!bsp_display_lock(1000)) {
+        return false;
+    }
+    if (clock_root == nullptr) {
+        create_clock_face(active_screen());
+    }
+    bsp_display_unlock();
+    return true;
+}
+
+bool prepare_deferred_views(
+    DeferredWorkCancelled cancelled, void *cancellation_context) {
+    if (display_handle == nullptr || !capture_views_ready) {
+        return false;
+    }
+    if (!bsp_display_lock(1000)) {
+        return false;
+    }
+    if (deferred_views_ready) {
+        bsp_display_unlock();
+        return true;
+    }
+    if (cancelled != nullptr && cancelled(cancellation_context)) {
+        bsp_display_unlock();
+        return false;
+    }
+
+    // Touch and the hidden optional views are not needed for first pixels or
+    // voice capture. A failed touch probe disables controls, but it does not
+    // block the other optional views or voice work.
+    if (!touch_start_attempted) {
+        touch_start_attempted = true;
+        touch_available =
+            bsp_display_start_touch(display_handle) == ESP_OK;
+    }
+    if (cancelled != nullptr && cancelled(cancellation_context)) {
+        bsp_display_unlock();
+        return false;
+    }
+    if (touch_available && controls_edge_target == nullptr) {
+        create_quick_controls(active_screen());
+        apply_chat_font_scale();
+    }
+    deferred_views_ready = true;
     bsp_display_unlock();
     return true;
 }
@@ -1833,7 +1917,7 @@ void sync_quick_controls(
     std::uint8_t brightness_percent, std::uint8_t volume_percent) {
     const runtime::DevicePreferences preferences{
         brightness_percent, volume_percent};
-    if (!preferences.valid()) {
+    if (!preferences.valid() || controls_edge_target == nullptr) {
         return;
     }
     sync_controls_values(brightness_percent, volume_percent);

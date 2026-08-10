@@ -7,6 +7,7 @@
 #include <unity.h>
 
 #include "chatesp/byte_ring.hpp"
+#include "chatesp/ble_controller.hpp"
 #include "chatesp/clock_network_transition.hpp"
 #include "chatesp/crash_trace.hpp"
 #include "chatesp/device_preferences.hpp"
@@ -535,6 +536,114 @@ void test_async_shutdown_gate_bounds_one_worker_lifecycle() {
     TEST_ASSERT_FALSE(gate.running());
 }
 
+void test_ble_controller_coalesces_one_requested_state() {
+    chatesp::runtime::BleControllerPlanner planner;
+    const auto first = planner.request(
+        chatesp::runtime::BleControllerTarget::running);
+    const auto repeated = planner.request(
+        chatesp::runtime::BleControllerTarget::running);
+
+    TEST_ASSERT_EQUAL_UINT32(first, repeated);
+    const auto work = planner.begin_next();
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BleControllerOperation::start),
+        static_cast<int>(work.operation));
+    TEST_ASSERT_EQUAL_UINT32(first, work.generation);
+    TEST_ASSERT_FALSE(planner.begin_next().valid());
+}
+
+void test_ble_controller_stops_a_superseded_successful_start() {
+    chatesp::runtime::BleControllerPlanner planner;
+    (void)planner.request(chatesp::runtime::BleControllerTarget::running);
+    const auto start = planner.begin_next();
+    const auto stop_generation = planner.request(
+        chatesp::runtime::BleControllerTarget::stopped);
+
+    TEST_ASSERT_TRUE(planner.complete(start, true));
+    TEST_ASSERT_TRUE(planner.actual_running());
+    const auto stop = planner.begin_next();
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BleControllerOperation::stop),
+        static_cast<int>(stop.operation));
+    TEST_ASSERT_EQUAL_UINT32(stop_generation, stop.generation);
+    TEST_ASSERT_TRUE(planner.complete(stop, true));
+    TEST_ASSERT_FALSE(planner.actual_running());
+}
+
+void test_ble_controller_restarts_after_superseded_successful_stop() {
+    chatesp::runtime::BleControllerPlanner planner(true);
+    (void)planner.request(chatesp::runtime::BleControllerTarget::stopped);
+    const auto stop = planner.begin_next();
+    const auto start_generation = planner.request(
+        chatesp::runtime::BleControllerTarget::running);
+
+    TEST_ASSERT_TRUE(planner.complete(stop, true));
+    TEST_ASSERT_FALSE(planner.actual_running());
+    const auto start = planner.begin_next();
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BleControllerOperation::start),
+        static_cast<int>(start.operation));
+    TEST_ASSERT_EQUAL_UINT32(start_generation, start.generation);
+}
+
+void test_ble_controller_ignores_a_superseded_stop_failure() {
+    chatesp::runtime::BleControllerPlanner planner(true);
+    (void)planner.request(chatesp::runtime::BleControllerTarget::stopped);
+    const auto stop = planner.begin_next();
+    (void)planner.request(chatesp::runtime::BleControllerTarget::running);
+
+    TEST_ASSERT_TRUE(planner.complete(stop, false));
+    TEST_ASSERT_TRUE(planner.actual_running());
+    TEST_ASSERT_FALSE(planner.current_request_failed());
+    TEST_ASSERT_FALSE(planner.begin_next().valid());
+}
+
+void test_ble_controller_retries_only_after_a_new_request() {
+    chatesp::runtime::BleControllerPlanner planner;
+    const auto first_generation = planner.request(
+        chatesp::runtime::BleControllerTarget::running);
+    const auto first = planner.begin_next();
+    TEST_ASSERT_TRUE(planner.complete(first, false));
+    TEST_ASSERT_TRUE(planner.current_request_failed());
+    TEST_ASSERT_FALSE(planner.begin_next().valid());
+
+    const auto retry_generation = planner.request(
+        chatesp::runtime::BleControllerTarget::running);
+    TEST_ASSERT_EQUAL_UINT32(first_generation + 1, retry_generation);
+    TEST_ASSERT_FALSE(planner.current_request_failed());
+    TEST_ASSERT_TRUE(planner.begin_next().valid());
+}
+
+void test_ble_controller_ignores_a_superseded_start_failure() {
+    chatesp::runtime::BleControllerPlanner planner;
+    (void)planner.request(chatesp::runtime::BleControllerTarget::running);
+    const auto start = planner.begin_next();
+    (void)planner.request(chatesp::runtime::BleControllerTarget::stopped);
+
+    TEST_ASSERT_TRUE(planner.complete(start, false));
+    TEST_ASSERT_FALSE(planner.actual_running());
+    TEST_ASSERT_FALSE(planner.current_request_failed());
+    TEST_ASSERT_FALSE(planner.begin_next().valid());
+}
+
+void test_ble_controller_generation_wrap_keeps_the_latest_target() {
+    chatesp::runtime::BleControllerPlanner planner(
+        false, std::numeric_limits<std::uint32_t>::max());
+    const auto wrapped = planner.request(
+        chatesp::runtime::BleControllerTarget::running);
+    TEST_ASSERT_EQUAL_UINT32(0, wrapped);
+    const auto start = planner.begin_next();
+    TEST_ASSERT_EQUAL_UINT32(0, start.generation);
+
+    const auto stop_generation = planner.request(
+        chatesp::runtime::BleControllerTarget::stopped);
+    TEST_ASSERT_EQUAL_UINT32(1, stop_generation);
+    TEST_ASSERT_TRUE(planner.complete(start, true));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BleControllerOperation::stop),
+        static_cast<int>(planner.begin_next().operation));
+}
+
 void test_interaction_deadline_is_bounded_and_handles_wrap() {
     constexpr std::uint32_t started =
         std::numeric_limits<std::uint32_t>::max() - 49;
@@ -754,6 +863,13 @@ int main(int, char **) {
     RUN_TEST(test_poweroff_gate_cancels_a_sleep_boundary);
     RUN_TEST(test_poweroff_gate_keeps_development_sleep_out_of_poweroff);
     RUN_TEST(test_async_shutdown_gate_bounds_one_worker_lifecycle);
+    RUN_TEST(test_ble_controller_coalesces_one_requested_state);
+    RUN_TEST(test_ble_controller_stops_a_superseded_successful_start);
+    RUN_TEST(test_ble_controller_restarts_after_superseded_successful_stop);
+    RUN_TEST(test_ble_controller_ignores_a_superseded_stop_failure);
+    RUN_TEST(test_ble_controller_retries_only_after_a_new_request);
+    RUN_TEST(test_ble_controller_ignores_a_superseded_start_failure);
+    RUN_TEST(test_ble_controller_generation_wrap_keeps_the_latest_target);
     RUN_TEST(test_interaction_deadline_is_bounded_and_handles_wrap);
     RUN_TEST(test_phone_proxy_keeps_a_saved_bond_through_a_long_recording);
     RUN_TEST(test_phone_proxy_initial_recording_grace_handles_wrap);

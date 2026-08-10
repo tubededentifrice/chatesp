@@ -20,6 +20,7 @@
 #include "chatesp/agent_loop.hpp"
 #include "chatesp/app_mode.hpp"
 #include "chatesp/audio_spectrum.hpp"
+#include "chatesp/ble_controller.hpp"
 #include "chatesp/ble_settings.hpp"
 #include "chatesp/clock_network_transition.hpp"
 #include "chatesp/clock_power_policy.hpp"
@@ -80,10 +81,11 @@ constexpr std::uint32_t kClockTimeSyncLimitMs = 15'000;
 constexpr std::uint32_t kModeDisplayRetryMs = 100;
 constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
 constexpr std::uint32_t kBleStopTimeoutMs = 1'000;
+constexpr std::uint32_t kControllerWaitMs = 5'000;
+constexpr std::uint32_t kStartupServicesSleepWaitMs = 5'000;
 constexpr std::uint32_t kPhoneProxyConnectGraceMs = 2'000;
 constexpr std::size_t kBleControllerMinimumLargestBlockBytes = 30 * 1024;
 constexpr std::size_t kBleControllerMinimumFreeInternalBytes = 48 * 1024;
-constexpr std::uint32_t kBleMemoryLogIntervalMs = 5'000;
 constexpr std::size_t kMinimumRecordingSamples =
     AudioCapture::kSampleRateHz / 10;
 static_assert(
@@ -91,6 +93,14 @@ static_assert(
     "The spectrum bin frequencies must match the capture sample rate");
 constexpr UBaseType_t kRuntimePriority = 5;
 constexpr std::uint32_t kRuntimeStackBytes = 32 * 1024;
+constexpr UBaseType_t kDisplayControllerPriority = 4;
+constexpr std::uint32_t kDisplayControllerStackBytes = 8 * 1024;
+constexpr UBaseType_t kBleControllerPriority = 4;
+constexpr std::uint32_t kBleControllerStackBytes = 16 * 1024;
+constexpr UBaseType_t kStartupServicesPriority = 2;
+constexpr std::uint32_t kStartupServicesStackBytes = 12 * 1024;
+constexpr UBaseType_t kDeferredUiPriority = 1;
+constexpr std::uint32_t kDeferredUiStackBytes = 10 * 1024;
 constexpr UBaseType_t kPasskeyPriority = 6;
 constexpr std::uint32_t kPasskeyStackBytes = 8 * 1024;
 constexpr UBaseType_t kSpeechPriority = 5;
@@ -99,6 +109,8 @@ constexpr EventBits_t kSpeechDoneBit = BIT0;
 constexpr EventBits_t kNetworkWarmDoneBit = BIT1;
 constexpr EventBits_t kImageDoneBit = BIT2;
 constexpr EventBits_t kNetworkContextDoneBit = BIT3;
+constexpr EventBits_t kStartupServicesDoneBit = BIT4;
+constexpr EventBits_t kDeferredUiDoneBit = BIT5;
 constexpr UBaseType_t kNetworkWarmPriority = 3;
 constexpr std::uint32_t kNetworkWarmStackBytes = 6 * 1024;
 constexpr UBaseType_t kImagePriority = 3;
@@ -496,12 +508,17 @@ public:
             bsp_display_unlock();
             quick_controls_enabled_ = false;
         }
+        if (ble_actual_running_.load(std::memory_order_acquire)) {
+            (void)stop_ble();
+        }
+        stop_control_tasks();
+        if (deferred_ui_task_ != nullptr) {
+            vTaskDeleteWithCaps(deferred_ui_task_);
+            deferred_ui_task_ = nullptr;
+        }
         if (speech_events_ != nullptr) {
             vEventGroupDelete(speech_events_);
             speech_events_ = nullptr;
-        }
-        if (ble_started_) {
-            (void)ble_provisioning::stop(kBleStopTimeoutMs);
         }
         release_ble_restart_memory();
         if (agent_loop_ != nullptr) {
@@ -530,13 +547,6 @@ public:
         }
         if (!python_executor_.available()) {
             ESP_LOGW(kTag, "The optional Python tool is not available");
-        }
-        // Confirm NVS through the settings layer before Wi-Fi or NimBLE can
-        // use it. The device-preference start in app_main can start NVS first
-        // so the saved display brightness is available before the splash.
-        const esp_err_t settings_result = settings_store_.initialize();
-        if (settings_result != ESP_OK) {
-            return settings_result;
         }
         // Reserve the internal I2S DMA path before Wi-Fi and Bluetooth use
         // the remaining internal memory.
@@ -570,6 +580,8 @@ public:
             }
             return ESP_ERR_NO_MEM;
         }
+        start_control_tasks();
+        start_startup_services();
         const BaseType_t passkey_task_result = xTaskCreatePinnedToCore(
             passkey_task_entry,
             "ble_passkey_ui",
@@ -579,6 +591,8 @@ public:
             &passkey_task_,
             1);
         if (passkey_task_result != pdPASS) {
+            stop_startup_services();
+            stop_control_tasks();
             vQueueDelete(command_queue_);
             vQueueDelete(passkey_queue_);
             vQueueDelete(device_context_queue_);
@@ -609,6 +623,8 @@ public:
         if (task_result != pdPASS) {
             vTaskDelete(passkey_task_);
             passkey_task_ = nullptr;
+            stop_startup_services();
+            stop_control_tasks();
             vQueueDelete(command_queue_);
             vQueueDelete(passkey_queue_);
             vQueueDelete(device_context_queue_);
@@ -624,18 +640,6 @@ public:
             device_control_.brightness_percent(), std::memory_order_release);
         pending_volume_percent_.store(
             device_control_.volume_percent(), std::memory_order_release);
-        if (bsp_display_lock(100)) {
-            quick_controls_enabled_ = ui::enable_quick_controls(
-                device_control_.brightness_percent(),
-                device_control_.volume_percent(),
-                quick_controls_callback,
-                this);
-            lv_refr_now(nullptr);
-            bsp_display_unlock();
-        }
-        if (!quick_controls_enabled_) {
-            ESP_LOGW(kTag, "Touch controls are not available");
-        }
         started_.store(true, std::memory_order_release);
         return ESP_OK;
     }
@@ -824,6 +828,469 @@ private:
         static_cast<Impl *>(context)->run_network_context_worker();
     }
 
+    static void display_controller_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_display_controller();
+    }
+
+    static void ble_controller_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_ble_controller();
+    }
+
+    static void startup_services_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_startup_services();
+    }
+
+    static void deferred_ui_task_entry(void *context) {
+        static_cast<Impl *>(context)->run_deferred_ui();
+    }
+
+    static bool deferred_ui_cancelled(void *context) {
+        auto *self = static_cast<Impl *>(context);
+        return self->voice_priority_.load(std::memory_order_acquire) ||
+            self->button_pressed_.load(std::memory_order_acquire);
+    }
+
+    void start_control_tasks() {
+        const BaseType_t display_created = xTaskCreatePinnedToCoreWithCaps(
+            display_controller_task_entry, "display_control",
+            kDisplayControllerStackBytes, this,
+            kDisplayControllerPriority, &display_controller_task_, 0,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (display_created != pdPASS) {
+            display_controller_task_ = nullptr;
+            ESP_LOGW(
+                kTag,
+                "Display controller task could not start; using the "
+                "synchronous recovery path");
+        }
+
+        // BLE start restores the NimBLE bond store from NVS. Keep this task
+        // stack in internal RAM because flash work can disable the PSRAM
+        // cache. The task exists before the controller headroom check, so its
+        // fixed cost is included in that decision.
+        const BaseType_t ble_created = xTaskCreatePinnedToCore(
+            ble_controller_task_entry, "ble_control",
+            kBleControllerStackBytes, this, kBleControllerPriority,
+            &ble_controller_task_, 0);
+        if (ble_created != pdPASS) {
+            ble_controller_task_ = nullptr;
+            ESP_LOGW(
+                kTag,
+                "BLE controller task could not start; using the "
+                "synchronous recovery path");
+        }
+    }
+
+    void stop_control_tasks() {
+        if (display_controller_task_ != nullptr) {
+            vTaskDeleteWithCaps(display_controller_task_);
+            display_controller_task_ = nullptr;
+        }
+        if (ble_controller_task_ != nullptr) {
+            vTaskDelete(ble_controller_task_);
+            ble_controller_task_ = nullptr;
+        }
+    }
+
+    void start_startup_services() {
+        startup_settings_result_.store(
+            ESP_ERR_INVALID_STATE, std::memory_order_release);
+        startup_memory_result_.store(
+            ESP_ERR_INVALID_STATE, std::memory_order_release);
+        xEventGroupClearBits(speech_events_, kStartupServicesDoneBit);
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            startup_services_task_entry, "startup_services",
+            kStartupServicesStackBytes, this, kStartupServicesPriority,
+            &startup_services_task_, 0);
+        if (created == pdPASS) {
+            return;
+        }
+
+        startup_services_task_ = nullptr;
+        ESP_LOGW(
+            kTag,
+            "Startup services task could not start; using the synchronous "
+            "recovery path");
+        run_startup_services_inline();
+    }
+
+    void run_startup_services_inline() {
+        const esp_err_t settings_result = settings_store_.initialize();
+        startup_settings_result_.store(
+            settings_result, std::memory_order_release);
+        const esp_err_t memory_result = memory_store_.initialize();
+        startup_memory_result_.store(memory_result, std::memory_order_release);
+        xEventGroupSetBits(speech_events_, kStartupServicesDoneBit);
+    }
+
+    void run_startup_services() {
+        run_startup_services_inline();
+        // The runtime reclaims this short-lived internal stack before it
+        // starts BLE.
+        vTaskSuspend(nullptr);
+    }
+
+    void stop_startup_services() {
+        if (speech_events_ == nullptr) {
+            return;
+        }
+        (void)xEventGroupWaitBits(
+            speech_events_, kStartupServicesDoneBit, pdFALSE, pdTRUE,
+            portMAX_DELAY);
+        if (startup_services_task_ != nullptr) {
+            TaskHandle_t completed = startup_services_task_;
+            startup_services_task_ = nullptr;
+            vTaskDelete(completed);
+        }
+    }
+
+    bool finish_startup_services(bool wait) {
+        if (startup_services_applied_) {
+            return startup_settings_result_.load(std::memory_order_acquire) ==
+                ESP_OK;
+        }
+        const EventBits_t bits = xEventGroupWaitBits(
+            speech_events_, kStartupServicesDoneBit, pdFALSE, pdTRUE,
+            wait ? pdMS_TO_TICKS(kControllerWaitMs) : 0);
+        if ((bits & kStartupServicesDoneBit) == 0) {
+            return false;
+        }
+        if (startup_services_task_ != nullptr) {
+            TaskHandle_t completed = startup_services_task_;
+            startup_services_task_ = nullptr;
+            vTaskDelete(completed);
+        }
+        const bool settings_ready =
+            startup_settings_result_.load(std::memory_order_acquire) ==
+            ESP_OK;
+        const bool memory_ready =
+            startup_memory_result_.load(std::memory_order_acquire) == ESP_OK;
+        startup_services_applied_ = true;
+        if (settings_ready) {
+            refresh_settings(
+                !voice_priority_.load(std::memory_order_acquire) &&
+                !button_pressed_.load(std::memory_order_acquire));
+            crash_diagnostics::mark(
+                runtime::CrashEvent::startup_services_ready);
+        }
+        if (!memory_ready) {
+            ESP_LOGW(kTag, "Saved memories are not available");
+        }
+        return settings_ready;
+    }
+
+    [[nodiscard]] bool startup_services_ready() const {
+        return startup_services_applied_ &&
+            startup_settings_result_.load(std::memory_order_acquire) ==
+                ESP_OK;
+    }
+
+    std::uint32_t request_display(
+        bool on, bool keep_panel_ready, std::uint32_t now_ms) {
+        display_requested_on_.store(on, std::memory_order_relaxed);
+        display_requested_keep_ready_.store(
+            keep_panel_ready, std::memory_order_relaxed);
+        display_requested_state_.store(
+            interaction_.state(), std::memory_order_relaxed);
+        display_requested_mode_.store(
+            app_mode_.load(std::memory_order_acquire),
+            std::memory_order_relaxed);
+        display_requested_brightness_.store(
+            device_control_.brightness_percent(),
+            std::memory_order_relaxed);
+        display_request_at_ms_.store(now_ms, std::memory_order_relaxed);
+        const std::uint32_t generation =
+            display_requested_generation_.fetch_add(
+                1, std::memory_order_acq_rel) +
+            1;
+        if (display_controller_task_ != nullptr) {
+            xTaskNotifyGive(display_controller_task_);
+        } else if (button_pressed_.load(std::memory_order_acquire)) {
+            // Do not move panel recovery onto the PWR hold path when the
+            // optional controller task could not start. Retry after release.
+            display_result_.store(
+                ESP_ERR_INVALID_STATE, std::memory_order_release);
+            display_completed_generation_.store(
+                generation, std::memory_order_release);
+        } else {
+            perform_display_request(generation);
+        }
+        return generation;
+    }
+
+    void perform_display_request(std::uint32_t generation) {
+        const bool on = display_requested_on_.load(std::memory_order_acquire);
+        const std::uint32_t requested_at_ms =
+            display_request_at_ms_.load(std::memory_order_acquire);
+        esp_err_t result = ESP_FAIL;
+        if (on) {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::display_wake_begin);
+            result = ui::wake(
+                display_requested_state_.load(std::memory_order_acquire),
+                display_requested_brightness_.load(
+                    std::memory_order_acquire),
+                display_requested_mode_.load(std::memory_order_acquire));
+            crash_diagnostics::mark(
+                result == ESP_OK
+                    ? runtime::CrashEvent::display_wake_complete
+                    : runtime::CrashEvent::display_wake_failed);
+        } else {
+            result = ui::sleep(
+                display_requested_keep_ready_.load(
+                    std::memory_order_acquire));
+            if (result == ESP_OK) {
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::display_sleep_complete);
+            }
+        }
+        if (generation != display_requested_generation_.load(
+                              std::memory_order_acquire)) {
+            return;
+        }
+        display_result_.store(result, std::memory_order_release);
+        display_completed_at_ms_.store(
+            requested_at_ms, std::memory_order_release);
+        display_completed_generation_.store(
+            generation, std::memory_order_release);
+    }
+
+    void run_display_controller() {
+        while (true) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            while (display_completed_generation_.load(
+                       std::memory_order_acquire) !=
+                   display_requested_generation_.load(
+                       std::memory_order_acquire)) {
+                const std::uint32_t generation =
+                    display_requested_generation_.load(
+                        std::memory_order_acquire);
+                perform_display_request(generation);
+            }
+        }
+    }
+
+    bool display_request_complete(std::uint32_t generation) const {
+        return display_requested_generation_.load(
+                   std::memory_order_acquire) == generation &&
+            display_completed_generation_.load(
+                std::memory_order_acquire) == generation;
+    }
+
+    bool wait_for_display(std::uint32_t generation) {
+        const std::uint32_t started_ms = monotonic_ms();
+        while (!display_request_complete(generation)) {
+            if (button_pressed_.load(std::memory_order_acquire)) {
+                return false;
+            }
+            if (display_requested_generation_.load(
+                    std::memory_order_acquire) != generation) {
+                return false;
+            }
+            if (monotonic_ms() - started_ms >= kControllerWaitMs) {
+                return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        return display_result_.load(std::memory_order_acquire) == ESP_OK;
+    }
+
+    void poll_display_controller() {
+        const std::uint32_t completed =
+            display_completed_generation_.load(std::memory_order_acquire);
+        if (completed == display_completion_seen_) {
+            return;
+        }
+        display_completion_seen_ = completed;
+        const bool succeeded =
+            display_result_.load(std::memory_order_acquire) == ESP_OK;
+        display_wake_pending_ =
+            display_requested_on_.load(std::memory_order_acquire) &&
+            !succeeded;
+        display_sleep_pending_ =
+            !display_requested_on_.load(std::memory_order_acquire) &&
+            !succeeded;
+        if (succeeded &&
+            display_requested_on_.load(std::memory_order_acquire)) {
+            footer_shown_ = false;
+            display_refresh_pending_ = true;
+        }
+    }
+
+    std::uint32_t request_ble(bool running) {
+        const bool prior = ble_requested_running_.exchange(
+            running, std::memory_order_acq_rel);
+        std::uint32_t generation =
+            ble_requested_generation_.load(std::memory_order_acquire);
+        const bool completed = ble_completed_generation_.load(
+                                   std::memory_order_acquire) == generation;
+        const bool succeeded =
+            ble_result_.load(std::memory_order_acquire) == ESP_OK;
+        const bool actual_matches =
+            ble_actual_running_.load(std::memory_order_acquire) == running;
+        if (prior != running ||
+            (completed && (!succeeded || !actual_matches))) {
+            generation = ble_requested_generation_.fetch_add(
+                             1, std::memory_order_acq_rel) +
+                1;
+        }
+        if (ble_controller_task_ != nullptr) {
+            xTaskNotifyGive(ble_controller_task_);
+        } else if (
+            button_pressed_.load(std::memory_order_acquire) ||
+            interaction_.state() == InteractionState::recording) {
+            // Do not run NimBLE inline with microphone priority. A later
+            // explicit request retries this failed generation.
+            ble_result_.store(
+                ESP_ERR_INVALID_STATE, std::memory_order_release);
+            ble_actual_running_.store(
+                ble_provisioning::running(), std::memory_order_release);
+            ble_completed_generation_.store(
+                generation, std::memory_order_release);
+        } else {
+            perform_ble_request(generation);
+        }
+        return generation;
+    }
+
+    void perform_ble_request(std::uint32_t generation) {
+        const bool running =
+            ble_requested_running_.load(std::memory_order_acquire);
+        const bool actual_before = ble_provisioning::running();
+        if (!ble_controller_planner_.operation_active() &&
+            ble_controller_planner_.actual_running() != actual_before) {
+            ble_controller_planner_ =
+                runtime::BleControllerPlanner(actual_before);
+        }
+        (void)ble_controller_planner_.request(
+            running ? runtime::BleControllerTarget::running
+                    : runtime::BleControllerTarget::stopped);
+        const runtime::BleControllerWork work =
+            ble_controller_planner_.begin_next();
+        esp_err_t result = ESP_OK;
+        if (work.operation == runtime::BleControllerOperation::start) {
+            // Keep the reserved contiguous block until this sole owner is
+            // ready to enter NimBLE. No runtime allocation can split the
+            // handoff between the final check and controller start.
+            release_ble_restart_memory();
+            const std::size_t free_internal = heap_caps_get_free_size(
+                MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            const std::size_t largest_internal =
+                heap_caps_get_largest_free_block(
+                    MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            if (free_internal < kBleControllerMinimumFreeInternalBytes ||
+                largest_internal <
+                    kBleControllerMinimumLargestBlockBytes) {
+                result = ESP_ERR_NO_MEM;
+            } else {
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::ble_start_begin);
+                result = ble_provisioning::start(
+                    &settings_store_, &memory_store_, passkey_callback,
+                    device_context_callback, this);
+            }
+            if (result == ESP_OK) {
+                crash_diagnostics::mark(
+                    runtime::CrashEvent::ble_start_complete);
+            }
+        } else if (
+            work.operation == runtime::BleControllerOperation::stop &&
+            ble_provisioning::running()) {
+            result = ble_provisioning::stop(kBleStopTimeoutMs);
+        }
+        const bool actual_running = ble_provisioning::running();
+        if (work.valid()) {
+            (void)ble_controller_planner_.complete(
+                work,
+                result == ESP_OK && running == actual_running);
+        }
+        ble_actual_running_.store(
+            actual_running, std::memory_order_release);
+        if (running != actual_running && result == ESP_OK) {
+            result = ESP_FAIL;
+        }
+        if (generation != ble_requested_generation_.load(
+                              std::memory_order_acquire)) {
+            return;
+        }
+        ble_result_.store(result, std::memory_order_release);
+        ble_completed_generation_.store(
+            generation, std::memory_order_release);
+    }
+
+    void run_ble_controller() {
+        while (true) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            while (ble_completed_generation_.load(
+                       std::memory_order_acquire) !=
+                   ble_requested_generation_.load(
+                       std::memory_order_acquire)) {
+                const std::uint32_t generation =
+                    ble_requested_generation_.load(
+                        std::memory_order_acquire);
+                perform_ble_request(generation);
+            }
+        }
+    }
+
+    bool ble_request_complete(std::uint32_t generation) const {
+        return ble_requested_generation_.load(
+                   std::memory_order_acquire) == generation &&
+            ble_completed_generation_.load(
+                std::memory_order_acquire) == generation;
+    }
+
+    bool wait_for_ble(std::uint32_t generation) {
+        return wait_for_ble_until(
+            generation, monotonic_ms(), kControllerWaitMs);
+    }
+
+    bool wait_for_ble_until(
+        std::uint32_t generation, std::uint32_t period_started_ms,
+        std::uint32_t period_ms) {
+        while (!ble_request_complete(generation)) {
+            if (button_pressed_.load(std::memory_order_acquire)) {
+                return false;
+            }
+            if (ble_requested_generation_.load(
+                    std::memory_order_acquire) != generation) {
+                return false;
+            }
+            if (monotonic_ms() - period_started_ms >= period_ms) {
+                return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        poll_ble_controller();
+        return ble_result_.load(std::memory_order_acquire) == ESP_OK;
+    }
+
+    void poll_ble_controller() {
+        const std::uint32_t completed =
+            ble_completed_generation_.load(std::memory_order_acquire);
+        if (completed == ble_completion_seen_) {
+            return;
+        }
+        ble_completion_seen_ = completed;
+        ble_started_ = ble_actual_running_.load(std::memory_order_acquire);
+        const bool succeeded =
+            ble_result_.load(std::memory_order_acquire) == ESP_OK;
+        ble_start_attempted_ =
+            ble_requested_running_.load(std::memory_order_acquire);
+        if (!succeeded) {
+            ESP_LOGW(kTag, "The radio controller request failed");
+        }
+    }
+
+    void run_deferred_ui() {
+        deferred_ui_result_.store(
+            ui::prepare_deferred_views(deferred_ui_cancelled, this),
+            std::memory_order_release);
+        xEventGroupSetBits(speech_events_, kDeferredUiDoneBit);
+        // The runtime reclaims this WithCaps task and its PSRAM stack.
+        vTaskSuspend(nullptr);
+    }
+
     void start_image_worker(DeadlineCancellation &cancellation) {
         if (image_task_ != nullptr || speech_events_ == nullptr ||
             image_candidates_.size == 0) {
@@ -964,12 +1431,23 @@ private:
     }
 
     void start_network_during_recording() {
-        if (ble_provisioning::http_proxy_available() ||
+        if (!startup_services_applied_ ||
+            ble_provisioning::http_proxy_available() ||
             !settings_.has_wifi_credentials() || network_initialized_ ||
             network_warm_task_ != nullptr || speech_events_ == nullptr) {
             return;
         }
         const std::uint32_t now_ms = monotonic_ms();
+        const std::uint32_t requested_generation =
+            ble_requested_generation_.load(std::memory_order_acquire);
+        const bool ble_start_pending =
+            ble_requested_running_.load(std::memory_order_acquire) &&
+            !ble_request_complete(requested_generation);
+        if (ble_start_pending &&
+            now_ms - recording_started_at_ms_ <
+                kPhoneProxyConnectGraceMs) {
+            return;
+        }
         if (runtime::keep_ble_during_recording(
                 ble_provisioning::running(),
                 ble_provisioning::bond_available(),
@@ -980,9 +1458,18 @@ private:
         if (network_.connected() || network_.connecting()) {
             return;
         }
-        // Protect the controller restart block before the recording-time
-        // worker can initialize Wi-Fi.
-        if (!stop_ble_for_request()) {
+        if (!recording_ble_stop_pending_) {
+            recording_ble_stop_generation_ = request_ble(false);
+            recording_ble_stop_pending_ = true;
+        }
+        if (!ble_request_complete(recording_ble_stop_generation_)) {
+            return;
+        }
+        poll_ble_controller();
+        recording_ble_stop_pending_ = false;
+        if (ble_actual_running_.load(std::memory_order_acquire) ||
+            ble_result_.load(std::memory_order_acquire) != ESP_OK ||
+            !reserve_ble_restart_memory()) {
             return;
         }
         xEventGroupClearBits(speech_events_, kNetworkWarmDoneBit);
@@ -1317,22 +1804,97 @@ private:
 
     template <typename Callback>
     bool with_display(Callback callback) {
-        if (bsp_display_lock(100)) {
+        const std::uint32_t lock_ms =
+            voice_priority_.load(std::memory_order_acquire) ? 0 : 100;
+        if (bsp_display_lock(lock_ms)) {
             callback();
-            lv_refr_now(nullptr);
+            if (!voice_priority_.load(std::memory_order_acquire)) {
+                lv_refr_now(nullptr);
+            }
             bsp_display_unlock();
             return true;
         }
+        display_refresh_pending_ = true;
         return false;
     }
 
     void show_state(InteractionState state) {
-        with_display([this, state]() {
+        if (with_display([this, state]() {
             ui::sync_quick_controls(
                 device_control_.brightness_percent(),
                 device_control_.volume_percent());
             ui::show_state(state);
-        });
+        })) {
+            display_refresh_pending_ = false;
+        }
+    }
+
+    void prepare_deferred_ui() {
+        if (deferred_views_ready_.load(std::memory_order_acquire)) {
+            if (!quick_controls_enabled_ &&
+                !quick_controls_attempted_ &&
+                !voice_priority_.load(std::memory_order_acquire) &&
+                bsp_display_lock(100)) {
+                quick_controls_attempted_ = true;
+                quick_controls_enabled_ = ui::enable_quick_controls(
+                    device_control_.brightness_percent(),
+                    device_control_.volume_percent(),
+                    quick_controls_callback, this);
+                if (quick_controls_enabled_) {
+                    lv_refr_now(nullptr);
+                }
+                bsp_display_unlock();
+                if (!quick_controls_enabled_) {
+                    ESP_LOGW(kTag, "Touch controls are not available");
+                }
+            }
+            return;
+        }
+
+        if (deferred_ui_task_ != nullptr) {
+            if ((xEventGroupGetBits(speech_events_) &
+                 kDeferredUiDoneBit) == 0) {
+                return;
+            }
+            TaskHandle_t completed = deferred_ui_task_;
+            deferred_ui_task_ = nullptr;
+            vTaskDeleteWithCaps(completed);
+            if (deferred_ui_result_.load(std::memory_order_acquire)) {
+                deferred_views_ready_.store(
+                    true, std::memory_order_release);
+                mode_display_pending_ = true;
+                mode_display_attempted_at_ms_ = 0;
+            }
+            return;
+        }
+
+        const std::uint32_t ble_generation =
+            ble_requested_generation_.load(std::memory_order_acquire);
+        if (!display_available_.load(std::memory_order_acquire) ||
+            interaction_.state() != InteractionState::idle ||
+            voice_priority_.load(std::memory_order_acquire) ||
+            deferred_ui_task_create_failed_ ||
+            !startup_services_ready() ||
+            !ble_request_complete(ble_generation)) {
+            return;
+        }
+        xEventGroupClearBits(speech_events_, kDeferredUiDoneBit);
+        deferred_ui_result_.store(false, std::memory_order_release);
+        const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
+            deferred_ui_task_entry, "deferred_ui", kDeferredUiStackBytes,
+            this, kDeferredUiPriority, &deferred_ui_task_, 0,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (created != pdPASS) {
+            deferred_ui_task_ = nullptr;
+            deferred_ui_task_create_failed_ = true;
+            ESP_LOGW(kTag, "Optional touch setup task could not start");
+        }
+    }
+
+    void prepare_deferred_ui_for_request() {
+        if (!ui::prepare_visual_views()) {
+            ESP_LOGW(kTag, "Visual display setup is not available");
+        }
     }
 
     void refresh_clock(std::uint32_t now_ms, bool force = false) {
@@ -1358,11 +1920,17 @@ private:
     }
 
     bool apply_mode_display(AppMode mode, InteractionState chat_state) {
+        if (mode == AppMode::clock && !ui::prepare_clock_view()) {
+            mode_display_pending_ = true;
+            return false;
+        }
         const bool applied = with_display([this, mode, chat_state]() {
             ui::show_app_mode(mode, chat_state);
-            ui::sync_quick_controls(
-                device_control_.brightness_percent(),
-                device_control_.volume_percent());
+            if (quick_controls_enabled_) {
+                ui::sync_quick_controls(
+                    device_control_.brightness_percent(),
+                    device_control_.volume_percent());
+            }
         });
         mode_display_pending_ = !applied;
         return applied;
@@ -1390,6 +1958,13 @@ private:
         clear_all_image_state();
         python_tool_.clear_plot();
         pending_plot_.clear();
+        footer_shown_ = false;
+        clock_refreshed_second_ = 0xff;
+        clock_time_available_ = false;
+        mode_display_attempted_at_ms_ = now_ms;
+        (void)apply_mode_display(AppMode::clock, interaction_.state());
+        refresh_clock(now_ms, true);
+
         const bool local_time_ready = utc_clock_.has_local_time();
         const bool wifi_configured = settings_.has_wifi_credentials();
         const runtime::ClockNetworkTransition network_transition =
@@ -1423,13 +1998,22 @@ private:
                     break;
             }
         }
-        footer_shown_ = false;
-        clock_refreshed_second_ = 0xff;
-        clock_time_available_ = false;
-        mode_display_attempted_at_ms_ = now_ms;
-        (void)apply_mode_display(AppMode::clock, interaction_.state());
-        refresh_clock(now_ms, true);
         ESP_LOGI(kTag, "Clock mode is active");
+    }
+
+    void start_clock_network_after_settings(std::uint32_t now_ms) {
+        if (app_mode_.load(std::memory_order_acquire) != AppMode::clock ||
+            utc_clock_.has_local_time() || clock_network_stop_pending_ ||
+            !settings_.has_wifi_credentials() ||
+            voice_priority_.load(std::memory_order_acquire) ||
+            button_pressed_.load(std::memory_order_acquire)) {
+            return;
+        }
+        clock_network_stop_pending_ = true;
+        clock_network_stop_started_at_ms_ = now_ms;
+        if (stop_ble_for_request()) {
+            start_network_early(true);
+        }
     }
 
     void enter_chat_mode(std::uint32_t now_ms) {
@@ -1678,10 +2262,6 @@ private:
     }
 
     void run() {
-        // Apply durable production settings on the larger runtime stack before
-        // this task processes a startup button command. The main task does not
-        // have enough stack for the complete settings record.
-        refresh_settings();
         // Replace the full-boot splash when this task can accept input. Do not
         // add a splash timer because it would delay hold-to-talk.
         interaction_.ready(monotonic_ms());
@@ -1697,11 +2277,6 @@ private:
         } else {
             show_state(previous_state_);
             refresh_footer(monotonic_ms(), true);
-            // Allocate the BLE controller before Wi-Fi takes DMA-capable
-            // internal RAM. Secure pairing also needs this headroom.
-            if (interaction_.state() != InteractionState::sleep_pending) {
-                ensure_ble_started();
-            }
         }
 
         std::uint32_t heartbeat_at_ms = monotonic_ms();
@@ -1724,6 +2299,37 @@ private:
             }
 
             const std::uint32_t now_ms = monotonic_ms();
+            poll_display_controller();
+            poll_ble_controller();
+            if (image_task_ != nullptr &&
+                (xEventGroupGetBits(speech_events_) & kImageDoneBit) != 0) {
+                join_image_worker();
+            }
+            if (network_warm_task_ != nullptr &&
+                (xEventGroupGetBits(speech_events_) &
+                 kNetworkWarmDoneBit) != 0) {
+                join_network_warm_worker();
+            }
+            if (!startup_services_applied_) {
+                if (finish_startup_services(false)) {
+                    if (interaction_.state() !=
+                        InteractionState::sleep_pending) {
+                        if (app_mode_.load(std::memory_order_acquire) ==
+                            AppMode::clock) {
+                            start_clock_network_after_settings(
+                                monotonic_ms());
+                        } else {
+                            (void)ensure_ble_started();
+                        }
+                    }
+                } else if (
+                    (xEventGroupGetBits(speech_events_) &
+                     kStartupServicesDoneBit) != 0 &&
+                    !startup_services_failed_reported_) {
+                    startup_services_failed_reported_ = true;
+                    fail("DEVICE STORAGE COULD NOT START");
+                }
+            }
             if (now_ms - heartbeat_at_ms >= kRuntimeHeartbeatMs) {
                 heartbeat_at_ms = now_ms;
                 crash_diagnostics::heartbeat();
@@ -1737,9 +2343,11 @@ private:
                     "Restarting BLE after advertising retries ended");
                 if (stop_ble()) {
                     ble_start_attempted_ = false;
-                    ensure_ble_started();
+                    (void)ensure_ble_started();
                 }
             }
+            prepare_deferred_ui();
+            apply_pending_settings_display();
             process_quick_controls(now_ms);
             retry_mode_display(now_ms);
             const network::NetworkState network_state = network_.state();
@@ -1772,6 +2380,7 @@ private:
                 interaction_.note_idle_activity(now_ms);
             }
             if (app_mode == AppMode::clock) {
+                start_clock_network_after_settings(now_ms);
                 // Apply a pending VBUS event before the timeout decision. A
                 // cable inserted at the five-minute boundary must keep Clock
                 // active instead of using the prior battery-only sample.
@@ -1812,6 +2421,10 @@ private:
             }
             if (!voice_priority_.load(std::memory_order_acquire)) {
                 retry_display_wake(now_ms);
+                if (display_refresh_pending_ &&
+                    display_available_.load(std::memory_order_acquire)) {
+                    show_state(interaction_.state());
+                }
             }
             retry_display_sleep(now_ms);
             if (display_available_.load(std::memory_order_acquire) &&
@@ -1827,21 +2440,27 @@ private:
             }
             if (!recording &&
                 interaction_.state() == InteractionState::idle &&
+                !voice_priority_.load(std::memory_order_acquire) &&
+                !button_pressed_.load(std::memory_order_acquire) &&
                 now_ms - settings_checked_at_ms_ >=
                     kSettingsRefreshMs) {
                 settings_checked_at_ms_ = now_ms;
                 if (ble_started_ && !ble_provisioning::running()) {
                     ble_started_ = false;
                     ble_start_attempted_ = false;
+                    ble_actual_running_.store(
+                        false, std::memory_order_release);
                 }
                 if (!interaction_.button_is_down() && !ble_started_ &&
                     !ble_start_attempted_ &&
                     network_context_task_ == nullptr &&
                     now_ms - network_context_finished_at_ms_ >=
                         kBleRestartAfterWorkerMs) {
-                    ensure_ble_started();
+                    (void)ensure_ble_started();
                 }
-                refresh_settings();
+                if (startup_services_applied_) {
+                    refresh_settings();
+                }
             }
         }
     }
@@ -1885,6 +2504,7 @@ private:
             app_mode_.load(std::memory_order_acquire) == AppMode::clock) {
             // The bottom button always returns to ChatESP before its normal
             // short-press or hold-to-talk state handling continues.
+            prepare_recording();
             enter_chat_mode(command.at_ms);
         }
         if (command.kind == CommandKind::startup_button_down ||
@@ -1902,16 +2522,30 @@ private:
             ESP_LOGI(kTag, "Action button started a voice hold");
             display_recovery_requested_for_press_ = false;
             interaction_.button_down(command.at_ms);
+            prepare_recording();
         } else if (command.kind == CommandKind::button_up) {
             ESP_LOGI(kTag, "Action button was released");
+            if (button_pressed_.load(std::memory_order_acquire)) {
+                // A newer physical press superseded this queued release.
+                // Cancel the old hold without scheduling sleep or submission.
+                cancel_current();
+                return;
+            }
             timing_.reset(command.at_ms);
+            // Resolve a hold that crossed the threshold before this queued
+            // release. Do not depend on the periodic tick running first.
+            interaction_.tick(command.at_ms);
+            process_state_change(command.at_ms);
             interaction_.button_up(
                 command.at_ms, command.short_press_confirmed);
             if (interaction_.state() == InteractionState::sleep_pending) {
                 crash_diagnostics::mark(
                     runtime::CrashEvent::sleep_button_request);
             }
-            if (interaction_.state() == InteractionState::idle) {
+            if (interaction_.state() == InteractionState::idle ||
+                interaction_.state() == InteractionState::sleep_pending) {
+                capture_.discard();
+                recording_prepared_for_press_ = false;
                 voice_priority_.store(false, std::memory_order_release);
             }
         }
@@ -1980,42 +2614,33 @@ private:
         interaction_.ready(now_ms);
         interaction_.wake_button_down(now_ms);
         previous_state_ = interaction_.state();
+        prepare_recording();
         display_recovery_requested_for_press_ = true;
         if (!display_already_ready) {
             request_display_wake(now_ms);
         }
-        crash_diagnostics::mark(
-            runtime::CrashEvent::phone_proxy_wake_start);
-        if (!ensure_ble_started()) {
-            ESP_LOGW(kTag, "BLE did not start during button wake");
+        crash_diagnostics::mark(runtime::CrashEvent::phone_proxy_wake_start);
+        if (startup_services_applied_ && !ensure_ble_started()) {
+            ESP_LOGW(kTag, "BLE start could not be scheduled during wake");
         }
     }
 
     void request_display_wake(std::uint32_t now_ms) {
-        crash_diagnostics::mark(runtime::CrashEvent::display_wake_begin);
-        const esp_err_t result = ui::wake(
-            interaction_.state(), device_control_.brightness_percent(),
-            app_mode_.load(std::memory_order_acquire));
-        display_wake_pending_ = result != ESP_OK;
+        display_wake_generation_ = request_display(true, true, now_ms);
+        display_wake_pending_ = true;
         display_wake_attempted_at_ms_ = now_ms;
-        if (display_wake_pending_) {
-            crash_diagnostics::mark(
-                runtime::CrashEvent::display_wake_failed);
-            ESP_LOGW(
-                kTag,
-                "Display wake will retry (category %s)",
-                esp_err_to_name(result));
-        } else {
-            crash_diagnostics::mark(
-                runtime::CrashEvent::display_wake_complete);
-            footer_shown_ = false;
-            refresh_footer(now_ms, true);
-        }
     }
 
     void retry_display_wake(std::uint32_t now_ms) {
         if (!display_wake_pending_ ||
             now_ms - display_wake_attempted_at_ms_ < kDisplayWakeRetryMs) {
+            return;
+        }
+        if (!display_request_complete(display_wake_generation_)) {
+            return;
+        }
+        poll_display_controller();
+        if (!display_wake_pending_) {
             return;
         }
         request_display_wake(now_ms);
@@ -2028,8 +2653,12 @@ private:
             return;
         }
         display_sleep_attempted_at_ms_ = now_ms;
-        if (ui::sleep(true) == ESP_OK) {
-            display_sleep_pending_ = false;
+        if (display_request_complete(display_sleep_generation_)) {
+            poll_display_controller();
+            if (display_sleep_pending_) {
+                display_sleep_generation_ = request_display(
+                    false, display_sleep_keep_panel_ready_, now_ms);
+            }
         }
     }
 
@@ -2068,17 +2697,30 @@ private:
         }
     }
 
+    void prepare_recording() {
+        if (recording_prepared_for_press_) {
+            return;
+        }
+        recording_prepared_for_press_ = true;
+        capture_.discard();
+        crash_diagnostics::mark(runtime::CrashEvent::audio_prepare_begin);
+        capture_prepare_result_ = capture_.prepare();
+        if (capture_prepare_result_ == ESP_OK) {
+            crash_diagnostics::mark(
+                runtime::CrashEvent::audio_prepare_complete);
+        }
+    }
+
     void begin_recording(std::uint32_t now_ms) {
         pcm_sink_.cancel_and_stop();
-        capture_.discard();
-        clear_all_image_state();
-        python_tool_.clear_plot();
-        pending_plot_.clear();
         cancellation_.reset();
-        if (capture_.start() != ESP_OK) {
+        if (capture_prepare_result_ != ESP_OK ||
+            capture_.start() != ESP_OK) {
             fail("MICROPHONE COULD NOT START");
             return;
         }
+        crash_diagnostics::mark(runtime::CrashEvent::audio_capture_open);
+        recording_prepared_for_press_ = false;
         // Do not reinitialize the active panel for a short sleep press. If the
         // press becomes a voice hold, start audio first and then request the
         // bounded display recovery. A wake press requested recovery earlier.
@@ -2090,9 +2732,17 @@ private:
         // Do not start more radio work between microphone start and reads.
         recording_started_at_ms_ = now_ms;
         level_refreshed_at_ms_ = now_ms;
+        audio_capture_read_marked_ = false;
+        audio_first_chunk_marked_ = false;
+        recording_ble_stop_pending_ = false;
     }
 
     void capture_audio(std::uint32_t now_ms) {
+        if (!audio_capture_read_marked_) {
+            audio_capture_read_marked_ = true;
+            crash_diagnostics::mark(
+                runtime::CrashEvent::audio_capture_read_begin);
+        }
         const esp_err_t result = capture_.capture_chunk();
         if (result != ESP_OK) {
             if (cancellation_.cancelled()) {
@@ -2106,6 +2756,10 @@ private:
                 fail("MICROPHONE READ FAILED");
             }
             return;
+        }
+        if (!audio_first_chunk_marked_) {
+            audio_first_chunk_marked_ = true;
+            crash_diagnostics::mark(runtime::CrashEvent::audio_first_chunk);
         }
         if (capture_.sample_count() >= kMinimumRecordingSamples) {
             start_network_during_recording();
@@ -2122,6 +2776,7 @@ private:
     }
 
     void finish_recording_and_request() {
+        const std::uint32_t released_at_ms = monotonic_ms();
         if (capture_.stop() != ESP_OK) {
             capture_.discard();
             fail("MICROPHONE STOP FAILED");
@@ -2132,7 +2787,34 @@ private:
             fail("HOLD THE BUTTON A LITTLE LONGER");
             return;
         }
-        const std::uint32_t proxy_wait_started_ms = monotonic_ms();
+        if (!finish_startup_services(true)) {
+            capture_.discard();
+            fail("DEVICE STORAGE COULD NOT START");
+            return;
+        }
+        clear_all_image_state();
+        python_tool_.clear_plot();
+        pending_plot_.clear();
+        const bool wifi_path_requested =
+            recording_ble_stop_pending_ || network_warm_task_ != nullptr ||
+            network_initialized_;
+        if (recording_ble_stop_pending_) {
+            if (!stop_ble_for_request()) {
+                capture_.discard();
+                fail("BLUETOOTH COULD NOT STOP");
+                return;
+            }
+            recording_ble_stop_pending_ = false;
+        }
+        join_network_warm_worker();
+        if (!wifi_path_requested) {
+            if (!ensure_ble_started() ||
+                !wait_for_ble_until(
+                    ble_active_request_generation_, released_at_ms,
+                    kPhoneProxyConnectGraceMs)) {
+                ESP_LOGW(kTag, "BLE was not ready after button release");
+            }
+        }
         if (ble_provisioning::running() &&
             !ble_provisioning::http_proxy_available()) {
             crash_diagnostics::mark(
@@ -2142,12 +2824,17 @@ private:
         while (ble_provisioning::running() &&
                !ble_provisioning::http_proxy_available() &&
                !cancellation_.cancelled() &&
-               monotonic_ms() - proxy_wait_started_ms <
+               monotonic_ms() - released_at_ms <
                    kPhoneProxyConnectGraceMs) {
             vTaskDelay(pdMS_TO_TICKS(20));
         }
         const bool use_phone_proxy =
             ble_provisioning::http_proxy_available();
+        if (!use_phone_proxy) {
+            // The phone-proxy choice ends two seconds after release. Post the
+            // radio stop at once so Wi-Fi can use the controller memory.
+            (void)request_ble(false);
+        }
         crash_diagnostics::mark(
             use_phone_proxy
                 ? runtime::CrashEvent::phone_proxy_ready
@@ -2165,7 +2852,6 @@ private:
         DeadlineCancellation request_cancellation(
             cancellation_, monotonic_ms(), kInteractionTimeoutMs);
 
-        join_network_warm_worker();
         finish_network_context_worker(true);
         if (!use_phone_proxy) {
             if (!stop_ble_for_request()) {
@@ -2236,10 +2922,14 @@ private:
             return;
         }
 
+        // Visual results are optional and are not needed for recording. Build
+        // their views after microphone and transport setup, before the first
+        // model result can publish an image or plot.
         with_display([&transcript]() {
             ui::show_transcript(
                 {transcript.data(), transcript.size()});
         });
+        prepare_deferred_ui_for_request();
 
         auto &answer = request_scratch_->answer;
         answer.clear();
@@ -2293,7 +2983,9 @@ private:
                 });
                 interaction_.interaction_finished(monotonic_ms());
                 previous_state_ = interaction_.state();
-                voice_priority_.store(false, std::memory_order_release);
+                voice_priority_.store(
+                    button_pressed_.load(std::memory_order_acquire),
+                    std::memory_order_release);
                 timing_.mark(
                     runtime::TurnPhase::completion, monotonic_ms());
                 log_turn_timing();
@@ -2402,7 +3094,9 @@ private:
         previous_state_ = interaction_.state();
         ESP_LOGI(kTag, "Interaction complete; idle timer started");
         log_turn_timing();
-        voice_priority_.store(false, std::memory_order_release);
+        voice_priority_.store(
+            button_pressed_.load(std::memory_order_acquire),
+            std::memory_order_release);
         ESP_LOGI(
             kTag,
             "Runtime stack minimum free bytes: %u",
@@ -2448,6 +3142,11 @@ private:
     }
 
     void finish_model_power_off() {
+        if (cancellation_.cancelled() ||
+            button_pressed_.load(std::memory_order_acquire)) {
+            cancel_current();
+            return;
+        }
         crash_diagnostics::mark(
             runtime::CrashEvent::sleep_model_request);
         clear_all_image_state();
@@ -2459,20 +3158,40 @@ private:
         interaction_.cancel_for_sleep();
         timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
         log_turn_timing();
-        voice_priority_.store(false, std::memory_order_release);
+        voice_priority_.store(
+            button_pressed_.load(std::memory_order_acquire),
+            std::memory_order_release);
         ESP_LOGI(kTag, "The model scheduled device power-off");
     }
 
-    [[noreturn]] void finish_model_restart() {
+    void finish_model_restart() {
+        if (cancellation_.cancelled() ||
+            button_pressed_.load(std::memory_order_acquire)) {
+            cancel_current();
+            return;
+        }
         crash_diagnostics::mark(
             runtime::CrashEvent::restart_model_request);
         timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
         log_turn_timing();
-        voice_priority_.store(false, std::memory_order_release);
+        voice_priority_.store(
+            button_pressed_.load(std::memory_order_acquire),
+            std::memory_order_release);
         ESP_LOGI(kTag, "The model scheduled a device restart");
+        (void)finish_startup_services(true);
+        if ((xEventGroupGetBits(speech_events_) &
+             kStartupServicesDoneBit) == 0) {
+            fail("DEVICE STORAGE COULD NOT STOP");
+            return;
+        }
+        (void)stop_ble();
+        if (cancellation_.cancelled() ||
+            button_pressed_.load(std::memory_order_acquire)) {
+            cancel_current();
+            return;
+        }
         vTaskDelay(pdMS_TO_TICKS(50));
         esp_restart();
-        __builtin_unreachable();
     }
 
     void finish_with_error(agent::Error error) {
@@ -2485,8 +3204,11 @@ private:
 
     void cancel_current() {
         device_control_.cancel_pending_action();
-        memory_store_.clear_turn_state();
+        if (startup_memory_result_.load(std::memory_order_acquire) == ESP_OK) {
+            memory_store_.clear_turn_state();
+        }
         capture_.discard();
+        recording_prepared_for_press_ = false;
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
         clear_all_image_state();
@@ -2496,13 +3218,18 @@ private:
         interaction_.ready(monotonic_ms());
         previous_state_ = interaction_.state();
         show_state(previous_state_);
-        voice_priority_.store(false, std::memory_order_release);
+        voice_priority_.store(
+            button_pressed_.load(std::memory_order_acquire),
+            std::memory_order_release);
     }
 
     void fail(const char *message) {
         device_control_.cancel_pending_action();
-        memory_store_.clear_turn_state();
+        if (startup_memory_result_.load(std::memory_order_acquire) == ESP_OK) {
+            memory_store_.clear_turn_state();
+        }
         capture_.discard();
+        recording_prepared_for_press_ = false;
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
         clear_all_image_state();
@@ -2511,10 +3238,34 @@ private:
         show_error(message);
         interaction_.fail(monotonic_ms());
         previous_state_ = interaction_.state();
-        voice_priority_.store(false, std::memory_order_release);
+        voice_priority_.store(
+            button_pressed_.load(std::memory_order_acquire),
+            std::memory_order_release);
     }
 
-    void refresh_settings() {
+    void apply_pending_settings_display() {
+        if (!settings_display_pending_ ||
+            voice_priority_.load(std::memory_order_acquire) ||
+            button_pressed_.load(std::memory_order_acquire) ||
+            !display_available_.load(std::memory_order_acquire)) {
+            return;
+        }
+        if (with_display([this]() {
+                ui::hide_fullscreen_visual();
+                (void)ui::set_chat_font_scale(
+                    settings_.chat_font_scale_percent);
+                if (quick_controls_enabled_) {
+                    ui::sync_quick_controls(
+                        device_control_.brightness_percent(),
+                        device_control_.volume_percent());
+                }
+                ui::show_state(interaction_.state());
+            })) {
+            settings_display_pending_ = false;
+        }
+    }
+
+    void refresh_settings(bool apply_display = true) {
         // Keep the current radio state until the phone confirms the settings
         // indication. A Wi-Fi reconnect must not interrupt that confirmation.
         if (ble_provisioning::settings_confirmation_pending()) {
@@ -2555,21 +3306,15 @@ private:
         clear_all_image_state();
         python_tool_.clear_plot();
         pending_plot_.clear();
-        hide_visual();
-        with_display([this]() {
-            (void)ui::set_chat_font_scale(
-                settings_.chat_font_scale_percent);
-            ui::sync_quick_controls(
-                device_control_.brightness_percent(),
-                device_control_.volume_percent());
-            ui::show_state(interaction_.state());
-        });
+        settings_display_pending_ = true;
+        if (apply_display) {
+            apply_pending_settings_display();
+        }
         crash_diagnostics::mark(runtime::CrashEvent::settings_apply_complete);
     }
 
     void enter_sleep() {
         device_control_.cancel_pending_action();
-        memory_store_.clear_turn_state();
         display_available_.store(false, std::memory_order_release);
         app_mode_.store(AppMode::chat, std::memory_order_release);
         mode_button_pressed_.store(false, std::memory_order_release);
@@ -2579,26 +3324,16 @@ private:
         display_wake_pending_ = false;
         footer_shown_ = false;
         // Turn the AMOLED off before network and peripheral cleanup.
-        esp_err_t display_sleep_result = ESP_ERR_TIMEOUT;
-        for (std::uint8_t attempt = 0;
-             attempt < 3 && display_sleep_result != ESP_OK;
-             ++attempt) {
-            display_sleep_result = ui::sleep(true);
-            if (display_sleep_result != ESP_OK) {
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-        }
-        if (display_sleep_result != ESP_OK) {
-            ESP_LOGE(
-                kTag,
-                "Display sleep failed (category %s)",
-                esp_err_to_name(display_sleep_result));
-        } else {
-            crash_diagnostics::mark(
-                runtime::CrashEvent::display_sleep_complete);
-        }
-        display_sleep_pending_ = display_sleep_result != ESP_OK;
+        display_sleep_keep_panel_ready_ = true;
+        display_sleep_generation_ = request_display(
+            false, display_sleep_keep_panel_ready_, monotonic_ms());
+        const bool display_slept =
+            wait_for_display(display_sleep_generation_);
+        display_sleep_pending_ = !display_slept;
         display_sleep_attempted_at_ms_ = monotonic_ms();
+        if (!display_slept) {
+            ESP_LOGE(kTag, "Display sleep failed");
+        }
         if (quick_controls_commit_pending_.exchange(
                 false, std::memory_order_acq_rel)) {
             (void)device_control_.persist_preferences();
@@ -2610,12 +3345,38 @@ private:
         cancel_network_context_worker();
         stop_network_time_sync();
         capture_.discard();
+        recording_prepared_for_press_ = false;
         pcm_sink_.cancel_and_stop();
+
+        // The panel is black before this wait. Do not cut power while the
+        // startup worker can still own NVS. A new PWR press cancels the wait.
+        const std::uint32_t storage_wait_started_ms = monotonic_ms();
+        EventBits_t startup_bits = xEventGroupGetBits(speech_events_);
+        while ((startup_bits & kStartupServicesDoneBit) == 0 &&
+               monotonic_ms() - storage_wait_started_ms <
+                   kStartupServicesSleepWaitMs) {
+            if (button_pressed_.load(std::memory_order_acquire)) {
+                return;
+            }
+            startup_bits = xEventGroupWaitBits(
+                speech_events_, kStartupServicesDoneBit, pdFALSE, pdTRUE,
+                pdMS_TO_TICKS(10));
+        }
+        if ((startup_bits & kStartupServicesDoneBit) == 0) {
+            ESP_LOGE(kTag, "Storage startup blocked sleep");
+            recover_poweroff(monotonic_ms());
+            return;
+        }
+        // Settings success is required for a cloud request, not for sleep.
+        // The completed worker no longer owns NVS, so system-off is safe.
+        (void)finish_startup_services(false);
+        if (startup_memory_result_.load(std::memory_order_acquire) == ESP_OK) {
+            memory_store_.clear_turn_state();
+        }
         agent_loop_->clear_thread();
         clear_all_image_state();
         python_tool_.clear_plot();
         pending_plot_.clear();
-        hide_visual();
         if (network_initialized_) {
             network_.shutdown();
             network_initialized_ = false;
@@ -2630,7 +3391,11 @@ private:
             vTaskDelay(pdMS_TO_TICKS(10));
         }
 
-        stop_ble();
+        if (!stop_ble()) {
+            // System-off removes radio power. With USB attached, the posted
+            // OFF request remains active and the controller can finish it.
+            ESP_LOGW(kTag, "BLE stop did not finish before system-off");
+        }
 
         if (kDevelopmentMode) {
             if (!low_battery_poweroff_pending_) {
@@ -2645,7 +3410,14 @@ private:
         // The cancel window has ended. Zero brightness only when system-off
         // is now the next device state. An in-session wake must not depend on
         // a CO5300 zero-to-nonzero brightness transition.
-        (void)ui::sleep(false);
+        display_sleep_keep_panel_ready_ = false;
+        display_sleep_generation_ = request_display(
+            false, display_sleep_keep_panel_ready_, monotonic_ms());
+        display_sleep_attempted_at_ms_ = monotonic_ms();
+        if (!wait_for_display(display_sleep_generation_)) {
+            ESP_LOGE(kTag, "Final display shutdown failed");
+            display_sleep_pending_ = true;
+        }
         crash_diagnostics::mark(runtime::CrashEvent::poweroff_begin);
         if (!poweroff_gate_.mark_poweroff_ready()) {
             display_available_.store(true, std::memory_order_release);
@@ -2673,24 +3445,26 @@ private:
     }
 
     bool stop_ble() {
-        if (!ble_started_) {
-            return true;
-        }
-        const esp_err_t result =
-            ble_provisioning::stop(kBleStopTimeoutMs);
-        if (result != ESP_OK) {
-            ESP_LOGE(
-                kTag,
-                "BLE provisioning stop failed (category %s)",
-                esp_err_to_name(result));
-        }
-        ble_started_ = ble_provisioning::running();
-        ble_start_attempted_ = ble_started_;
-        return result == ESP_OK && !ble_started_;
+        const std::uint32_t generation = request_ble(false);
+        const bool stopped = wait_for_ble(generation) &&
+            !ble_actual_running_.load(std::memory_order_acquire);
+        ble_started_ = ble_actual_running_.load(std::memory_order_acquire);
+        ble_start_attempted_ = false;
+        return stopped;
     }
 
     bool ensure_ble_started() {
-        if (ble_started_ && ble_provisioning::running()) {
+        if (!startup_services_ready()) {
+            return false;
+        }
+        if (image_task_ != nullptr || network_warm_task_ != nullptr ||
+            deferred_ui_task_ != nullptr) {
+            return false;
+        }
+        if (ble_actual_running_.load(std::memory_order_acquire) &&
+            ble_provisioning::running()) {
+            ble_active_request_generation_ =
+                ble_requested_generation_.load(std::memory_order_acquire);
             return true;
         }
         // The ESP controller can assert instead of returning an allocation
@@ -2707,42 +3481,9 @@ private:
             early_connect_attempted_at_ms_ = 0;
             vTaskDelay(pdMS_TO_TICKS(10));
         }
-        release_ble_restart_memory();
-        const std::size_t free_internal = heap_caps_get_free_size(
-            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        const std::size_t largest_internal =
-            heap_caps_get_largest_free_block(
-                MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        if (free_internal < kBleControllerMinimumFreeInternalBytes ||
-            largest_internal < kBleControllerMinimumLargestBlockBytes) {
-            ble_start_attempted_ = false;
-            const std::uint32_t now_ms = monotonic_ms();
-            if (ble_memory_logged_at_ms_ == 0 ||
-                now_ms - ble_memory_logged_at_ms_ >=
-                kBleMemoryLogIntervalMs) {
-                ble_memory_logged_at_ms_ = now_ms;
-                ESP_LOGW(
-                    kTag,
-                    "BLE start delayed for memory: free=%u largest=%u",
-                    static_cast<unsigned>(free_internal),
-                    static_cast<unsigned>(largest_internal));
-            }
-            return false;
-        }
         ble_start_attempted_ = true;
-        crash_diagnostics::mark(runtime::CrashEvent::ble_start_begin);
-        const esp_err_t result = ble_provisioning::start(
-            &settings_store_, &memory_store_, passkey_callback,
-            device_context_callback, this);
-        ble_started_ = result == ESP_OK;
-        if (ble_started_) {
-            crash_diagnostics::mark(
-                runtime::CrashEvent::ble_start_complete);
-        }
-        if (!ble_started_) {
-            ESP_LOGE(kTag, "BLE provisioning restart failed");
-        }
-        return ble_started_;
+        ble_active_request_generation_ = request_ble(true);
+        return true;
     }
 
     bool reserve_ble_restart_memory() {
@@ -2790,9 +3531,10 @@ private:
     void recover_poweroff(std::uint32_t now_ms) {
         low_battery_poweroff_pending_ = false;
         device_control_.cancel_pending_action();
+        poweroff_gate_.recover();
         display_available_.store(true, std::memory_order_release);
         display_sleep_pending_ = false;
-        ensure_ble_started();
+        (void)ensure_ble_started();
         request_display_wake(now_ms);
         show_error("CHATESP COULD NOT TURN OFF");
         interaction_.fail(monotonic_ms());
@@ -2863,6 +3605,10 @@ private:
     TaskHandle_t network_warm_task_ = nullptr;
     TaskHandle_t image_task_ = nullptr;
     TaskHandle_t network_context_task_ = nullptr;
+    TaskHandle_t display_controller_task_ = nullptr;
+    TaskHandle_t ble_controller_task_ = nullptr;
+    TaskHandle_t startup_services_task_ = nullptr;
+    TaskHandle_t deferred_ui_task_ = nullptr;
     EventGroupHandle_t speech_events_ = nullptr;
     DeadlineCancellation *speech_cancellation_ = nullptr;
     DeadlineCancellation *image_cancellation_ = nullptr;
@@ -2889,7 +3635,30 @@ private:
     std::atomic<bool> quick_controls_brightness_pending_{false};
     std::atomic<bool> quick_controls_volume_pending_{false};
     std::atomic<bool> quick_controls_commit_pending_{false};
+    std::atomic<esp_err_t> startup_settings_result_{
+        ESP_ERR_INVALID_STATE};
+    std::atomic<esp_err_t> startup_memory_result_{
+        ESP_ERR_INVALID_STATE};
+    std::atomic<bool> deferred_ui_result_{false};
+    std::atomic<std::uint32_t> display_requested_generation_{0};
+    std::atomic<std::uint32_t> display_completed_generation_{0};
+    std::atomic<bool> display_requested_on_{true};
+    std::atomic<bool> display_requested_keep_ready_{true};
+    std::atomic<InteractionState> display_requested_state_{
+        InteractionState::booting};
+    std::atomic<AppMode> display_requested_mode_{AppMode::chat};
+    std::atomic<std::uint8_t> display_requested_brightness_{
+        runtime::DevicePreferences::default_brightness_percent};
+    std::atomic<std::uint32_t> display_request_at_ms_{0};
+    std::atomic<std::uint32_t> display_completed_at_ms_{0};
+    std::atomic<esp_err_t> display_result_{ESP_OK};
+    std::atomic<std::uint32_t> ble_requested_generation_{0};
+    std::atomic<std::uint32_t> ble_completed_generation_{0};
+    std::atomic<bool> ble_requested_running_{false};
+    std::atomic<bool> ble_actual_running_{false};
+    std::atomic<esp_err_t> ble_result_{ESP_OK};
     runtime::PoweroffGate poweroff_gate_;
+    runtime::BleControllerPlanner ble_controller_planner_{};
     std::uint32_t level_refreshed_at_ms_ = 0;
     std::uint32_t recording_started_at_ms_ = 0;
     std::uint32_t settings_checked_at_ms_ = 0;
@@ -2904,12 +3673,19 @@ private:
     std::uint32_t applied_revision_ = 0;
     std::uint32_t mode_display_attempted_at_ms_ = 0;
     std::uint32_t network_context_finished_at_ms_ = 0;
+    std::uint32_t display_wake_generation_ = 0;
+    std::uint32_t display_sleep_generation_ = 0;
+    std::uint32_t display_completion_seen_ = 0;
+    std::uint32_t ble_active_request_generation_ = 0;
+    std::uint32_t ble_completion_seen_ = 0;
+    std::uint32_t recording_ble_stop_generation_ = 0;
     std::uint8_t clock_refreshed_second_ = 0xff;
     bool tools_ready_ = false;
+    bool startup_services_applied_ = false;
+    bool startup_services_failed_reported_ = false;
     bool ble_started_ = false;
     void *ble_restart_reservation_ = nullptr;
     bool ble_start_attempted_ = false;
-    std::uint32_t ble_memory_logged_at_ms_ = 0;
     bool network_initialized_ = false;
     bool context_lookup_attempted_ = false;
     bool sntp_started_ = false;
@@ -2917,7 +3693,14 @@ private:
     bool sntp_start_attempted_ = false;
     bool display_wake_pending_ = false;
     bool display_sleep_pending_ = false;
+    bool display_sleep_keep_panel_ready_ = true;
     bool display_recovery_requested_for_press_ = true;
+    bool display_refresh_pending_ = false;
+    std::atomic<bool> deferred_views_ready_{false};
+    bool audio_capture_read_marked_ = false;
+    bool audio_first_chunk_marked_ = false;
+    bool recording_prepared_for_press_ = false;
+    bool recording_ble_stop_pending_ = false;
     bool battery_checked_ = false;
     bool battery_wake_refresh_pending_ = false;
     bool low_battery_poweroff_pending_ = false;
@@ -2925,11 +3708,15 @@ private:
     bool stream_text_shown_ = false;
     bool request_active_ = false;
     bool quick_controls_enabled_ = false;
+    bool quick_controls_attempted_ = false;
+    bool deferred_ui_task_create_failed_ = false;
     bool clock_time_available_ = false;
     bool clock_network_stop_pending_ = false;
     std::uint32_t clock_network_stop_started_at_ms_ = 0;
     std::uint32_t clock_unpowered_since_ms_ = 0;
     bool mode_display_pending_ = false;
+    bool settings_display_pending_ = false;
+    esp_err_t capture_prepare_result_ = ESP_ERR_INVALID_STATE;
     ui::RadioIndicator radio_indicator_ = ui::RadioIndicator::off;
     ui::RadioIndicator shown_radio_ = ui::RadioIndicator::off;
     std::uint8_t signal_band_ = 0;

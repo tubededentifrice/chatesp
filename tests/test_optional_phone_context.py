@@ -36,7 +36,12 @@ class OptionalPhoneContextTests(unittest.TestCase):
             "                    now_ms - network_context_finished_at_ms_ >=",
             source,
         )
-        self.assertIn("if (ble_started_)", source)
+        ensure = source[
+            source.index("bool ensure_ble_started()") :
+            source.index("bool reserve_ble_restart_memory()")
+        ]
+        self.assertIn("cancel_network_context_worker();", ensure)
+        self.assertIn("network_.shutdown();", ensure)
 
 
 if __name__ == "__main__":

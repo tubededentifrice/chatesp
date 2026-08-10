@@ -26,6 +26,9 @@ public:
     AudioCapture &operator=(const AudioCapture &) = delete;
 
     esp_err_t initialize();
+    // Reserve and clear the recording buffer. This does not acquire the audio
+    // session, change the codec, or read microphone samples.
+    esp_err_t prepare();
     esp_err_t start();
     esp_err_t capture_chunk();
     esp_err_t stop();
@@ -34,6 +37,7 @@ public:
 
     [[nodiscard]] const std::int16_t *samples() const;
     [[nodiscard]] std::size_t sample_count() const;
+    [[nodiscard]] bool prepared() const;
     [[nodiscard]] bool active() const;
     [[nodiscard]] bool cancelled() const;
 
@@ -45,6 +49,7 @@ private:
     std::int16_t *samples_ = nullptr;
     AudioSampleBudget budget_{kMaximumSamples};
     std::atomic<bool> cancelled_{false};
+    bool prepared_ = false;
     bool active_ = false;
     bool session_acquired_ = false;
 };

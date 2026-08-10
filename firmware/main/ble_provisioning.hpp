@@ -29,6 +29,7 @@ esp_err_t start(
     void *callback_context);
 esp_err_t stop(std::uint32_t timeout_ms);
 [[nodiscard]] bool running();
+[[nodiscard]] bool starting();
 [[nodiscard]] bool bond_available();
 [[nodiscard]] bool settings_confirmation_pending();
 [[nodiscard]] bool advertising_recovery_requested();

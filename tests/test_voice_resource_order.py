@@ -8,33 +8,39 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VoiceResourceOrderTests(unittest.TestCase):
-    def test_saved_settings_apply_before_startup_input_is_processed(self) -> None:
+    def test_capture_can_start_before_saved_settings_but_release_cannot(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
-        start = runtime[
-            runtime.index(
-                "esp_err_t start(bool startup_button_down, std::uint32_t startup_at_ms)"
-            ) : runtime.index("void action_button_edge(")
+        services = runtime[
+            runtime.index("void run_startup_services_inline()") :
+            runtime.index("std::uint32_t request_display(")
         ]
-
         run = runtime[
             runtime.index("void run()") : runtime.index("void process_command(")
         ]
+        recording = runtime[
+            runtime.index("void begin_recording(") :
+            runtime.index("void capture_audio(")
+        ]
+        release = runtime[
+            runtime.index("void finish_recording_and_request()") :
+            runtime.index("void finish_with_error(")
+        ]
 
         self.assertLess(
-            start.index("settings_store_.initialize()"),
-            start.index("xTaskCreatePinnedToCore(\n            task_entry"),
+            services.index("settings_store_.initialize()"),
+            services.index("memory_store_.initialize()"),
         )
-        self.assertNotIn("refresh_settings();", start)
+        self.assertNotIn("finish_startup_services", recording)
+        gate = release.index("finish_startup_services(true)")
         self.assertLess(
-            run.index("refresh_settings();"),
-            run.index("interaction_.ready("),
+            gate, release.index("settings_.has_wifi_credentials()")
         )
         self.assertLess(
-            run.index("refresh_settings();"),
-            run.index("if (button_pressed_.load("),
+            gate, release.index("settings_.has_service_credentials()")
         )
+        self.assertLess(run.index("interaction_.ready("), run.index("while (true)"))
 
     def test_speech_start_event_follows_successful_audio_start(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(

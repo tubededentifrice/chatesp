@@ -41,7 +41,7 @@ class IdleTimerContractTests(unittest.TestCase):
         )
         failure = runtime[
             runtime.index("void fail(const char *message)") :
-            runtime.index("void refresh_settings()")
+            runtime.index("void apply_pending_settings_display()")
         ]
 
         self.assertLess(

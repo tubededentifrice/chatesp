@@ -61,16 +61,14 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
-        worker_start = runtime[
-            runtime.index("xTaskCreatePinnedToCoreWithCaps(") : runtime.index(
-                "if (created != pdPASS)",
-                runtime.index("xTaskCreatePinnedToCoreWithCaps("),
-            )
+        lookup = runtime[
+            runtime.index("void start_network_context_lookup()") :
+            runtime.index("void run_network_context_worker()")
         ]
 
-        self.assertIn("network_context_task_entry", worker_start)
-        self.assertIn("kNetworkContextStackBytes", worker_start)
-        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", worker_start)
+        self.assertIn("network_context_task_entry", lookup)
+        self.assertIn("kNetworkContextStackBytes", lookup)
+        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", lookup)
         self.assertIn("vTaskDeleteWithCaps(completed_task)", runtime)
 
     def test_board_audio_allocation_has_no_fatal_check(self) -> None:

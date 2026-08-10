@@ -12,14 +12,18 @@ flushes the splash while the AMOLED is off and raises the brightness only after
 the complete black frame is ready. It sends a second complete frame and repeats
 the selected brightness command after panel-on. This recovers a CO5300 that
 accepts the first commands but does not show the first pixel transfer. The
-startup path builds hidden runtime views only after this reliable splash
-transfer. It loads saved memories after the splash is visible. The rounded
-Clock path uses double-precision geometry and a dedicated point buffer.
-Firmware allocates and builds them only on the first Clock entry, so this
-unrelated work does not delay voice-runtime readiness.
-The startup path also probes and registers the touch controller after the
-reliable splash is visible. Touch is not needed for this first view. A touch
-start failure disables the optional control panel but does not block voice.
+startup path loads the small display-preference record on a low-priority task
+during the required panel sleep-out delay. It then builds only the content,
+recording, footer, passkey, and sleep views that the voice path can need.
+The voice runtime loads settings and saved memories on one bounded startup
+task while it can already accept a PWR hold. It probes touch and builds the
+optional control views only when voice work is idle. A new PWR action cancels
+this work between the touch probe and object construction. Firmware builds the
+Clock view only after an explicit BOOT-button action. It builds the image and
+plot overlays after capture stops and after it shows the transcript. The
+rounded Clock path uses double-precision geometry and a dedicated point buffer.
+Firmware allocates this buffer only on the first Clock entry. A touch start
+failure disables the optional control panel but does not block voice or sleep.
 Production also skips the optional full-PSRAM start test and uses a
 speed-optimized bootloader. Its bootloader reports only warnings and failures.
 These changes do not change system-off or steady active power policy. The
@@ -35,10 +39,10 @@ panel or CST820 touch controller. This recovers a panel that accepts commands
 but keeps its output stage black.
 An active short PWR press does not run this recovery before its action is
 known. Release can therefore draw the sleep frame without an intermediate
-panel restart. If the press becomes a voice hold, audio starts at the normal
-threshold and the runtime then requests display recovery. A held cold start
-uses the reliable splash that is already active and does not start the panel a
-second time.
+panel restart. If the press becomes a voice hold, the runtime opens the codec
+and starts audio at the normal threshold. A display-control task recovers the
+panel at the same time. A held cold start uses the reliable splash that is
+already active and does not start the panel a second time.
 
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short message that identifies the failed operation. The
@@ -60,6 +64,14 @@ the processor or another switched rail on during system-off. At start, the
 power module uses the IO-expander level to detect a held PWR key. A completed
 AXP2101 release or short-press event overrides a latched IO-expander level.
 Thus, a short battery wake does not become a voice hold.
+For a confirmed battery PWR power-on only, firmware subtracts the known 128 ms
+PMIC recognition interval from the first button timestamp. The proof requires
+a power-on reset, a pressed PWR level, a PMIC press event, no release or short
+event, no USB event, and no external power. An ambiguous start gets no credit.
+After an accepted PWR-down command, the voice task allocates and clears the
+bounded PSRAM recording buffer and prepares the capture state. It does not
+change, open, or read the codec before the 350 ms threshold. A short release
+wipes and frees the prepared buffer.
 During operation, it uses debounced AXP2101 PWR-key edge events. It
 rejects a PWR-key event when the same PMU sample contains a USB power-source
 event. A USB power-source change does not start or submit a recording.
@@ -147,10 +159,15 @@ confirmed writes for the response boundaries. For bounded PCM with a declared
 length, it forwards BLE data while the HTTPS body arrives. This path keeps the
 saved bond active and makes the phone the device network path.
 
-The button-wake path starts BLE before the hold becomes a recording. If a
-complete saved bond is present, the runtime keeps BLE active for the full
-recording. It gives the phone a two-second reconnect limit after the button is
-released. Thus, a long recording does not consume the phone reconnect limit.
+The button-wake path posts a BLE-on request and returns to button and audio
+work. One persistent BLE-control task owns all host start and stop calls. One
+persistent display-control task owns all panel recover, soft-black, and
+hard-off calls. Each task coalesces requests to the latest generation. Thus, a
+late operation cannot leave the radio or panel on after sleep. The voice task
+does not wait for either controller before microphone capture. If a complete
+saved bond is present, the runtime keeps BLE active for the full recording. It
+gives the phone a two-second reconnect limit after the button is released.
+Thus, a long recording does not consume the phone reconnect limit.
 If the secure phone proxy is still not ready, the runtime stops BLE, protects
 its restart block, and starts Wi-Fi. This releases the remaining Bluetooth
 memory for TLS. Provisioning starts again when the interaction ends and the
@@ -203,9 +220,10 @@ records a diagnostic event and performs a controlled software restart. The
 restart keeps settings and the BLE bond. This recovery prevents a live device
 from remaining awake without BLE or entering the controller with unsafe memory.
 If the Bluetooth host does not stop, the runtime keeps its state intact and
-does not start TLS work. BLE stop runs in a separate worker. The NimBLE
-completion wait has a one-second limit. A timeout does not block sleep or a
-PWR-button wake. A later stop can retry or collect the incomplete shutdown.
+does not start TLS work. The BLE controller does not overlap start and stop.
+The NimBLE completion wait has a one-second limit. A timed-out stop remains in
+the stopping state, and the controller does not start again until it collects
+that stop. A PWR hold and microphone reads continue independently.
 
 The runtime does not stop active BLE for the optional IP-context HTTPS lookup.
 A phone can be connecting before the firmware receives a GATT event, and that
@@ -232,12 +250,15 @@ restart block, and starts Wi-Fi while capture continues. The capture task does
 not run radio setup. This order prevents idle Wi-Fi allocations from splitting
 memory that a later BLE restart needs.
 
-Production reads and applies the last valid NVS settings record before it can
-process a startup button command. A held cold wake therefore has its saved
-service key, model choices, and Wi-Fi values before recording starts. The
-voice-runtime task applies this record as its first operation. This keeps the
-complete settings record off the smaller main startup stack. The 500-millisecond
-idle check applies later BLE settings changes.
+Production reads the last valid NVS settings record and saved memories on the
+startup-services task. A held cold wake can prepare and start capture while
+this task runs. Release cannot start a cloud request, use a memory, or enable
+BLE until the task is complete and the voice-runtime task has applied the saved
+service key, model choices, and Wi-Fi values. A settings-store failure wipes
+the captured audio and returns a normal runtime error. A saved-memory failure
+disables memory operations but does not block voice requests. Sleep and restart
+wait for NVS work to end. The 500-millisecond idle check applies later BLE
+settings changes.
 
 The production image uses 80 MHz QIO flash, a 240 MHz CPU, a
 speed-optimized warning-level bootloader, and no optional full-PSRAM start

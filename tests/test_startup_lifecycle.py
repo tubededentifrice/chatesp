@@ -24,38 +24,75 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertNotIn("CONFIG_SPIRAM_MEMTEST=n", development)
         self.assertNotIn("CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y", development)
 
-    def test_reliable_splash_precedes_hidden_runtime_views(self) -> None:
+    def test_reliable_splash_precedes_capture_and_deferred_views(self) -> None:
         ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
             encoding="utf-8"
         )
-        start = ui[
-            ui.index("bool start(std::uint8_t brightness_percent)") : ui.index(
+        hidden = ui[
+            ui.index("bool start_hidden()") : ui.index("bool publish_startup(")
+        ]
+        publish = ui[
+            ui.index("bool publish_startup(") : ui.index(
+                "bool prepare_capture_views()"
+            )
+        ]
+        capture = ui[
+            ui.index("bool prepare_capture_views()") : ui.index(
+                "bool prepare_visual_views()"
+            )
+        ]
+        deferred = ui[
+            ui.index("bool prepare_deferred_views(") : ui.index(
                 "bool set_clock_style"
             )
         ]
 
-        self.assertLess(
-            start.index("create_startup_screen();"),
-            start.index("bsp_display_brightness_set(brightness_percent)"),
+        self.assertIn("create_startup_screen();", hidden)
+        self.assertIn("lv_refr_now(display);", hidden)
+        self.assertNotIn("bsp_display_brightness_set", hidden)
+        self.assertEqual(
+            publish.count("bsp_display_brightness_set(brightness_percent)"), 2
         )
-        self.assertLess(
-            start.index("bsp_display_brightness_set(brightness_percent)"),
-            start.index("create_runtime_screen();"),
+        self.assertIn("lv_refr_now(display_handle);", publish)
+        self.assertIn("create_runtime_screen();", capture)
+        self.assertNotIn("bsp_display_start_touch", capture)
+        self.assertIn("bsp_display_start_touch(display_handle)", deferred)
+        self.assertIn("create_quick_controls(active_screen())", deferred)
+
+    def test_preferences_load_during_hidden_panel_start(self) -> None:
+        app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(
+            encoding="utf-8"
         )
-        self.assertLess(
-            start.index("bsp_display_brightness_set(brightness_percent)"),
-            start.index("bsp_display_start_touch(display)"),
+        main = app[app.index('extern "C" void app_main()') :]
+
+        task_start = main.index("const bool preference_task_started = xTaskCreate(")
+        hidden_start = main.index("chatesp::ui::start_hidden()")
+        join = main.index("const esp_err_t preferences_result")
+        publish = main.index("chatesp::ui::publish_startup(")
+        self.assertLess(task_start, hidden_start)
+        self.assertLess(hidden_start, join)
+        self.assertLess(join, publish)
+        self.assertIn("if (!task_started)", app)
+        self.assertIn("return load.store->initialize();", app)
+        self.assertIn("ulTaskNotifyTake(pdTRUE, portMAX_DELAY)", app)
+
+    def test_startup_uses_confirmed_power_key_credit(self) -> None:
+        app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(
+            encoding="utf-8"
         )
-        self.assertLess(
-            start.index("bsp_display_start_touch(display)"),
-            start.index("create_runtime_screen();"),
-        )
+
         self.assertIn(
-            "touch_available = bsp_display_start_touch(display) == ESP_OK",
-            start,
+            "power::startup_button_started_at_ms(monotonic_ms())", app
         )
-        self.assertNotIn(
-            "if (bsp_display_start_touch(display) != ESP_OK)", start
+        for event in (
+            "startup_panel_ready",
+            "startup_first_pixel",
+            "startup_capture_ready",
+        ):
+            self.assertIn(f"CrashEvent::{event}", app)
+        self.assertLess(
+            app.index("runtime.start("),
+            app.index("CrashEvent::startup_capture_ready"),
         )
 
     def test_touch_probe_does_not_delay_the_first_splash_frame(self) -> None:
@@ -78,15 +115,50 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertNotIn("bsp_display_indev_init", display_start)
         self.assertIn("bsp_display_indev_init", touch_start)
 
-    def test_saved_memories_load_after_the_splash_is_visible(self) -> None:
+    def test_saved_memories_do_not_block_capture_start(self) -> None:
         app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(
             encoding="utf-8"
         )
 
+        self.assertNotIn("device_memory_store.initialize()", app)
         self.assertLess(
-            app.index("chatesp::ui::start("),
-            app.index("device_memory_store.initialize()"),
+            app.index("static chatesp::DeviceMemoryStore device_memory_store"),
+            app.index("runtime.start("),
         )
+
+    def test_optional_views_are_deferred_and_idempotent(self) -> None:
+        ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        capture_create = ui[
+            ui.index("void create_runtime_screen()") : ui.index(
+                "void create_visual_screen()"
+            )
+        ]
+        visual_create = ui[
+            ui.index("void create_visual_screen()") : ui.index(
+                "}  // namespace", ui.index("void create_visual_screen()")
+            )
+        ]
+        deferred_prepare = ui[
+            ui.index("bool prepare_deferred_views(") : ui.index(
+                "bool set_clock_style"
+            )
+        ]
+
+        for optional_call in (
+            "image_overlay = lv_image_create",
+            "plot_overlay = lv_obj_create",
+            "create_quick_controls",
+            "create_clock_face",
+        ):
+            self.assertNotIn(optional_call, capture_create)
+        self.assertIn("image_overlay = lv_image_create", visual_create)
+        self.assertIn("plot_overlay = lv_obj_create", visual_create)
+        self.assertIn("create_quick_controls(active_screen())", deferred_prepare)
+        self.assertIn("create_clock_face(active_screen())", ui)
+        self.assertIn("if (deferred_views_ready)", deferred_prepare)
+        self.assertIn("deferred_views_ready = true;", deferred_prepare)
 
     def test_clock_path_layout_is_deferred_until_clock_opens(self) -> None:
         ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
@@ -102,8 +174,8 @@ class StartupLifecycleTests(unittest.TestCase):
                 "void show_clock_time("
             )
         ]
-        start = ui[
-            ui.index("bool start(") : ui.index("bool set_clock_style(")
+        startup = ui[
+            ui.index("bool start_hidden()") : ui.index("bool set_clock_style(")
         ]
         layout = ui[
             ui.index("void layout_clock_path(") : ui.index(
@@ -114,7 +186,7 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertIn("apply_clock_style(false);", create_clock)
         self.assertNotIn("layout_clock_path();", create_clock)
         self.assertIn("apply_clock_style(true);", show_mode)
-        self.assertNotIn("heap_caps_calloc(", start)
+        self.assertNotIn("heap_caps_calloc(", startup)
         self.assertIn("heap_caps_calloc(", layout)
 
     def test_development_marker_is_centered_and_build_guarded(self) -> None:
