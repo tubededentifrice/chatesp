@@ -35,7 +35,8 @@ Some files can be absent during initial setup. Read them when they exist.
 - Keep one chat thread during the 30-second follow-up window. When the window
   expires, request sleep and discard the thread. Only a short BOOT-button press
   enters Clock mode. A five-second PWR-and-BOOT hold restarts the device. Clock
-  mode has no idle timeout. A PWR-button cold start starts a new thread.
+  sleeps after five minutes without external power and stays on while external
+  power is connected. A PWR-button cold start starts a new thread.
 - Use an all-black terminal-style interface. Use motion only to communicate
   state or progress. Avoid decorative motion.
 - Instruct the chat model to answer in concise, natural speech.

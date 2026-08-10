@@ -1,5 +1,6 @@
 #include "chatesp/simulator/simulator.hpp"
 #include "chatesp/simulator/svg_renderer.hpp"
+#include "chatesp/clock_power_policy.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -97,6 +98,7 @@ void test_voice_flow_sleeps_after_chat_idle_timeout() {
 void test_mode_and_pairing_orientation() {
     Simulator simulator;
     check(simulator.ready(), "ready transition failed");
+    simulator.set_external_power(true);
     check(simulator.mode_button(29), "short electrical pulse must be valid");
     check(
         simulator.snapshot().mode == AppMode::chat,
@@ -117,13 +119,13 @@ void test_mode_and_pairing_orientation() {
         "pairing close must restore Clock orientation");
     check(
         simulator.advance(chatesp::simulator::kMaximumAdvanceMs),
-        "Clock no-timeout advance must be accepted");
+        "powered Clock advance must be accepted");
     check(
         simulator.snapshot().mode == AppMode::clock,
-        "Clock must stay active without a timeout");
+        "Clock must stay active while external power is connected");
     check(
         simulator.snapshot().screen_on,
-        "Clock must keep the display on without a timeout");
+        "Clock must keep the display on while external power is connected");
     check(simulator.mode_button(701), "long top-button press must be valid");
     check(
         simulator.snapshot().mode == AppMode::clock,
@@ -131,6 +133,42 @@ void test_mode_and_pairing_orientation() {
     check(
         !simulator.show_pairing_code(1'000'000),
         "pairing code must have six digits at most");
+}
+
+void test_clock_sleeps_after_five_minutes_without_external_power() {
+    Simulator simulator;
+    check(simulator.ready(), "ready transition failed");
+    check(simulator.mode_button(100), "Clock entry must work");
+    check(
+        simulator.advance(chatesp::power::kClockUnpoweredSleepMs - 1),
+        "battery Clock pre-boundary advance must work");
+    check(
+        simulator.snapshot().mode == AppMode::clock &&
+            simulator.snapshot().screen_on,
+        "battery Clock must stay on before five minutes");
+    check(simulator.advance(1), "battery Clock boundary must work");
+    check(
+        simulator.snapshot().interaction == InteractionState::sleep_pending &&
+            !simulator.snapshot().screen_on,
+        "battery Clock must sleep at five minutes");
+
+    Simulator powered;
+    check(powered.ready(), "powered ready transition failed");
+    powered.set_external_power(true);
+    check(powered.mode_button(100), "powered Clock entry must work");
+    check(
+        powered.advance(chatesp::simulator::kMaximumAdvanceMs),
+        "powered Clock long advance must work");
+    check(
+        powered.snapshot().screen_on,
+        "powered Clock must not sleep");
+    powered.set_external_power(false);
+    check(
+        powered.advance(chatesp::power::kClockUnpoweredSleepMs),
+        "unplugged Clock timeout must work");
+    check(
+        !powered.snapshot().screen_on,
+        "Clock must sleep five minutes after external power disconnects");
 }
 
 void test_fast_mode_button_press_exits_clock() {
@@ -523,6 +561,7 @@ int main() {
     test_short_press_sleeps_and_clears_private_text();
     test_voice_flow_sleeps_after_chat_idle_timeout();
     test_mode_and_pairing_orientation();
+    test_clock_sleeps_after_five_minutes_without_external_power();
     test_fast_mode_button_press_exits_clock();
     test_mode_button_press_wins_at_chat_idle_boundary();
     test_touch_controls_are_bounded();

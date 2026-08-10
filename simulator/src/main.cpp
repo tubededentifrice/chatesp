@@ -76,7 +76,8 @@ void print_help(std::ostream &output) {
            "controls brightness PERCENT\ncontrols volume PERCENT\n"
            "clock HH:MM:SS|unavailable\n"
            "wifi setup|off|connecting|online|failed\n"
-           "battery PERCENT|unavailable\nrender PATH\nquit\n";
+           "battery PERCENT|unavailable\n"
+           "power connected|battery\nrender PATH\nquit\n";
 }
 
 CommandResult process_command(Simulator &simulator, std::string_view line) {
@@ -337,6 +338,19 @@ CommandResult process_command(Simulator &simulator, std::string_view line) {
                 simulator.set_battery(true, percent)
             ? CommandResult::accepted
             : CommandResult::rejected;
+    }
+
+    constexpr std::string_view power_prefix = "power ";
+    if (line.substr(0, power_prefix.size()) == power_prefix) {
+        const std::string_view value = line.substr(power_prefix.size());
+        if (value == "connected") {
+            simulator.set_external_power(true);
+        } else if (value == "battery") {
+            simulator.set_external_power(false);
+        } else {
+            return CommandResult::rejected;
+        }
+        return CommandResult::accepted;
     }
 
     constexpr std::string_view render_prefix = "render ";

@@ -1655,7 +1655,7 @@ void show_ble_passkey(std::uint32_t passkey, bool visible) {
 
 void show_footer(
     RadioIndicator radio, std::uint8_t signal_band, bool battery_available,
-    std::uint8_t battery_percent, bool battery_charging) {
+    std::uint8_t battery_percent, bool external_power_connected) {
     const char *radio_text = LV_SYMBOL_WIFI " OFF";
     switch (radio) {
         case RadioIndicator::setup:
@@ -1700,18 +1700,24 @@ void show_footer(
     } else if (battery_available && battery_percent >= 10) {
         battery_icon = LV_SYMBOL_BATTERY_1;
     }
-    const bool charging = battery_available && battery_charging;
     lv_obj_set_style_text_color(
         battery_status_label,
-        lv_color_hex(charging ? 0x00ff66 : 0x777777),
+        lv_color_hex(external_power_connected ? 0x00ff66 : 0x777777),
         LV_PART_MAIN);
-    if (battery_available && battery_percent <= 100 && charging) {
+    if (battery_available && battery_percent <= 100 &&
+        external_power_connected) {
         std::snprintf(
             battery_status_buffer.data(),
             battery_status_buffer.size(),
             "%s" LV_SYMBOL_CHARGE " %u%%",
             battery_icon,
             static_cast<unsigned>(battery_percent));
+    } else if (external_power_connected) {
+        std::snprintf(
+            battery_status_buffer.data(),
+            battery_status_buffer.size(),
+            "%s" LV_SYMBOL_CHARGE " --%%",
+            battery_icon);
     } else if (battery_available && battery_percent <= 100) {
         std::snprintf(
             battery_status_buffer.data(),

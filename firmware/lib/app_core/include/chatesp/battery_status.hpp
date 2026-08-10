@@ -9,10 +9,12 @@ struct BatteryStatus {
     std::uint8_t percent = 0;
     bool charging = false;
     bool external_power = false;
+    bool available = true;
 
     constexpr bool operator==(const BatteryStatus &other) const {
         return percent == other.percent && charging == other.charging &&
-            external_power == other.external_power;
+            external_power == other.external_power &&
+            available == other.available;
     }
 
     constexpr bool operator!=(const BatteryStatus &other) const {
@@ -33,12 +35,19 @@ constexpr bool axp2101_status_has_external_power(std::uint8_t status1) {
     return (status1 & vbus_good) != 0;
 }
 
+// VBUS good is the primary cable indication. Active battery charge current is
+// also sufficient evidence when the PMU VBUS indication is late or transient.
+constexpr bool connected_to_external_power(const BatteryStatus &status) {
+    return status.external_power || status.charging;
+}
+
 constexpr std::uint8_t kLowBatteryShutdownPercent = 5;
 
 constexpr bool low_battery_requires_shutdown(
     const BatteryStatus &status,
     std::uint8_t limit_percent = kLowBatteryShutdownPercent) {
-    return limit_percent <= 100 && status.percent <= limit_percent &&
+    return status.available && limit_percent <= 100 &&
+        status.percent <= limit_percent &&
         !status.external_power && !status.charging;
 }
 

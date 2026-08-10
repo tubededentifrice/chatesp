@@ -447,26 +447,30 @@ std::optional<BatteryStatus> battery_status() {
         return std::nullopt;
     }
     std::uint8_t status = 0;
-    if (read_axp2101(kAxp2101Status1, &status) != ESP_OK ||
-        (status & kAxp2101BatteryPresent) == 0) {
-        return std::nullopt;
-    }
-    std::uint8_t percent = 0;
-    if (read_axp2101(kAxp2101BatteryPercent, &percent) != ESP_OK ||
-        percent > 100) {
+    if (read_axp2101(kAxp2101Status1, &status) != ESP_OK) {
         return std::nullopt;
     }
     std::uint8_t status2 = 0;
     const bool charging =
         read_axp2101(kAxp2101Status2, &status2) == ESP_OK &&
         axp2101_status_is_charging(status2);
-    return BatteryStatus{
-        percent, charging, axp2101_status_has_external_power(status)};
+    BatteryStatus result{
+        0, charging, axp2101_status_has_external_power(status), false};
+    if ((status & kAxp2101BatteryPresent) == 0) {
+        return result;
+    }
+    std::uint8_t percent = 0;
+    if (read_axp2101(kAxp2101BatteryPercent, &percent) == ESP_OK &&
+        percent <= 100) {
+        result.percent = percent;
+        result.available = true;
+    }
+    return result;
 }
 
 std::optional<std::uint8_t> battery_percent() {
     const auto status = battery_status();
-    return status.has_value()
+    return status.has_value() && status->available
         ? std::optional<std::uint8_t>{status->percent}
         : std::nullopt;
 }

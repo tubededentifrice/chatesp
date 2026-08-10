@@ -244,9 +244,11 @@ connected only during the active session. The footer shows the active secure
 BLE link instead of Wi-Fi off. Connected Wi-Fi uses three RSSI bands. The exact
 RSSI does not enter a log path.
 ChatESP mode uses a 30-second idle timer in development and production. Clock
-mode resets that idle gate and stays on. A short PWR-button press can still
-request sleep in either mode. Sleep stops BLE and Wi-Fi. The app reports the
-device as asleep or unavailable while it runs bounded reconnect attempts.
+uses a separate five-minute timer while external power is absent. Clock resets
+this timer and stays on while AXP2101 reports good VBUS or battery charge
+current. A short PWR-button press can still request sleep in either mode. Sleep
+stops BLE and Wi-Fi. The app reports the device as asleep or unavailable while
+it runs bounded reconnect attempts.
 Battery-powered production normally stops when the AXP2101 accepts system-off.
 USB can keep the ESP32 powered after that request. In this condition,
 production stays in the completed sleep state and repeats the system-off
@@ -359,8 +361,9 @@ in PSRAM so flash operations remain safe and display DMA memory stays free.
 
 Each accepted interaction resets the monotonic inactivity timer. After 30
 seconds of idle ChatESP time, the runtime requests sleep, clears the PSRAM
-thread, and stops Wi-Fi. Clock keeps BLE available for time context and does
-not enter automatic sleep. Only a short BOOT-button press enters Clock.
+thread, and stops Wi-Fi. Clock keeps BLE available for time context. It sleeps
+after five minutes without external power and stays on while external power is
+connected. Only a short BOOT-button press enters Clock.
 AXP2101 system-off clears all volatile state. A PWR-button wake causes a cold
 boot and creates a new thread.
 
@@ -379,8 +382,9 @@ boot and creates a new thread.
 - `ui`: terminal layout, rotated Clock face, streamed text, radio and battery
   footer, and state-specific motion. The radio footer shows the active Wi-Fi or
   secure BLE link and three Wi-Fi signal levels. The battery footer becomes
-  green and adds a charge mark while battery current flows in the charge
-  direction. Development builds show a small `DEV` marker at the footer center.
+  green and adds a charge mark while external power is connected. It uses good
+  VBUS or active battery charge current as the connection signal. Development
+  builds show a small `DEV` marker at the footer center.
   Production builds omit this marker. The UI also owns the bounded top control
   panel and touch gesture presentation.
 - `provisioning`: versioned BLE packets, authenticated encrypted transfer,

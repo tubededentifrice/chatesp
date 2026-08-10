@@ -22,6 +22,7 @@
 #include "chatesp/audio_spectrum.hpp"
 #include "chatesp/ble_settings.hpp"
 #include "chatesp/clock_network_transition.hpp"
+#include "chatesp/clock_power_policy.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/quick_controls.hpp"
 #include "chatesp/runtime_control.hpp"
@@ -1320,6 +1321,7 @@ private:
         clock_network_stop_pending_ =
             !local_time_ready && wifi_configured;
         clock_network_stop_started_at_ms_ = now_ms;
+        clock_unpowered_since_ms_ = now_ms;
         for (std::size_t index = 0;
              index < network_transition.size; ++index) {
             switch (network_transition.steps[index]) {
@@ -1411,12 +1413,12 @@ private:
             ui::show_footer(
                 radio,
                 signal_band,
-                battery_status_.has_value(),
-                battery_status_.has_value()
+                battery_status_.has_value() && battery_status_->available,
+                battery_status_.has_value() && battery_status_->available
                     ? battery_status_->percent
                     : 0,
                 battery_status_.has_value() &&
-                    battery_status_->charging);
+                    power::connected_to_external_power(*battery_status_));
         })) {
             return;
         }
@@ -1692,9 +1694,28 @@ private:
                 interaction_.note_idle_activity(now_ms);
             }
             if (app_mode == AppMode::clock) {
-                // Clock mode is a continuous display mode. It does not use the
-                // normal ChatESP idle sleep timer.
-                interaction_.note_idle_activity(now_ms);
+                // Apply a pending VBUS event before the timeout decision. A
+                // cable inserted at the five-minute boundary must keep Clock
+                // active instead of using the prior battery-only sample.
+                refresh_battery(now_ms, false);
+                const bool external_power_connected =
+                    battery_status_.has_value() &&
+                    power::connected_to_external_power(*battery_status_);
+                if (external_power_connected) {
+                    clock_unpowered_since_ms_ = now_ms;
+                    interaction_.note_idle_activity(now_ms);
+                } else if (power::clock_unpowered_sleep_due(
+                               false,
+                               now_ms - clock_unpowered_since_ms_)) {
+                    ESP_LOGI(
+                        kTag,
+                        "Clock battery timeout requested sleep");
+                    interaction_.cancel_for_sleep();
+                } else {
+                    // Suppress the 30-second ChatESP gate until the separate
+                    // five-minute Clock battery limit ends.
+                    interaction_.note_idle_activity(now_ms);
+                }
                 refresh_clock(now_ms);
                 if (clock_network_shutdown_due(
                         clock_network_stop_pending_,
@@ -2436,6 +2457,7 @@ private:
         app_mode_.store(AppMode::chat, std::memory_order_release);
         mode_button_pressed_.store(false, std::memory_order_release);
         clock_network_stop_pending_ = false;
+        clock_unpowered_since_ms_ = 0;
         mode_display_pending_ = false;
         display_wake_pending_ = false;
         footer_shown_ = false;
@@ -2785,6 +2807,7 @@ private:
     bool clock_time_available_ = false;
     bool clock_network_stop_pending_ = false;
     std::uint32_t clock_network_stop_started_at_ms_ = 0;
+    std::uint32_t clock_unpowered_since_ms_ = 0;
     bool mode_display_pending_ = false;
     ui::RadioIndicator radio_indicator_ = ui::RadioIndicator::off;
     ui::RadioIndicator shown_radio_ = ui::RadioIndicator::off;

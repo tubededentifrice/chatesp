@@ -99,6 +99,7 @@ controls volume PERCENT
 clock HH:MM:SS|unavailable
 wifi setup|off|connecting|online|failed
 battery PERCENT|unavailable
+power connected|battery
 render PATH
 quit
 ```
@@ -110,7 +111,7 @@ error recovery or an idle timeout.
 ## Scope
 
 The simulator verifies user flow, state transitions, button duration rules,
-BOOT-only Clock entry, continuous Clock mode, display orientation,
+BOOT-only Clock entry, the power-dependent Clock timeout, display orientation,
 pairing-code priority, touch gestures, control values, the bounded Clock
 network window, timeout behavior, privacy of command output, and SVG display
 artifacts. It also runs the production BLE

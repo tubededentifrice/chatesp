@@ -9,6 +9,7 @@
 #include "chatesp/battery_status.hpp"
 #include "chatesp/ble_shutdown.hpp"
 #include "chatesp/button_debouncer.hpp"
+#include "chatesp/clock_power_policy.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/power_button_filter.hpp"
 #include "chatesp/quick_controls.hpp"
@@ -429,6 +430,35 @@ void test_battery_limit_requires_low_battery_without_vbus_or_charging() {
         BatteryStatus{5, true, true}));
     TEST_ASSERT_FALSE(chatesp::power::low_battery_requires_shutdown(
         BatteryStatus{5, false, true}));
+    TEST_ASSERT_FALSE(chatesp::power::low_battery_requires_shutdown(
+        BatteryStatus{0, false, false, false}));
+}
+
+void test_external_power_uses_vbus_or_charge_current() {
+    using chatesp::power::BatteryStatus;
+    TEST_ASSERT_TRUE(chatesp::power::connected_to_external_power(
+        BatteryStatus{100, false, true}));
+    TEST_ASSERT_TRUE(chatesp::power::connected_to_external_power(
+        BatteryStatus{50, true, false}));
+    TEST_ASSERT_FALSE(chatesp::power::connected_to_external_power(
+        BatteryStatus{50, false, false}));
+    TEST_ASSERT_TRUE(chatesp::power::connected_to_external_power(
+        BatteryStatus{0, false, true, false}));
+}
+
+void test_clock_unpowered_timeout_is_five_minutes_and_handles_wrap() {
+    using chatesp::power::clock_unpowered_sleep_due;
+    TEST_ASSERT_FALSE(clock_unpowered_sleep_due(
+        true, chatesp::power::kClockUnpoweredSleepMs));
+    TEST_ASSERT_FALSE(clock_unpowered_sleep_due(
+        false, chatesp::power::kClockUnpoweredSleepMs - 1));
+    TEST_ASSERT_TRUE(clock_unpowered_sleep_due(
+        false, chatesp::power::kClockUnpoweredSleepMs));
+    constexpr std::uint32_t started = 0xfffffff0U;
+    constexpr std::uint32_t finished =
+        started + chatesp::power::kClockUnpoweredSleepMs;
+    TEST_ASSERT_TRUE(clock_unpowered_sleep_due(
+        false, finished - started));
 }
 
 void test_radio_signal_uses_three_privacy_safe_bands() {
@@ -750,6 +780,8 @@ int main(int, char **) {
     RUN_TEST(test_power_button_filter_ignores_two_key_edges_in_one_poll);
     RUN_TEST(test_axp2101_charge_state_uses_current_direction);
     RUN_TEST(test_battery_limit_requires_low_battery_without_vbus_or_charging);
+    RUN_TEST(test_external_power_uses_vbus_or_charge_current);
+    RUN_TEST(test_clock_unpowered_timeout_is_five_minutes_and_handles_wrap);
     RUN_TEST(test_radio_signal_uses_three_privacy_safe_bands);
     RUN_TEST(test_short_wake_press_returns_to_idle);
     RUN_TEST(test_held_wake_press_records_until_release);

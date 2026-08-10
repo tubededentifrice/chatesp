@@ -67,8 +67,9 @@ physical display gate passes. Use `--no-upload` only to check an image that is
 already installed.
 
 Development and production ChatESP modes use the same 30-second automatic idle
-timer. Clock mode has no automatic sleep timer. A short PWR-button press still
-requests sleep at once. Audio
+timer. Clock mode sleeps after five minutes without external power and stays on
+while external power is connected. A short PWR-button press still requests
+sleep at once. Audio
 cancellation, network cancellation, and thread reset stay equal in both modes.
 Logs must show the selected mode but must not show credentials, chat text,
 audio, or a stable device identifier.

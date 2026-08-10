@@ -1,5 +1,7 @@
 #include "chatesp/simulator/simulator.hpp"
 
+#include "chatesp/clock_power_policy.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -103,6 +105,7 @@ void Simulator::reset() {
     clock_time_ = {};
     now_ms_ = 0;
     clock_entered_at_ms_ = 0;
+    clock_unpowered_since_ms_ = 0;
     pairing_code_ = 0;
     brightness_percent_ = 65;
     volume_percent_ = 70;
@@ -110,6 +113,7 @@ void Simulator::reset() {
     screen_on_ = true;
     clock_time_available_ = false;
     battery_available_ = false;
+    external_power_connected_ = false;
     pairing_code_visible_ = false;
     clock_network_shutdown_pending_ = false;
     clear_private_text();
@@ -145,6 +149,17 @@ bool Simulator::advance(std::uint32_t milliseconds) {
 void Simulator::process_time() {
     if (mode_ == AppMode::chat && screen_on_) {
         interaction_.tick(now_ms_);
+    }
+    if (mode_ == AppMode::clock && screen_on_) {
+        if (external_power_connected_) {
+            clock_unpowered_since_ms_ = now_ms_;
+            interaction_.note_idle_activity(now_ms_);
+        } else if (power::clock_unpowered_sleep_due(
+                       false, now_ms_ - clock_unpowered_since_ms_)) {
+            interaction_.cancel_for_sleep();
+        } else {
+            interaction_.note_idle_activity(now_ms_);
+        }
     }
 
     if (interaction_.state() == InteractionState::sleep_pending) {
@@ -377,6 +392,14 @@ bool Simulator::set_battery(bool available, std::uint32_t percent) {
     return true;
 }
 
+void Simulator::set_external_power(bool connected) {
+    if (external_power_connected_ != connected) {
+        external_power_connected_ = connected;
+        clock_unpowered_since_ms_ = now_ms_;
+    }
+    process_time();
+}
+
 bool Simulator::ble_connect() {
     const bool accepted = ble_.connect();
     const BleSnapshot state = ble_.snapshot();
@@ -458,6 +481,7 @@ Snapshot Simulator::snapshot() const {
     value.screen_on = screen_on_;
     value.clock_time_available = clock_time_available_;
     value.battery_available = battery_available_;
+    value.external_power_connected = external_power_connected_;
     value.pairing_code_visible = pairing_code_visible_;
     value.controls_open = controls_.open();
     value.clock_network_shutdown_pending =
@@ -495,6 +519,8 @@ std::string Simulator::status_json(bool ok) const {
            << (value.battery_available ? "true" : "false")
            << ",\"battery\":"
            << static_cast<unsigned>(value.battery_percent)
+           << ",\"external_power_connected\":"
+           << (value.external_power_connected ? "true" : "false")
            << ",\"pairing_visible\":"
            << (value.pairing_code_visible ? "true" : "false")
            << ",\"controls_open\":"
@@ -557,6 +583,7 @@ void Simulator::clear_private_text() {
 void Simulator::enter_clock() {
     mode_ = AppMode::clock;
     clock_entered_at_ms_ = now_ms_;
+    clock_unpowered_since_ms_ = now_ms_;
     clock_network_shutdown_pending_ = !clock_time_available_;
     if (clock_time_available_) {
         wifi_ = WifiState::off;

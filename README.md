@@ -36,7 +36,8 @@ ChatESP.*
 - **Short follow-up chat:** Continue the same conversation for 30 seconds. The
   device then clears the thread and sleeps.
 - **Travel Clock:** Use the large AMOLED as a landscape 24-hour clock with a
-  one-pixel seconds line.
+  one-pixel seconds line. Clock sleeps after five minutes on battery and stays
+  on while external power is connected.
 - **Touch controls:** Pull down the top handle to change brightness or volume.
   You can also change both values by voice.
 - **Clear radio and power state:** The footer shows the active Wi-Fi or secure
@@ -211,8 +212,9 @@ uv run --locked python tools/pio.py run -e watch_dev -t upload
 ```
 
 Development mode keeps USB flashing available and uses the same 30-second
-ChatESP idle timer as production. Clock stays on. For a black screen, or after
-a display or power change, run the device doctor with the explicit device port:
+ChatESP idle timer as production. Clock sleeps after five minutes on battery
+and stays on while external power is connected. For a black screen, or after a
+display or power change, run the device doctor with the explicit device port:
 
 ```sh
 uv run --locked python tools/device_doctor.py --port LOCAL_PORT

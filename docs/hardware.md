@@ -147,13 +147,15 @@ radios. Phone distance cannot reconnect a device while it is in system-off or
 development soft sleep. A bottom PWR press wakes it, and the saved bond lets the
 app reconnect without a new pairing code.
 
-Clock keeps the AMOLED and BLE on. If local time is not ready, it keeps the
-startup Wi-Fi connection for at most 15 seconds. It stops Wi-Fi when local time
-becomes available or the limit expires. Clock does not request automatic
-sleep. The bottom PWR button keeps its short-press sleep action. A bottom-button
-press first restores the portrait ChatESP layout, and a held press then starts
-recording at the normal threshold. ChatESP requests sleep after 30 seconds
-without input. Only a short top BOOT-button press enters Clock.
+Clock keeps the AMOLED and BLE on while external power is connected. If local
+time is not ready, it keeps the startup Wi-Fi connection for at most 15
+seconds. It stops Wi-Fi when local time becomes available or the limit expires.
+Without external power, Clock requests sleep after five minutes. The timeout
+starts again when external power is removed. The bottom PWR button keeps its
+short-press sleep action. A bottom-button press first restores the portrait
+ChatESP layout, and a held press then starts recording at the normal threshold.
+ChatESP requests sleep after 30 seconds without input. Only a short top
+BOOT-button press enters Clock.
 
 The model can request device status, set display brightness from 5 through 100
 percent, set playback volume from 0 through 100 percent, request power-off, and
@@ -246,16 +248,18 @@ The connected V2 board must pass these checks for this control change:
   while the ChatESP device stays powered;
 - Clock keeps Wi-Fi on for no more than 15 seconds when local time is not ready,
   and stops it as soon as local time becomes available;
-- Clock stays on for more than each ChatESP idle timeout, while a short bottom
-  PWR press still requests sleep;
+- Clock stays on while USB is connected. After USB is removed, it requests
+  sleep at five minutes. On battery, it stays on before this limit and requests
+  sleep at the limit. A short bottom PWR press still requests sleep;
 - a bottom PWR press in Clock shows ChatESP without visible delay, and a held
   press starts `LISTENING` at the normal threshold;
 - 30 seconds after the final voice interaction, ChatESP sleeps, Wi-Fi stops,
   and the prior thread is not available;
 - the footer shows the active Wi-Fi or secure BLE icon. Connected Wi-Fi shows
   one through three signal bars. The footer shows a valid battery percentage
-  or a clear unavailable value. While the battery charges, its icon and
-  percentage are green and a charge mark is visible;
+  or a clear unavailable value. While external power is connected, its icon
+  and percentage are green and a charge mark is visible. This state stays
+  correct when the battery is full and charge current stops;
 - after a PWR wake with USB still connected, the footer updates the charging
   state after button priority ends and before the next idle sleep;
 - development firmware shows a small `DEV` marker at the footer center, and
@@ -426,8 +430,8 @@ visible splash or ready view.
 - Measure production system-off current with USB disconnected. Record the
   battery voltage, stable current after rail discharge, and wake result. Do not
   use the AXP2101 40-microamp data-sheet value as a board measurement.
-- Measure ChatESP idle, continuous Clock, recording, Wi-Fi, playback, and
-  deep-sleep current.
+- Measure ChatESP idle, externally powered Clock, battery-powered Clock,
+  recording, Wi-Fi, playback, and deep-sleep current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,
   stuck state, or unexpected NVS write.
 - Run 100 memory writes across sleep and wake without a lost old record,

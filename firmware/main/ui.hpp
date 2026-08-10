@@ -69,7 +69,7 @@ void show_model_progress(std::string_view detail);
 void show_ble_passkey(std::uint32_t passkey, bool visible);
 void show_footer(
     RadioIndicator radio, std::uint8_t signal_band, bool battery_available,
-    std::uint8_t battery_percent, bool battery_charging);
+    std::uint8_t battery_percent, bool external_power_connected);
 [[nodiscard]] bool show_fullscreen_image(image::Rgb565Frame &&frame);
 [[nodiscard]] bool show_fullscreen_plot(const agent::PlotData &plot);
 void hide_fullscreen_image();

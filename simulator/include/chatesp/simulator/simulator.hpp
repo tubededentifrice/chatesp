@@ -44,6 +44,7 @@ struct Snapshot {
     bool screen_on = true;
     bool clock_time_available = false;
     bool battery_available = false;
+    bool external_power_connected = false;
     bool pairing_code_visible = false;
     bool controls_open = false;
     // Compatibility field. Clock entry is never automatic.
@@ -81,6 +82,7 @@ public:
     bool set_clock_time(bool available, ClockTime time = {});
     void set_wifi(WifiState state);
     bool set_battery(bool available, std::uint32_t percent = 0);
+    void set_external_power(bool connected);
     bool ble_connect();
     bool ble_confirm_pairing(std::uint32_t passkey);
     bool ble_reject_pairing();
@@ -121,6 +123,7 @@ private:
     std::array<char, kMaximumPrivateTextBytes + 1> answer_{};
     std::uint32_t now_ms_ = 0;
     std::uint32_t clock_entered_at_ms_ = 0;
+    std::uint32_t clock_unpowered_since_ms_ = 0;
     std::uint32_t pairing_code_ = 0;
     std::size_t transcript_size_ = 0;
     std::size_t answer_size_ = 0;
@@ -130,6 +133,7 @@ private:
     bool screen_on_ = true;
     bool clock_time_available_ = false;
     bool battery_available_ = false;
+    bool external_power_connected_ = false;
     bool pairing_code_visible_ = false;
     bool clock_network_shutdown_pending_ = false;
 };
