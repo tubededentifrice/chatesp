@@ -261,6 +261,7 @@ private struct GlobalSettingsView: View {
                 configuration: globalConfigurationBinding,
                 secrets: globalSecretsBinding)
             LocationSettings(configuration: globalConfigurationBinding)
+            ChatDisplaySettings(configuration: globalConfigurationBinding)
             ModelSettings(
                 configuration: globalConfigurationBinding,
                 modelCatalog: modelCatalog)
@@ -306,6 +307,7 @@ private struct DeviceSettingsView: View {
             deviceSection
             DeviceConnectionOverrides(deviceID: deviceID)
             DeviceLocationOverride(deviceID: deviceID)
+            DeviceChatDisplayOverride(deviceID: deviceID)
             DeviceModelOverrides(
                 deviceID: deviceID,
                 modelCatalog: modelCatalog)
@@ -523,6 +525,24 @@ private struct LocationSettings: View {
     }
 }
 
+private struct ChatDisplaySettings: View {
+    @Binding var configuration: ChatESPConfiguration
+
+    var body: some View {
+        Section {
+            Stepper(
+                "Font size: \(configuration.chatFontScalePercent)%",
+                value: $configuration.chatFontScalePercent,
+                in: 100...200,
+                step: 5)
+        } header: {
+            Text("Chat Display")
+        } footer: {
+            Text("This changes text and icon sizes in ChatESP mode. It does not change Clock mode.")
+        }
+    }
+}
+
 private struct ModelSettings: View {
     @Binding var configuration: ChatESPConfiguration
     @ObservedObject var modelCatalog: ModelCatalog
@@ -666,6 +686,50 @@ private struct DeviceLocationOverride: View {
                         $0.approximateLocation = value
                     }
                 }))
+    }
+}
+
+private struct DeviceChatDisplayOverride: View {
+    @EnvironmentObject private var store: ConfigurationStore
+    let deviceID: UUID
+
+    var body: some View {
+        let globalValue = store.preferences.global.chatFontScalePercent
+        let override = Binding<Int?>(
+            get: {
+                store.preferences.device(id: deviceID)?.overrides
+                    .chatFontScalePercent
+            },
+            set: { value in
+                store.updateDeviceOverrides(id: deviceID) {
+                    $0.chatFontScalePercent = value
+                }
+            })
+        return Section {
+            Toggle(
+                "Override chat font size",
+                isOn: Binding(
+                    get: { override.wrappedValue != nil },
+                    set: { enabled in
+                        override.wrappedValue = enabled ? globalValue : nil
+                    }))
+            if override.wrappedValue != nil {
+                Stepper(
+                    "Font size: \(override.wrappedValue ?? globalValue)%",
+                    value: Binding(
+                        get: { override.wrappedValue ?? globalValue },
+                        set: { override.wrappedValue = $0 }),
+                    in: 100...200,
+                    step: 5)
+            } else {
+                LabeledContent("Global value", value: "\(globalValue)%")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Chat Display Override")
+        } footer: {
+            Text("The setting changes ChatESP text and icons only. Clock keeps its fixed size.")
+        }
     }
 }
 

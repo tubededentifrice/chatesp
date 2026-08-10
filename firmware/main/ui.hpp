@@ -54,6 +54,7 @@ void sync_quick_controls(
 // Clock style is a bounded value type so a later preferences record can supply
 // it without a change to the drawing code.
 [[nodiscard]] bool set_clock_style(const ClockStyle &style);
+[[nodiscard]] bool set_chat_font_scale(std::uint16_t percent);
 void show_app_mode(AppMode mode, InteractionState chat_state);
 void show_clock_time(bool available, ClockTime time = {});
 

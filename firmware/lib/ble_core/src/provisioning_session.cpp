@@ -30,6 +30,7 @@ AcknowledgementStatus validation_status(ValidationError error) {
         case ValidationError::invalid_model:
         case ValidationError::invalid_approximate_location:
         case ValidationError::invalid_voice:
+        case ValidationError::invalid_chat_font_scale:
         case ValidationError::invalid_utf8:
             return AcknowledgementStatus::invalid_field;
         case ValidationError::stale_revision:

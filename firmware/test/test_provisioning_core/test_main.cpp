@@ -31,6 +31,7 @@ Fields valid_fields() {
         {9, "Dubai, United Arab Emirates"},
         {10, "Zephyr"},
         {11, "Puck"},
+        {12, "150"},
     };
 }
 
@@ -176,12 +177,14 @@ void test_valid_golden_packet_is_accepted() {
         "Zephyr", std::string(result.settings.english_speech_voice).c_str());
     TEST_ASSERT_EQUAL_STRING(
         "Puck", std::string(result.settings.french_speech_voice).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "150", std::string(result.settings.chat_font_scale_percent).c_str());
 
     constexpr std::array<std::uint8_t, 32> expected{{
-        0x19, 0x60, 0xe1, 0x2e, 0x83, 0xee, 0x87, 0xf7,
-        0x59, 0x5f, 0x35, 0x3d, 0x6c, 0x65, 0xb1, 0x86,
-        0xc1, 0x34, 0x8b, 0x0e, 0x13, 0x6d, 0x76, 0xdd,
-        0x1d, 0xd0, 0x2e, 0x92, 0x86, 0xb0, 0xb0, 0xe6,
+        0xfd, 0x5f, 0x9b, 0xb0, 0xe6, 0x52, 0x20, 0x8e,
+        0x0b, 0x36, 0x14, 0xe6, 0x38, 0xc2, 0x6b, 0xf7,
+        0xdb, 0x28, 0x4b, 0xa8, 0xc0, 0x11, 0xea, 0xfd,
+        0x06, 0x5a, 0xad, 0x96, 0x8a, 0x85, 0x0d, 0x50,
     }};
     TEST_ASSERT_EQUAL_UINT8_ARRAY(
         expected.data(), result.fingerprint.data(), expected.size());
@@ -235,7 +238,7 @@ void test_packet_envelope_is_strict() {
     changed[0] = 'X';
     assert_error(changed, provisioning::ValidationError::bad_magic);
     changed = packet;
-    changed[4] = 4;
+    changed[4] = 5;
     assert_error(changed, provisioning::ValidationError::unsupported_version);
     changed = packet;
     changed[5] = 2;
@@ -284,6 +287,7 @@ void test_version_one_packet_and_transfer_remain_supported() {
     fields.pop_back();
     fields.pop_back();
     fields.pop_back();
+    fields.pop_back();
     const auto packet = make_packet(fields, 7, 1);
     const auto validation = validate(packet);
     TEST_ASSERT_EQUAL_INT(
@@ -317,6 +321,7 @@ void test_version_two_packet_remains_supported() {
     auto fields = valid_fields();
     fields.pop_back();
     fields.pop_back();
+    fields.pop_back();
     const auto packet = make_packet(fields, 7, 2);
     const auto validation = validate(packet);
     TEST_ASSERT_EQUAL_INT(
@@ -326,6 +331,20 @@ void test_version_two_packet_remains_supported() {
         "Dubai, United Arab Emirates",
         std::string(validation.settings.approximate_location).c_str());
     TEST_ASSERT_TRUE(validation.settings.english_speech_voice.empty());
+    TEST_ASSERT_TRUE(validation.settings.chat_font_scale_percent.empty());
+}
+
+void test_version_three_packet_remains_supported() {
+    auto fields = valid_fields();
+    fields.pop_back();
+    const auto packet = make_packet(fields, 7, 3);
+    const auto validation = validate(packet);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::ValidationError::none),
+        static_cast<int>(validation.error));
+    TEST_ASSERT_EQUAL_STRING(
+        "Puck", std::string(validation.settings.french_speech_voice).c_str());
+    TEST_ASSERT_TRUE(validation.settings.chat_font_scale_percent.empty());
 }
 
 void test_transfer_rejects_insecure_and_malformed_frames() {
@@ -343,7 +362,7 @@ void test_transfer_rejects_insecure_and_malformed_frames() {
         static_cast<int>(provisioning::TransferError::bad_magic),
         static_cast<int>(assembler.handle_control(changed.data(), changed.size(), kSecureLink)));
     changed = control;
-    changed[4] = 4;
+    changed[4] = 5;
     TEST_ASSERT_EQUAL_INT(
         static_cast<int>(provisioning::TransferError::unsupported_version),
         static_cast<int>(assembler.handle_control(changed.data(), changed.size(), kSecureLink)));
@@ -522,6 +541,18 @@ void test_each_field_has_a_fixed_limit_and_format() {
     replace_field(fields, 10, "voice with space");
     assert_error(
         make_packet(fields), provisioning::ValidationError::invalid_voice);
+
+    fields = valid_fields();
+    replace_field(fields, 12, "99");
+    assert_error(
+        make_packet(fields),
+        provisioning::ValidationError::invalid_chat_font_scale);
+
+    fields = valid_fields();
+    replace_field(fields, 12, "201");
+    assert_error(
+        make_packet(fields),
+        provisioning::ValidationError::invalid_chat_font_scale);
 }
 
 void test_revision_rules_reject_stale_and_conflicting_packets() {
@@ -564,6 +595,7 @@ int main(int, char **) {
     RUN_TEST(test_transfer_assembles_ordered_bounded_frames);
     RUN_TEST(test_version_one_packet_and_transfer_remain_supported);
     RUN_TEST(test_version_two_packet_remains_supported);
+    RUN_TEST(test_version_three_packet_remains_supported);
     RUN_TEST(test_transfer_rejects_insecure_and_malformed_frames);
     RUN_TEST(test_acknowledgement_has_exact_binary_layout);
     RUN_TEST(test_device_context_has_bounded_authenticated_layout);

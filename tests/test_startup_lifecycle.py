@@ -124,7 +124,7 @@ class StartupLifecycleTests(unittest.TestCase):
         runtime_start = ui.index("void create_runtime_screen(")
         marker_start = ui.index(
             "#if CHATESP_DEVELOPMENT_MODE\n"
-            "    lv_obj_t *development_status_label",
+            "    development_status_label",
             runtime_start,
         )
         marker_end = ui.index("    show_footer(", marker_start)

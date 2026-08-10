@@ -5,6 +5,10 @@ global settings. Each device inherits the global values and can override any
 setting. The app saves each edit at once. It does not require a complete valid
 form before it saves another field.
 
+The Chat Display section sets chat text and icon size from 100% through 200%
+in five-percent steps. Each device can override the global value. This setting
+does not change the Clock face.
+
 The app saves API keys and Wi-Fi details in Keychain. It saves all non-secret
 global values, device records, overrides, active-device selection, and
 per-device provisioning revisions in one versioned preferences record. The

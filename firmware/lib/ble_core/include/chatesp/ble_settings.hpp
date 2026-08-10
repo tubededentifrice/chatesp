@@ -60,6 +60,7 @@ struct SettingsRecord {
     BoundedSetting<96> approximate_location;
     BoundedSetting<96> english_speech_voice;
     BoundedSetting<96> french_speech_voice;
+    std::uint16_t chat_font_scale_percent = kDefaultChatFontScalePercent;
 
     [[nodiscard]] bool assign(const ValidationResult &validation);
     void clear();

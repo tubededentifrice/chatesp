@@ -43,6 +43,8 @@ ChatESP.*
   keeps its momentum and resists the top and bottom edges. Pull down the top
   handle to change brightness or volume. You can also change both values by
   voice.
+- **Readable chat:** Use the iOS app to set ChatESP text and icon size from
+  100% through 200%. Clock keeps its fixed layout and type size.
 - **Clear radio and power state:** The footer shows the active Wi-Fi or secure
   BLE link, three Wi-Fi signal levels, battery charge state, and battery
   percentage. Development firmware also shows `DEV` at the footer center.

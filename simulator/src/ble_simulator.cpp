@@ -38,6 +38,7 @@ ByteBuffer settings_packet(std::uint32_t revision) {
             "",
             "af_heart",
             "ff_siwis",
+            "100",
         }};
     ByteBuffer payload;
     for (std::size_t index = 0; index < kValues.size(); ++index) {

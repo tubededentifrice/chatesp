@@ -326,6 +326,13 @@ Unicode General Punctuation glyphs. Common model punctuation, such as smart
 quotation marks, long dashes, bullets, and ellipses, appears as text instead of
 a missing-glyph box.
 
+The provisioned chat font size is 100% through 200%. The UI scales ChatESP
+text, status glyphs, battery and radio glyphs, progress state, controls, plots,
+and pairing text. It reduces the answer wrap width and moves the content and
+footer bounds so enlarged text stays scrollable. The setting does not scale
+the dedicated Clock face or its fixed 180-pixel time font. Version 1 through 3
+settings records use 100%.
+
 The answer area becomes vertically scrollable only when its wrapped text is
 taller than the visible area. It uses direct finger tracking, vertical axis
 lock, release momentum, and elastic resistance at the first and last line. A
@@ -444,6 +451,9 @@ clock. The firmware receives one
 validated, atomic settings packet. It reports a runtime error when a cloud
 action needs missing Wi-Fi or OpenRouter credentials. An empty Brave key
 disables search.
+The chat font size is a non-secret global setting from 100% through 200%. Each
+device can override it. The app changes it in five-percent steps and includes
+the effective percent in the atomic settings packet.
 The settings, device-context, and memory responses use one serialized ATT
 indication path. A memory response cannot discard a settings acknowledgement.
 The runtime keeps the current radio state until the phone confirms a successful

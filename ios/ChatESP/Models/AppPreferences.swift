@@ -8,6 +8,7 @@ struct ChatESPConfiguration: Codable, Equatable {
     var englishSpeechVoice = "af_heart"
     var frenchSpeechVoice = "ff_siwis"
     var approximateLocation = ""
+    var chatFontScalePercent = 100
 
     private enum CodingKeys: String, CodingKey {
         case chatEndpoint
@@ -17,6 +18,7 @@ struct ChatESPConfiguration: Codable, Equatable {
         case englishSpeechVoice
         case frenchSpeechVoice
         case approximateLocation
+        case chatFontScalePercent
     }
 
     init(
@@ -26,7 +28,8 @@ struct ChatESPConfiguration: Codable, Equatable {
         speechModel: String = "hexgrad/kokoro-82m",
         englishSpeechVoice: String = "af_heart",
         frenchSpeechVoice: String = "ff_siwis",
-        approximateLocation: String = ""
+        approximateLocation: String = "",
+        chatFontScalePercent: Int = 100
     ) {
         self.chatEndpoint = chatEndpoint
         self.chatModel = chatModel
@@ -35,6 +38,7 @@ struct ChatESPConfiguration: Codable, Equatable {
         self.englishSpeechVoice = englishSpeechVoice
         self.frenchSpeechVoice = frenchSpeechVoice
         self.approximateLocation = approximateLocation
+        self.chatFontScalePercent = chatFontScalePercent
     }
 
     init(from decoder: Decoder) throws {
@@ -54,6 +58,8 @@ struct ChatESPConfiguration: Codable, Equatable {
             String.self, forKey: .frenchSpeechVoice) ?? defaults.frenchSpeechVoice
         approximateLocation = try values.decodeIfPresent(
             String.self, forKey: .approximateLocation) ?? defaults.approximateLocation
+        chatFontScalePercent = try values.decodeIfPresent(
+            Int.self, forKey: .chatFontScalePercent) ?? defaults.chatFontScalePercent
     }
 }
 
@@ -65,11 +71,13 @@ struct ChatESPConfigurationOverrides: Codable, Equatable {
     var englishSpeechVoice: String?
     var frenchSpeechVoice: String?
     var approximateLocation: String?
+    var chatFontScalePercent: Int?
 
     var isEmpty: Bool {
         chatEndpoint == nil && chatModel == nil && transcriptionModel == nil &&
             speechModel == nil && englishSpeechVoice == nil &&
-            frenchSpeechVoice == nil && approximateLocation == nil
+            frenchSpeechVoice == nil && approximateLocation == nil &&
+            chatFontScalePercent == nil
     }
 
     func applying(to global: ChatESPConfiguration) -> ChatESPConfiguration {
@@ -80,7 +88,9 @@ struct ChatESPConfigurationOverrides: Codable, Equatable {
             speechModel: speechModel ?? global.speechModel,
             englishSpeechVoice: englishSpeechVoice ?? global.englishSpeechVoice,
             frenchSpeechVoice: frenchSpeechVoice ?? global.frenchSpeechVoice,
-            approximateLocation: approximateLocation ?? global.approximateLocation)
+            approximateLocation: approximateLocation ?? global.approximateLocation,
+            chatFontScalePercent:
+                chatFontScalePercent ?? global.chatFontScalePercent)
     }
 }
 

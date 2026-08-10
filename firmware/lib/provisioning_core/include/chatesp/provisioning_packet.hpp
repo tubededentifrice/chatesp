@@ -8,7 +8,7 @@
 namespace chatesp {
 namespace provisioning {
 
-constexpr std::uint8_t kProtocolVersion = 3;
+constexpr std::uint8_t kProtocolVersion = 4;
 constexpr std::uint8_t kMinimumProtocolVersion = 1;
 constexpr std::uint8_t kSettingsPacketType = 1;
 constexpr std::size_t kHeaderSize = 48;
@@ -22,7 +22,10 @@ constexpr std::size_t kMaximumDeviceContextSize =
 constexpr std::size_t kDeviceContextAcknowledgementSize = 48;
 constexpr std::uint8_t kVersion1FieldCount = 8;
 constexpr std::uint8_t kVersion2FieldCount = 9;
-constexpr std::uint8_t kRequiredFieldCount = 11;
+constexpr std::uint8_t kVersion3FieldCount = 11;
+constexpr std::uint8_t kRequiredFieldCount = 12;
+constexpr std::uint16_t kDefaultChatFontScalePercent = 100;
+constexpr std::uint16_t kMaximumChatFontScalePercent = 200;
 
 enum class ValidationError : std::uint8_t {
     none,
@@ -48,6 +51,7 @@ enum class ValidationError : std::uint8_t {
     invalid_model,
     invalid_approximate_location,
     invalid_voice,
+    invalid_chat_font_scale,
     stale_revision,
     revision_conflict,
 };
@@ -83,6 +87,7 @@ struct SettingsView {
     std::string_view approximate_location;
     std::string_view english_speech_voice;
     std::string_view french_speech_voice;
+    std::string_view chat_font_scale_percent;
 };
 
 [[nodiscard]] constexpr bool supported_protocol_version(std::uint8_t version) {

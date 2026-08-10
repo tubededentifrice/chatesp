@@ -15,6 +15,8 @@ constexpr std::array<std::uint8_t, 15> kFingerprintDomainV2{
     'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '2'};
 constexpr std::array<std::uint8_t, 15> kFingerprintDomainV3{
     'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '3'};
+constexpr std::array<std::uint8_t, 15> kFingerprintDomainV4{
+    'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'N', 'T', '-', 'V', '4'};
 constexpr std::array<std::uint8_t, 15> kDeviceContextFingerprintDomain{
     'C', 'E', 'S', 'P', '-', 'C', 'O', 'N', 'T', 'E', 'X', 'T', '-', 'V', '1'};
 
@@ -283,6 +285,20 @@ bool valid_voice(std::string_view value) {
     });
 }
 
+bool valid_chat_font_scale(std::string_view value) {
+    if (value.size() != 3 ||
+        !std::all_of(value.begin(), value.end(), [](char item) {
+            return item >= '0' && item <= '9';
+        })) {
+        return false;
+    }
+    const std::uint16_t percent = static_cast<std::uint16_t>(
+        (value[0] - '0') * 100 + (value[1] - '0') * 10 +
+        (value[2] - '0'));
+    return percent >= kDefaultChatFontScalePercent &&
+        percent <= kMaximumChatFontScalePercent;
+}
+
 ValidationError validate_field(std::uint8_t id, std::string_view value) {
     switch (id) {
         case 1:
@@ -315,6 +331,10 @@ ValidationError validate_field(std::uint8_t id, std::string_view value) {
         case 11:
             return valid_voice(value) ? ValidationError::none
                                       : ValidationError::invalid_voice;
+        case 12:
+            return valid_chat_font_scale(value)
+                ? ValidationError::none
+                : ValidationError::invalid_chat_font_scale;
         default:
             return ValidationError::bad_field_order;
     }
@@ -333,6 +353,7 @@ void assign_field(SettingsView &settings, std::uint8_t id, std::string_view valu
         case 9: settings.approximate_location = value; break;
         case 10: settings.english_speech_voice = value; break;
         case 11: settings.french_speech_voice = value; break;
+        case 12: settings.chat_font_scale_percent = value; break;
         default: break;
     }
 }
@@ -371,11 +392,13 @@ std::array<std::uint8_t, kFingerprintSize> compute_content_fingerprint(
     const std::uint8_t *payload,
     std::size_t payload_size) {
     Sha256 sha;
-    const auto *domain = &kFingerprintDomainV3;
+    const auto *domain = &kFingerprintDomainV4;
     if (version == 1) {
         domain = &kFingerprintDomainV1;
     } else if (version == 2) {
         domain = &kFingerprintDomainV2;
+    } else if (version == 3) {
+        domain = &kFingerprintDomainV3;
     }
     sha.update(domain->data(), domain->size());
     const std::array<std::uint8_t, 3> metadata{version, packet_type, field_count};
@@ -416,7 +439,9 @@ ValidationResult validate_settings_packet(
     }
     const std::uint8_t required_field_count = packet[4] == 1
         ? kVersion1FieldCount
-        : packet[4] == 2 ? kVersion2FieldCount : kRequiredFieldCount;
+        : packet[4] == 2
+            ? kVersion2FieldCount
+            : packet[4] == 3 ? kVersion3FieldCount : kRequiredFieldCount;
     if (packet[6] != 0 || packet[7] != required_field_count) {
         result.error = packet[6] != 0 ? ValidationError::bad_flags : ValidationError::bad_field_count;
         return result;

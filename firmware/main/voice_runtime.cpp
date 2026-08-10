@@ -260,6 +260,8 @@ struct RuntimeSettings {
         english_speech_voice.clear();
         french_speech_voice.clear();
         approximate_location.clear();
+        chat_font_scale_percent =
+            provisioning::kDefaultChatFontScalePercent;
         configured = false;
     }
 
@@ -281,6 +283,8 @@ struct RuntimeSettings {
             english_speech_voice.assign("af_heart") &&
             french_speech_voice.assign("ff_siwis") &&
             approximate_location.assign("");
+        chat_font_scale_percent =
+            provisioning::kDefaultChatFontScalePercent;
         if (!configured) {
             clear();
         }
@@ -306,6 +310,7 @@ struct RuntimeSettings {
                 record.french_speech_voice.view()) &&
             next.approximate_location.assign(
                 record.approximate_location.view());
+        next.chat_font_scale_percent = record.chat_font_scale_percent;
         if (!next.configured) {
             next.clear();
             return false;
@@ -373,6 +378,8 @@ struct RuntimeSettings {
     provisioning::BoundedSetting<96> english_speech_voice;
     provisioning::BoundedSetting<96> french_speech_voice;
     provisioning::BoundedSetting<96> approximate_location;
+    std::uint16_t chat_font_scale_percent =
+        provisioning::kDefaultChatFontScalePercent;
     bool configured = false;
 };
 
@@ -2458,7 +2465,14 @@ private:
         image_frame_.reset();
         pending_plot_.clear();
         hide_visual();
-        show_state(interaction_.state());
+        with_display([this]() {
+            (void)ui::set_chat_font_scale(
+                settings_.chat_font_scale_percent);
+            ui::sync_quick_controls(
+                device_control_.brightness_percent(),
+                device_control_.volume_percent());
+            ui::show_state(interaction_.state());
+        });
         crash_diagnostics::mark(runtime::CrashEvent::settings_apply_complete);
     }
 

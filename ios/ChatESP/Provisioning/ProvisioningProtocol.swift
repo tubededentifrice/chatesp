@@ -2,11 +2,11 @@ import CryptoKit
 import Foundation
 import Security
 
-enum ProvisioningProtocolV3 {
-    static let version: UInt8 = 3
+enum ProvisioningProtocolV4 {
+    static let version: UInt8 = 4
     static let maximumPacketSize = 1_024
     static let packetHeaderSize = 48
-    static let fieldCount: UInt8 = 11
+    static let fieldCount: UInt8 = 12
     static let dataBytesPerFrame = 180
     static let activeVersionAcknowledgementFlag: UInt16 = 0x0001
 
@@ -103,6 +103,7 @@ struct ProvisioningSettings: Equatable {
     let approximateLocation: String
     let englishSpeechVoice: String
     let frenchSpeechVoice: String
+    let chatFontScalePercent: Int
 
     init(
         configuration: ChatESPConfiguration,
@@ -126,6 +127,7 @@ struct ProvisioningSettings: Equatable {
             ? defaults.englishSpeechVoice : configuration.englishSpeechVoice
         frenchSpeechVoice = configuration.frenchSpeechVoice.isEmpty
             ? defaults.frenchSpeechVoice : configuration.frenchSpeechVoice
+        chatFontScalePercent = configuration.chatFontScalePercent
     }
 
     var validationIssues: [ConfigurationValidationIssue] {
@@ -141,6 +143,7 @@ struct ProvisioningSettings: Equatable {
             (9, approximateLocation, .approximateLocation),
             (10, englishSpeechVoice, .voice),
             (11, frenchSpeechVoice, .voice),
+            (12, String(chatFontScalePercent), .chatFontScale),
         ]
         return candidates.compactMap { id, text, rule in
             (try? field(id: id, text: text, rule: rule)) == nil
@@ -151,10 +154,10 @@ struct ProvisioningSettings: Equatable {
 
     func contentFingerprint() throws -> Data {
         let payload = try encodedPayload()
-        var input = Data("CESP-CONTENT-V3".utf8)
-        input.append(ProvisioningProtocolV3.version)
+        var input = Data("CESP-CONTENT-V4".utf8)
+        input.append(ProvisioningProtocolV4.version)
         input.append(1)
-        input.append(ProvisioningProtocolV3.fieldCount)
+        input.append(ProvisioningProtocolV4.fieldCount)
         input.append(payload)
         return Data(SHA256.hash(data: input))
     }
@@ -165,16 +168,16 @@ struct ProvisioningSettings: Equatable {
         }
         let payload = try encodedPayload()
         let fingerprint = try contentFingerprint()
-        let totalLength = ProvisioningProtocolV3.packetHeaderSize + payload.count
-        guard totalLength <= ProvisioningProtocolV3.maximumPacketSize else {
+        let totalLength = ProvisioningProtocolV4.packetHeaderSize + payload.count
+        guard totalLength <= ProvisioningProtocolV4.maximumPacketSize else {
             throw ProvisioningError.packetTooLarge
         }
 
         var data = Data("CESP".utf8)
-        data.append(ProvisioningProtocolV3.version)
+        data.append(ProvisioningProtocolV4.version)
         data.append(1)
         data.append(0)
-        data.append(ProvisioningProtocolV3.fieldCount)
+        data.append(ProvisioningProtocolV4.fieldCount)
         data.appendBigEndian(revision)
         data.appendBigEndian(UInt16(payload.count))
         data.appendBigEndian(UInt16(totalLength))
@@ -196,6 +199,10 @@ struct ProvisioningSettings: Equatable {
             try field(id: 9, text: approximateLocation, rule: .approximateLocation),
             try field(id: 10, text: englishSpeechVoice, rule: .voice),
             try field(id: 11, text: frenchSpeechVoice, rule: .voice),
+            try field(
+                id: 12,
+                text: String(chatFontScalePercent),
+                rule: .chatFontScale),
         ]
         return values.reduce(into: Data()) { $0.append($1) }
     }
@@ -209,6 +216,7 @@ struct ProvisioningSettings: Equatable {
         case model
         case voice
         case approximateLocation
+        case chatFontScale
     }
 
     private func field(id: UInt8, text: String, rule: FieldRule) throws -> Data {
@@ -246,6 +254,9 @@ struct ProvisioningSettings: Equatable {
             isValid = bytes.count <= 96 && text.unicodeScalars.allSatisfy {
                 !CharacterSet.controlCharacters.contains($0)
             }
+        case .chatFontScale:
+            isValid = (100...200).contains(Int(text) ?? 0) &&
+                text == String(Int(text) ?? 0)
         }
         guard isValid else {
             throw ProvisioningError.invalidField(id)
@@ -298,6 +309,7 @@ struct ConfigurationValidationIssue: Identifiable, Equatable {
         case 9: return "Use a city-level location of 96 bytes or less."
         case 10: return "Select an English speech voice."
         case 11: return "Select a French speech voice."
+        case 12: return "Set the chat font size from 100% through 200%."
         default: return "This setting is not valid."
         }
     }
@@ -335,20 +347,20 @@ struct ProvisioningAcknowledgement: Equatable {
 
     var isRevisionRecovery: Bool {
         (status == .staleRevision || status == .revisionConflict) &&
-            flags == ProvisioningProtocolV3.activeVersionAcknowledgementFlag &&
+            flags == ProvisioningProtocolV4.activeVersionAcknowledgementFlag &&
             revision > 0
     }
 
     init(data: Data) throws {
         guard data.count == 44,
               data.prefix(4) == Data("CESA".utf8),
-              data[4] == ProvisioningProtocolV3.version,
+              data[4] == ProvisioningProtocolV4.version,
               let status = ProvisioningStatus(rawValue: data[5]) else {
             throw ProvisioningError.malformedAcknowledgement
         }
         flags = data.readBigEndianUInt16(at: 6)
         let hasActiveVersion =
-            flags == ProvisioningProtocolV3.activeVersionAcknowledgementFlag
+            flags == ProvisioningProtocolV4.activeVersionAcknowledgementFlag
         guard flags == 0 || hasActiveVersion,
               !hasActiveVersion || (
                 status == .staleRevision || status == .revisionConflict
@@ -384,12 +396,12 @@ struct ProvisioningTransfer {
 
     var beginFrame: Data {
         var data = Data("CESB".utf8)
-        data.append(ProvisioningProtocolV3.version)
+        data.append(ProvisioningProtocolV4.version)
         data.append(1)
         data.appendBigEndian(UInt16(0))
         data.appendBigEndian(transferID)
         data.appendBigEndian(UInt16(packet.data.count))
-        data.appendBigEndian(UInt16(ProvisioningProtocolV3.dataBytesPerFrame))
+        data.appendBigEndian(UInt16(ProvisioningProtocolV4.dataBytesPerFrame))
         return data
     }
 
@@ -397,12 +409,12 @@ struct ProvisioningTransfer {
         stride(
             from: 0,
             to: packet.data.count,
-            by: ProvisioningProtocolV3.dataBytesPerFrame
+            by: ProvisioningProtocolV4.dataBytesPerFrame
         ).map { offset in
-            let end = min(offset + ProvisioningProtocolV3.dataBytesPerFrame, packet.data.count)
+            let end = min(offset + ProvisioningProtocolV4.dataBytesPerFrame, packet.data.count)
             let bytes = packet.data.subdata(in: offset..<end)
             var frame = Data("CESD".utf8)
-            frame.append(ProvisioningProtocolV3.version)
+            frame.append(ProvisioningProtocolV4.version)
             frame.append(0)
             frame.appendBigEndian(transferID)
             frame.appendBigEndian(UInt16(offset))

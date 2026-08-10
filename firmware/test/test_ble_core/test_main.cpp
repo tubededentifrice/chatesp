@@ -32,6 +32,7 @@ Fields valid_fields() {
         {9, "Dubai, United Arab Emirates"},
         {10, "Zephyr"},
         {11, "Puck"},
+        {12, "150"},
     };
 }
 
@@ -236,7 +237,7 @@ void test_revision_errors_return_flagged_active_version() {
 void test_transfer_errors_acknowledge_and_clear_the_transfer() {
     provisioning::ProvisioningSession session;
     auto control = make_control(make_packet().size());
-    control[4] = 4;
+    control[4] = 5;
 
     const auto result = session.handle_control(
         control.data(), control.size(), kSecureLink);
@@ -289,6 +290,7 @@ void test_settings_record_owns_and_clears_values() {
         "Zephyr", std::string(settings.english_speech_voice.view()).c_str());
     TEST_ASSERT_EQUAL_STRING(
         "Puck", std::string(settings.french_speech_voice.view()).c_str());
+    TEST_ASSERT_EQUAL_UINT16(150, settings.chat_font_scale_percent);
     settings.clear();
     TEST_ASSERT_EQUAL_UINT32(0, settings.revision);
     TEST_ASSERT_TRUE(settings.openrouter_key.view().empty());
@@ -296,10 +298,14 @@ void test_settings_record_owns_and_clears_values() {
     TEST_ASSERT_TRUE(settings.approximate_location.view().empty());
     TEST_ASSERT_TRUE(settings.english_speech_voice.view().empty());
     TEST_ASSERT_TRUE(settings.french_speech_voice.view().empty());
+    TEST_ASSERT_EQUAL_UINT16(
+        provisioning::kDefaultChatFontScalePercent,
+        settings.chat_font_scale_percent);
 }
 
 void test_old_settings_records_receive_safe_voice_defaults() {
     auto fields = valid_fields();
+    fields.pop_back();
     fields.pop_back();
     fields.pop_back();
     auto packet = make_packet(7, fields, 2);
@@ -311,6 +317,9 @@ void test_old_settings_records_receive_safe_voice_defaults() {
         "af_heart", std::string(settings.english_speech_voice.view()).c_str());
     TEST_ASSERT_EQUAL_STRING(
         "ff_siwis", std::string(settings.french_speech_voice.view()).c_str());
+    TEST_ASSERT_EQUAL_UINT16(
+        provisioning::kDefaultChatFontScalePercent,
+        settings.chat_font_scale_percent);
 }
 
 void test_valid_transfer_can_follow_a_rejected_packet() {

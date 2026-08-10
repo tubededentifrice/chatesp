@@ -3,6 +3,19 @@
 namespace chatesp {
 namespace provisioning {
 
+namespace {
+
+std::uint16_t chat_font_scale(std::string_view value) {
+    if (value.empty()) {
+        return kDefaultChatFontScalePercent;
+    }
+    return static_cast<std::uint16_t>(
+        (value[0] - '0') * 100 + (value[1] - '0') * 10 +
+        (value[2] - '0'));
+}
+
+}  // namespace
+
 bool SettingsRecord::assign(const ValidationResult &validation) {
     if (validation.error != ValidationError::none ||
         validation.decision == ApplyDecision::reject) {
@@ -37,6 +50,8 @@ bool SettingsRecord::assign(const ValidationResult &validation) {
         next.clear();
         return false;
     }
+    next.chat_font_scale_percent = chat_font_scale(
+        validation.settings.chat_font_scale_percent);
 
     clear();
     *this = next;
@@ -61,6 +76,7 @@ void SettingsRecord::clear() {
     approximate_location.clear();
     english_speech_voice.clear();
     french_speech_voice.clear();
+    chat_font_scale_percent = kDefaultChatFontScalePercent;
 }
 
 }  // namespace provisioning

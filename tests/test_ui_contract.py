@@ -152,6 +152,33 @@ class UiContractTests(unittest.TestCase):
         )
         self.assertNotIn('"%s" LV_SYMBOL_CHARGE', footer_source)
 
+    def test_chat_font_scale_reflows_text_and_does_not_scale_clock(self) -> None:
+        ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        apply_start = ui.index("void apply_chat_font_scale()")
+        apply_end = ui.index("const char *hint(", apply_start)
+        apply_source = ui[apply_start:apply_end]
+
+        self.assertIn("set_object_scale(status_label, percent)", apply_source)
+        self.assertIn("set_object_scale(content_label, percent)", apply_source)
+        self.assertIn("set_object_scale(wifi_status_label, percent)", apply_source)
+        self.assertIn("set_object_scale(battery_icon_label", apply_source)
+        self.assertIn("spinner_size = scaled_value(18, percent)", apply_source)
+        self.assertIn("336 * 100 / static_cast<std::int32_t>(percent)", apply_source)
+        self.assertIn("update_content_label_extent();", apply_source)
+        self.assertIn(
+            "scaled_value(natural_height, chat_font_scale_percent)", ui
+        )
+        self.assertIn("footer_y - content_y - 10", apply_source)
+        self.assertNotIn("clock_time_label", apply_source)
+
+        setter_start = ui.index("bool set_chat_font_scale(")
+        setter_end = ui.index("void show_app_mode(", setter_start)
+        setter_source = ui[setter_start:setter_end]
+        self.assertIn("kMinimumChatFontScalePercent", setter_source)
+        self.assertIn("kMaximumChatFontScalePercent", setter_source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,9 @@ constexpr std::size_t kMaximumAnswerBytes = 640;
 constexpr std::size_t kMaximumErrorBytes = 120;
 constexpr std::size_t kMaximumProgressBytes = 80;
 constexpr std::size_t kMaximumWifiStatusBytes = 20;
+constexpr std::uint16_t kMinimumChatFontScalePercent = 100;
+constexpr std::uint16_t kMaximumChatFontScalePercent = 200;
+constexpr std::int32_t kLvglScaleBase = 256;
 constexpr std::int32_t kControlsPanelHeight = 280;
 constexpr std::int32_t kControlsPanelShownY = -12;
 constexpr std::int32_t kControlsHandleWidth = 44;
@@ -85,6 +88,7 @@ struct ControlSlider {
     lv_obj_t *indicator = nullptr;
     lv_obj_t *knob = nullptr;
     lv_obj_t *value_label = nullptr;
+    lv_obj_t *title_label = nullptr;
     std::array<char, 5> value_buffer{};
     std::uint8_t minimum_percent = 0;
     std::uint8_t value_percent = 0;
@@ -109,6 +113,7 @@ lv_obj_t *wifi_status_label = nullptr;
 lv_obj_t *battery_icon_label = nullptr;
 lv_obj_t *battery_charge_label = nullptr;
 lv_obj_t *battery_status_label = nullptr;
+lv_obj_t *development_status_label = nullptr;
 lv_obj_t *image_overlay = nullptr;
 lv_obj_t *plot_overlay = nullptr;
 lv_obj_t *plot_chart = nullptr;
@@ -118,6 +123,8 @@ lv_obj_t *plot_y_range_label = nullptr;
 lv_chart_series_t *plot_series = nullptr;
 lv_obj_t *passkey_overlay = nullptr;
 lv_obj_t *passkey_label = nullptr;
+lv_obj_t *passkey_title_label = nullptr;
+lv_obj_t *passkey_hint_label = nullptr;
 lv_obj_t *sleep_overlay = nullptr;
 bool touch_available = false;
 lv_obj_t *controls_edge_target = nullptr;
@@ -131,6 +138,7 @@ ControlSlider *active_control = nullptr;
 lv_display_t *display_handle = nullptr;
 lv_obj_t *clock_root = nullptr;
 lv_obj_t *clock_time_label = nullptr;
+lv_obj_t *controls_title_label = nullptr;
 lv_timer_t *clock_path_timer = nullptr;
 
 lv_point_precise_t *clock_path_points = nullptr;
@@ -168,6 +176,7 @@ std::uint16_t shown_clock_millisecond = 0;
 std::uint32_t shown_clock_tick = 0;
 bool shown_clock_available = false;
 bool clock_face_initialized = false;
+std::uint16_t chat_font_scale_percent = kMinimumChatFontScalePercent;
 std::array<char, agent::Limits::max_plot_title_bytes + 1> plot_title_buffer{};
 std::array<char, 48> plot_x_range_buffer{};
 std::array<char, 48> plot_y_range_buffer{};
@@ -199,6 +208,155 @@ lv_obj_t *active_screen() {
 #else
     return lv_scr_act();
 #endif
+}
+
+std::int32_t scaled_value(std::int32_t value, std::uint16_t percent) {
+    return value * static_cast<std::int32_t>(percent) / 100;
+}
+
+void set_object_scale(
+    lv_obj_t *object,
+    std::uint16_t percent,
+    std::int32_t pivot_x = 0,
+    std::int32_t pivot_y = 0,
+    std::int32_t base_scale = kLvglScaleBase) {
+    if (object == nullptr) {
+        return;
+    }
+    lv_obj_set_style_transform_pivot_x(object, pivot_x, LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_y(object, pivot_y, LV_PART_MAIN);
+    lv_obj_set_style_transform_scale(
+        object,
+        base_scale * static_cast<std::int32_t>(percent) / 100,
+        LV_PART_MAIN);
+}
+
+void update_content_label_extent() {
+    if (content_label == nullptr) {
+        return;
+    }
+    lv_obj_set_height(content_label, LV_SIZE_CONTENT);
+    lv_obj_update_layout(content_label);
+    const std::int32_t natural_height = lv_obj_get_height(content_label);
+    lv_obj_set_height(
+        content_label,
+        scaled_value(natural_height, chat_font_scale_percent));
+}
+
+void apply_chat_font_scale() {
+    const std::uint16_t percent = chat_font_scale_percent;
+    lv_obj_update_layout(active_screen());
+    set_object_scale(status_label, percent);
+    set_object_scale(hint_label, percent);
+    set_object_scale(content_label, percent);
+    set_object_scale(wifi_status_label, percent);
+    set_object_scale(battery_status_label, percent, 48, 0);
+    set_object_scale(battery_icon_label, percent, 24, 0);
+    set_object_scale(battery_charge_label, percent, 12, 7, 160);
+    set_object_scale(development_status_label, percent, 32, 0);
+    set_object_scale(plot_title_label, percent, 164, 0);
+    set_object_scale(plot_x_range_label, percent, 160, 0);
+    set_object_scale(plot_y_range_label, percent, 160, 0);
+    set_object_scale(
+        passkey_title_label, percent,
+        passkey_title_label == nullptr
+            ? 0
+            : lv_obj_get_width(passkey_title_label) / 2,
+        passkey_title_label == nullptr
+            ? 0
+            : lv_obj_get_height(passkey_title_label) / 2);
+    set_object_scale(
+        passkey_label, percent,
+        passkey_label == nullptr ? 0 : lv_obj_get_width(passkey_label) / 2,
+        passkey_label == nullptr ? 0 : lv_obj_get_height(passkey_label) / 2);
+    set_object_scale(
+        passkey_hint_label, percent,
+        passkey_hint_label == nullptr
+            ? 0
+            : lv_obj_get_width(passkey_hint_label) / 2,
+        passkey_hint_label == nullptr
+            ? 0
+            : lv_obj_get_height(passkey_hint_label) / 2);
+    set_object_scale(controls_title_label, percent);
+    set_object_scale(brightness_control.title_label, percent);
+    set_object_scale(brightness_control.value_label, percent, 72, 0);
+    set_object_scale(volume_control.title_label, percent);
+    set_object_scale(volume_control.value_label, percent, 72, 0);
+
+    const std::int32_t hint_y = 44 + scaled_value(40, percent);
+    const std::int32_t content_y = hint_y + scaled_value(42, percent);
+    const std::int32_t footer_y =
+        image::kDisplayHeight - 20 - scaled_value(17, percent);
+    if (status_label != nullptr) {
+        lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, 16, 44);
+    }
+    if (hint_label != nullptr) {
+        lv_obj_align(hint_label, LV_ALIGN_TOP_LEFT, 16, hint_y);
+    }
+    if (content_viewport != nullptr) {
+        lv_obj_set_size(
+            content_viewport,
+            336,
+            std::max<std::int32_t>(96, footer_y - content_y - 10));
+        lv_obj_align(content_viewport, LV_ALIGN_TOP_LEFT, 16, content_y);
+    }
+    if (content_label != nullptr) {
+        lv_obj_set_width(
+            content_label,
+            336 * 100 / static_cast<std::int32_t>(percent));
+        update_content_label_extent();
+    }
+    if (activity_spinner != nullptr) {
+        const std::int32_t spinner_size = scaled_value(18, percent);
+        const std::int32_t arc_width =
+            std::max<std::int32_t>(2, scaled_value(2, percent));
+        lv_obj_set_size(activity_spinner, spinner_size, spinner_size);
+        lv_obj_align(activity_spinner, LV_ALIGN_TOP_RIGHT, -17, hint_y - 3);
+        lv_obj_set_style_arc_width(activity_spinner, arc_width, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(
+            activity_spinner, arc_width, LV_PART_INDICATOR);
+    }
+    if (wifi_status_label != nullptr) {
+        lv_obj_align(wifi_status_label, LV_ALIGN_TOP_LEFT, 30, footer_y);
+    }
+    if (battery_status_label != nullptr) {
+        lv_obj_align(battery_status_label, LV_ALIGN_TOP_RIGHT, -30, footer_y);
+    }
+    const std::int32_t battery_icon_right =
+        -30 - scaled_value(48, percent) - 4;
+    if (battery_icon_label != nullptr) {
+        lv_obj_align(
+            battery_icon_label, LV_ALIGN_TOP_RIGHT,
+            battery_icon_right, footer_y);
+    }
+    if (battery_charge_label != nullptr) {
+        lv_obj_align(
+            battery_charge_label, LV_ALIGN_TOP_RIGHT,
+            battery_icon_right, footer_y);
+    }
+    if (development_status_label != nullptr) {
+        lv_obj_align(
+            development_status_label, LV_ALIGN_TOP_MID, 0, footer_y);
+    }
+    if (passkey_title_label != nullptr) {
+        lv_obj_align(
+            passkey_title_label, LV_ALIGN_CENTER, 0,
+            -scaled_value(44, percent));
+    }
+    if (passkey_label != nullptr) {
+        lv_obj_align(passkey_label, LV_ALIGN_CENTER, 0, 0);
+    }
+    if (passkey_hint_label != nullptr) {
+        lv_obj_align(
+            passkey_hint_label, LV_ALIGN_CENTER, 0,
+            scaled_value(44, percent));
+    }
+    if (controls_title_label != nullptr) {
+        lv_obj_align(
+            controls_title_label, LV_ALIGN_TOP_LEFT, 24,
+            42 - static_cast<std::int32_t>(percent - 100) / 10);
+    }
+    lv_obj_invalidate(active_screen());
 }
 
 const char *hint(InteractionState state) {
@@ -325,6 +483,7 @@ void set_content(
     copy_bounded(
         text, content_buffer.data(), content_buffer.size(), maximum_bytes);
     set_static_text(content_label, content_buffer.data());
+    update_content_label_extent();
     shown_content_kind = kind;
     if (reset_scroll && content_viewport != nullptr) {
         lv_obj_scroll_to_y(content_viewport, 0, LV_ANIM_OFF);
@@ -1031,11 +1190,13 @@ void create_control_slider(
     control.kind = kind;
     control.minimum_percent = minimum_percent;
 
-    lv_obj_t *title = create_controls_text(
+    control.title_label = create_controls_text(
         parent, title_text, lv_color_hex(0x8e8e93),
         &lv_font_montserrat_14);
-    lv_obj_set_style_text_letter_space(title, 1, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, title_y);
+    lv_obj_set_style_text_letter_space(
+        control.title_label, 1, LV_PART_MAIN);
+    lv_obj_align(
+        control.title_label, LV_ALIGN_TOP_LEFT, 24, title_y);
 
     control.value_label = create_controls_text(
         parent, "", lv_color_hex(0xffffff), &lv_font_montserrat_14);
@@ -1152,11 +1313,12 @@ void create_quick_controls(lv_obj_t *screen) {
     lv_obj_align(
         panel_handle, LV_ALIGN_TOP_MID, 0, kControlsPanelHandleY);
 
-    lv_obj_t *title = create_controls_text(
+    controls_title_label = create_controls_text(
         controls_panel, "CONTROLS", lv_color_hex(0xffffff),
         &lv_font_montserrat_18);
-    lv_obj_set_style_text_letter_space(title, 2, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, 42);
+    lv_obj_set_style_text_letter_space(
+        controls_title_label, 2, LV_PART_MAIN);
+    lv_obj_align(controls_title_label, LV_ALIGN_TOP_LEFT, 24, 42);
 
     create_control_slider(
         controls_panel,
@@ -1346,7 +1508,7 @@ void create_runtime_screen() {
     set_hidden(battery_charge_label, true);
 
 #if CHATESP_DEVELOPMENT_MODE
-    lv_obj_t *development_status_label = lv_label_create(screen);
+    development_status_label = lv_label_create(screen);
     lv_obj_set_width(development_status_label, 64);
     set_static_text(development_status_label, "DEV");
     lv_obj_set_style_text_color(
@@ -1446,14 +1608,15 @@ void create_runtime_screen() {
     lv_obj_clear_flag(passkey_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_center(passkey_overlay);
 
-    lv_obj_t *passkey_title = lv_label_create(passkey_overlay);
-    set_static_text(passkey_title, "PAIRING CODE");
+    passkey_title_label = lv_label_create(passkey_overlay);
+    set_static_text(passkey_title_label, "PAIRING CODE");
     lv_obj_set_style_text_color(
-        passkey_title, lv_color_hex(0x777777), LV_PART_MAIN);
+        passkey_title_label, lv_color_hex(0x777777), LV_PART_MAIN);
     lv_obj_set_style_text_font(
-        passkey_title, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(passkey_title, 1, LV_PART_MAIN);
-    lv_obj_align(passkey_title, LV_ALIGN_CENTER, 0, -42);
+        passkey_title_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(
+        passkey_title_label, 1, LV_PART_MAIN);
+    lv_obj_align(passkey_title_label, LV_ALIGN_CENTER, 0, -42);
 
     passkey_label = lv_label_create(passkey_overlay);
     set_static_text(passkey_label, passkey_buffer.data());
@@ -1464,13 +1627,13 @@ void create_runtime_screen() {
     lv_obj_set_style_text_letter_space(passkey_label, 5, LV_PART_MAIN);
     lv_obj_align(passkey_label, LV_ALIGN_CENTER, 0, 0);
 
-    lv_obj_t *passkey_hint = lv_label_create(passkey_overlay);
-    set_static_text(passkey_hint, "ENTER THIS CODE ON IPHONE");
+    passkey_hint_label = lv_label_create(passkey_overlay);
+    set_static_text(passkey_hint_label, "ENTER THIS CODE ON IPHONE");
     lv_obj_set_style_text_color(
-        passkey_hint, lv_color_hex(0x777777), LV_PART_MAIN);
+        passkey_hint_label, lv_color_hex(0x777777), LV_PART_MAIN);
     lv_obj_set_style_text_font(
-        passkey_hint, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(passkey_hint, LV_ALIGN_CENTER, 0, 44);
+        passkey_hint_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(passkey_hint_label, LV_ALIGN_CENTER, 0, 44);
     hide_passkey();
     create_clock_face(screen);
 
@@ -1484,6 +1647,7 @@ void create_runtime_screen() {
     lv_obj_clear_flag(sleep_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_center(sleep_overlay);
     lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
+    apply_chat_font_scale();
 }
 
 }  // namespace
@@ -1548,6 +1712,19 @@ bool set_clock_style(const ClockStyle &style) {
     if (clock_root != nullptr) {
         lv_obj_invalidate(clock_root);
     }
+    return true;
+}
+
+bool set_chat_font_scale(std::uint16_t percent) {
+    if (percent < kMinimumChatFontScalePercent ||
+        percent > kMaximumChatFontScalePercent) {
+        return false;
+    }
+    if (chat_font_scale_percent == percent) {
+        return true;
+    }
+    chat_font_scale_percent = percent;
+    apply_chat_font_scale();
     return true;
 }
 
