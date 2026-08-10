@@ -127,7 +127,7 @@
   <g transform="translate(848 32)" filter="url(#screen-shadow)">
     <rect width="368" height="448" rx="48" fill="#000" stroke="#303033" stroke-width="2"/>
     <rect x="0" y="-12" width="368" height="280" rx="28" fill="#101012" stroke="#38383d"/>
-    <rect x="162" y="10" width="44" height="4" rx="2" fill="#6b6b70"/>
+    <rect x="162" y="252" width="44" height="4" rx="2" fill="#6b6b70"/>
     <text font-family="Montserrat" font-weight="500" fill="#fff" font-size="18" letter-spacing="2" x="24" y="50">CONTROLS</text>
 
     <text font-family="Montserrat" font-weight="500" fill="#8e8e93" font-size="14" letter-spacing="1" x="24" y="85">BRIGHTNESS</text>

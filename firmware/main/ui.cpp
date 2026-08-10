@@ -32,7 +32,15 @@ constexpr std::size_t kMaximumProgressBytes = 80;
 constexpr std::size_t kMaximumWifiStatusBytes = 20;
 constexpr std::int32_t kControlsPanelHeight = 280;
 constexpr std::int32_t kControlsPanelShownY = -12;
-constexpr std::int32_t kControlsPanelHiddenY = -288;
+constexpr std::int32_t kControlsHandleWidth = 44;
+constexpr std::int32_t kControlsHandleHeight = 4;
+constexpr std::int32_t kControlsEdgeHandleY = 8;
+constexpr std::int32_t kControlsPanelHandleBottomInset = 12;
+constexpr std::int32_t kControlsPanelHandleY =
+    kControlsPanelHeight - kControlsPanelHandleBottomInset -
+    kControlsHandleHeight;
+constexpr std::int32_t kControlsPanelHiddenY =
+    kControlsEdgeHandleY - kControlsPanelHandleY;
 constexpr std::uint32_t kControlsOpenAnimationMs = 180;
 constexpr std::uint32_t kControlsCloseAnimationMs = 140;
 constexpr std::int32_t kControlSliderLayoutWidth = 320;
@@ -55,6 +63,9 @@ static_assert(
 static_assert(
     kControlSliderTouchOffsetY + kControlSliderTouchHeight / 2 ==
     kControlSliderLayoutHeight / 2);
+static_assert(
+    kControlsPanelHiddenY + kControlsPanelHandleY ==
+    kControlsEdgeHandleY);
 
 enum class ControlKind : std::uint8_t {
     brightness,
@@ -1132,12 +1143,14 @@ void create_quick_controls(lv_obj_t *screen) {
     lv_obj_t *panel_handle = lv_obj_create(controls_panel);
     lv_obj_remove_style_all(panel_handle);
     lv_obj_clear_flag(panel_handle, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(panel_handle, 44, 4);
+    lv_obj_set_size(
+        panel_handle, kControlsHandleWidth, kControlsHandleHeight);
     lv_obj_set_style_bg_color(
         panel_handle, lv_color_hex(0x6b6b70), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(panel_handle, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(panel_handle, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_align(panel_handle, LV_ALIGN_TOP_MID, 0, 22);
+    lv_obj_align(
+        panel_handle, LV_ALIGN_TOP_MID, 0, kControlsPanelHandleY);
 
     lv_obj_t *title = create_controls_text(
         controls_panel, "CONTROLS", lv_color_hex(0xffffff),
@@ -1179,14 +1192,16 @@ void create_quick_controls(lv_obj_t *screen) {
     controls_edge_handle = lv_obj_create(controls_edge_target);
     lv_obj_remove_style_all(controls_edge_handle);
     lv_obj_clear_flag(controls_edge_handle, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(controls_edge_handle, 44, 4);
+    lv_obj_set_size(
+        controls_edge_handle, kControlsHandleWidth, kControlsHandleHeight);
     lv_obj_set_style_bg_color(
         controls_edge_handle, lv_color_hex(0x6b6b70), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(
         controls_edge_handle, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(
         controls_edge_handle, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_align(controls_edge_handle, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_align(
+        controls_edge_handle, LV_ALIGN_TOP_MID, 0, kControlsEdgeHandleY);
 
     sync_controls_values(
         runtime::DevicePreferences::default_brightness_percent,

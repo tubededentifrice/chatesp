@@ -8,6 +8,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UiContractTests(unittest.TestCase):
+    def test_control_handle_follows_the_panel_bottom(self) -> None:
+        ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        constants_end = ui.index("enum class ControlKind")
+        constants = ui[:constants_end]
+        create_start = ui.index("void create_quick_controls(")
+        create_end = ui.index("void create_startup_screen()", create_start)
+        create_source = ui[create_start:create_end]
+
+        self.assertIn(
+            "kControlsPanelHandleY =\n"
+            "    kControlsPanelHeight - kControlsPanelHandleBottomInset -\n"
+            "    kControlsHandleHeight",
+            constants,
+        )
+        self.assertIn(
+            "kControlsPanelHiddenY =\n"
+            "    kControlsEdgeHandleY - kControlsPanelHandleY",
+            constants,
+        )
+        self.assertIn(
+            "panel_handle, LV_ALIGN_TOP_MID, 0, kControlsPanelHandleY",
+            create_source,
+        )
+        self.assertIn(
+            "controls_edge_handle, LV_ALIGN_TOP_MID, 0, "
+            "kControlsEdgeHandleY",
+            create_source,
+        )
+
     def test_long_text_uses_direct_momentum_scrolling(self) -> None:
         ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
             encoding="utf-8"

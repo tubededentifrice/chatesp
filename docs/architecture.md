@@ -104,9 +104,11 @@ The top edge of the touch display has a small control handle. A tap or a
 48-pixel downward swipe from the top 32 pixels opens a black control panel.
 The top touch target keeps control until release, so the swipe can continue
 beyond the small handle without losing the gesture.
+The handle stays at the bottom of the panel. It starts at the same position as
+the closed handle and follows the panel during a pull and its settle animation.
 The panel position follows the finger during a pull. A short settle animation
-closes it when the release position is below half deployment and opens it at or
-above half deployment. The display and touch refresh period is 16 ms. The
+closes it when the release position is below half deployment and opens it at
+or above half deployment. The display and touch refresh period is 16 ms. The
 internal draw buffer holds 32 rows.
 The panel has one shared five-percent control component for brightness and
 volume. Each existing 320-by-44-pixel layout box has a centered transparent
