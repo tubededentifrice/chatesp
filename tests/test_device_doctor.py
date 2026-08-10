@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from tools.device_doctor import (
     collect_boot_log,
     diagnose_boot,
     main,
+    otadata_region,
     redact_doctor_text,
+    upload_development_firmware,
 )
 
 
@@ -104,6 +108,48 @@ I chatesp: Voice runtime ready
             "The boot log contains a fatal record: Display start failed.",
             result.issues,
         )
+
+    def test_upload_selects_the_development_ota_slot(self) -> None:
+        root = Path("/repo")
+        port = "LOCAL_PORT"
+        with patch(
+            "tools.device_doctor.otadata_region", return_value=(0xF000, 0x2000)
+        ), patch(
+            "tools.device_doctor.run_redacted_command", side_effect=(0, 0)
+        ) as run:
+            self.assertEqual(0, upload_development_firmware(root, port))
+
+        upload_command = run.call_args_list[0].args[0]
+        selection_command = run.call_args_list[1].args[0]
+        self.assertEqual("watch_dev", upload_command[upload_command.index("-e") + 1])
+        self.assertEqual(
+            "tool-esptoolpy",
+            selection_command[selection_command.index("--package") + 1],
+        )
+        self.assertEqual(
+            ["erase_region", "0xf000", "0x2000"], selection_command[-3:]
+        )
+        self.assertIn(port, selection_command)
+
+    def test_otadata_region_is_narrow_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            firmware = root / "firmware"
+            firmware.mkdir()
+            partitions = firmware / "partitions.csv"
+            partitions.write_text(
+                "# Name, Type, SubType, Offset, Size\n"
+                "nvs,data,nvs,0x9000,0x6000\n"
+                "otadata,data,ota,0xf000,0x2000\n",
+                encoding="utf-8",
+            )
+            self.assertEqual((0xF000, 0x2000), otadata_region(root))
+
+            partitions.write_text(
+                "otadata,data,ota,0xf000,0x3000\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "not safe"):
+                otadata_region(root)
 
 
 if __name__ == "__main__":

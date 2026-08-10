@@ -265,8 +265,11 @@ production. The runtime does not read the battery after sleep starts.
 Each turn first uses a short required-tool route. The route is direct answer,
 web search, image search, restricted Python, memory management, or one
 registered device tool.
-Image search still needs a separate model-selected result ID. A relative
-brightness or volume request gets device status before it changes the value.
+Image search asks the model for a separate selected result ID. If the answer
+phase starts after one successful search without this second call, the runtime
+uses the first current result. This bounded fallback uses only the provider
+result and does not accept a URL from the model. A relative brightness or
+volume request gets device status before it changes the value.
 Web search and restricted Python each stop tool routing after one call. Thus,
 the model cannot repeat a completed call and reach the tool-step limit.
 After routing and tool work, the final model request has no tools.
@@ -527,7 +530,9 @@ values contain no credentials or user text.
 
 To show an image, the model must first search and then select one result by its
 current ID. The firmware does not accept a URL from the model. A new search
-removes the old result set, and a selection can be used only once.
+removes the old result set, and a selection can be used only once. If the model
+starts its final answer after only a successful search, the firmware selects
+the first current result once so the requested image still appears.
 
 After model selection, the device can get the selected Brave thumbnail from
 the trusted `imgs.search.brave.com` proxy. It does not send a credential with

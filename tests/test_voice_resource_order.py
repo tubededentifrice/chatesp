@@ -55,6 +55,10 @@ class VoiceResourceOrderTests(unittest.TestCase):
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
+        prepare_visual = runtime[
+            runtime.index("void prepare_visual()") :
+            runtime.index("void run_image_worker()")
+        ]
         answer_case = runtime[
             runtime.index("case agent::AgentProgressEvent::answer_start:") :
             runtime.index("case agent::AgentProgressEvent::answer_ready:")
@@ -66,6 +70,39 @@ class VoiceResourceOrderTests(unittest.TestCase):
 
         self.assertNotIn("start_image_worker();", answer_case)
         self.assertIn("start_image_worker();", speech_case)
+        self.assertIn(
+            "image_tool_.take_selected_or_first(selected_image_result_)",
+            prepare_visual,
+        )
+
+    def test_micropython_plot_reaches_the_display_after_speech(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        prepare_visual = runtime[
+            runtime.index("void prepare_visual()") :
+            runtime.index("void run_image_worker()")
+        ]
+        publish_visual = runtime[
+            runtime.index("void publish_selected_visual(") :
+            runtime.index("void finish_model_power_off()")
+        ]
+        interaction = runtime[
+            runtime.index("error = request_cancellation.normalize(wait_for_speech_worker())") :
+            runtime.index("void log_turn_timing()")
+        ]
+
+        self.assertLess(
+            prepare_visual.index("python_tool_.take_plot(pending_plot_)"),
+            prepare_visual.index(
+                "image_tool_.take_selected_or_first(selected_image_result_)"
+            ),
+        )
+        self.assertIn("ui::show_fullscreen_plot(plot)", publish_visual)
+        self.assertLess(
+            interaction.index("wait_for_speech_worker()"),
+            interaction.index("publish_selected_visual(image_frame_, pending_plot_);"),
+        )
 
     def test_speech_ui_does_not_show_numeric_error_codes(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(

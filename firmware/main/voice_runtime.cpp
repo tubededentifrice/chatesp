@@ -835,7 +835,7 @@ private:
         if (python_tool_.take_plot(pending_plot_)) {
             return;
         }
-        (void)image_tool_.take_selected(selected_image_result_);
+        (void)image_tool_.take_selected_or_first(selected_image_result_);
     }
 
     void run_image_worker() {

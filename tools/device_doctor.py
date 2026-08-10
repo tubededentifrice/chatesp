@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import subprocess
 import sys
@@ -37,6 +38,8 @@ _FATAL_RECORDS = (
     "Guru Meditation Error",
     "abort() was called",
 )
+_FLASH_SECTOR_BYTES = 0x1000
+_OTADATA_BYTES = 0x2000
 
 
 @dataclass(frozen=True)
@@ -124,9 +127,47 @@ def redact_doctor_text(text: str, port: str) -> str:
     return safe.replace(port, "[redacted local port]")
 
 
+def otadata_region(root: Path) -> tuple[int, int]:
+    """Read the narrow OTA-selection region from the reviewed partition file."""
+    partition_file = root / "firmware" / "partitions.csv"
+    with partition_file.open(newline="", encoding="utf-8") as stream:
+        for raw_row in csv.reader(stream):
+            row = [value.strip() for value in raw_row]
+            if not row or row[0].startswith("#"):
+                continue
+            if len(row) < 5 or row[:3] != ["otadata", "data", "ota"]:
+                continue
+            offset = int(row[3], 0)
+            size = int(row[4], 0)
+            if (
+                offset < _FLASH_SECTOR_BYTES
+                or offset % _FLASH_SECTOR_BYTES != 0
+                or size != _OTADATA_BYTES
+            ):
+                raise ValueError("The OTA selection partition is not safe to erase.")
+            return offset, size
+    raise ValueError("The OTA selection partition is missing.")
+
+
+def run_redacted_command(command: list[str], root: Path, port: str) -> int:
+    """Run one device command without printing the local serial port."""
+    process = subprocess.Popen(
+        command,
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+    )
+    assert process.stdout is not None
+    for line in process.stdout:
+        sys.stdout.write(redact_doctor_text(line, port))
+    return process.wait()
+
+
 def upload_development_firmware(root: Path, port: str) -> int:
     """Build and upload through the repository policy wrapper."""
-    command = [
+    upload_command = [
         "uv",
         "run",
         "--locked",
@@ -140,18 +181,39 @@ def upload_development_firmware(root: Path, port: str) -> int:
         "--upload-port",
         port,
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        errors="replace",
-    )
-    assert process.stdout is not None
-    for line in process.stdout:
-        sys.stdout.write(redact_doctor_text(line, port))
-    return process.wait()
+    result = run_redacted_command(upload_command, root, port)
+    if result != 0:
+        return result
+
+    try:
+        otadata_offset, otadata_size = otadata_region(root)
+    except (OSError, ValueError) as error:
+        print(f"The development app could not be selected: {error}")
+        return 1
+    print("Repair: select the uploaded development app in OTA slot 0.")
+    selection_command = [
+        "uv",
+        "run",
+        "--locked",
+        "python",
+        "tools/pio.py",
+        "pkg",
+        "exec",
+        "--package",
+        "tool-esptoolpy",
+        "--",
+        "esptool.py",
+        "--chip",
+        "esp32s3",
+        "--port",
+        port,
+        "--after",
+        "watchdog_reset",
+        "erase_region",
+        hex(otadata_offset),
+        hex(otadata_size),
+    ]
+    return run_redacted_command(selection_command, root, port)
 
 
 def collect_boot_log(port: str, duration_seconds: float) -> str:

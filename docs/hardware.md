@@ -333,6 +333,8 @@ The connected V2 board must pass these checks for this control change:
 The full-screen image path must pass these checks on the V2 AMOLED:
 
 - a selected baseline JPEG fills the screen with a centered cover crop;
+- a successful image search that has no second model selection shows the first
+  current result instead of only claiming that an image is visible;
 - red, green, and blue test areas have the correct color and byte order;
 - wide and tall images have a centered crop with the correct rotation;
 - a new PWR-button press removes the image and starts `LISTENING` without a
