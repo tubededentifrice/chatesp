@@ -15,22 +15,24 @@ constexpr char kPreferencesKey[] = "prefs";
 
 esp_err_t DevicePreferencesStore::initialize() {
     if (initialized_) {
-        return persistent_ ? ESP_OK : ESP_ERR_INVALID_STATE;
+        return ESP_OK;
     }
-    initialized_ = true;
     const esp_err_t init_result = nvs_flash_init();
     if (init_result != ESP_OK) {
         return init_result;
     }
-    persistent_ = true;
+
+    runtime::DevicePreferences loaded_preferences;
 
     nvs_handle_t handle = 0;
     const esp_err_t open_result = nvs_open(kNamespace, NVS_READONLY, &handle);
     if (open_result == ESP_ERR_NVS_NOT_FOUND) {
+        preferences_ = loaded_preferences;
+        persistent_ = true;
+        initialized_ = true;
         return ESP_OK;
     }
     if (open_result != ESP_OK) {
-        persistent_ = false;
         return open_result;
     }
 
@@ -39,32 +41,39 @@ esp_err_t DevicePreferencesStore::initialize() {
         handle, kPreferencesKey, nullptr, &encoded_size);
     if (read_result == ESP_ERR_NVS_NOT_FOUND) {
         nvs_close(handle);
+        preferences_ = loaded_preferences;
+        persistent_ = true;
+        initialized_ = true;
         return ESP_OK;
     }
     if (read_result != ESP_OK) {
         nvs_close(handle);
-        persistent_ = false;
         return read_result;
     }
 
     runtime::EncodedDevicePreferences encoded{};
     if (encoded_size != encoded.size()) {
         nvs_close(handle);
+        preferences_ = loaded_preferences;
+        persistent_ = true;
+        initialized_ = true;
         return ESP_OK;
     }
     read_result = nvs_get_blob(
         handle, kPreferencesKey, encoded.data(), &encoded_size);
     nvs_close(handle);
     if (read_result != ESP_OK) {
-        persistent_ = false;
         return read_result;
     }
 
     runtime::DevicePreferences decoded;
     if (runtime::decode_device_preferences(
             encoded.data(), encoded_size, decoded)) {
-        preferences_ = decoded;
+        loaded_preferences = decoded;
     }
+    preferences_ = loaded_preferences;
+    persistent_ = true;
+    initialized_ = true;
     return ESP_OK;
 }
 

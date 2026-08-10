@@ -21,6 +21,7 @@
 #include "chatesp/app_mode.hpp"
 #include "chatesp/audio_spectrum.hpp"
 #include "chatesp/ble_settings.hpp"
+#include "chatesp/clock_network_transition.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "chatesp/quick_controls.hpp"
 #include "chatesp/runtime_control.hpp"
@@ -1310,19 +1311,37 @@ private:
         selected_image_result_.clear();
         image_frame_.reset();
         pending_plot_.clear();
+        const bool local_time_ready = utc_clock_.has_local_time();
+        const bool wifi_configured = settings_.has_wifi_credentials();
+        const runtime::ClockNetworkTransition network_transition =
+            runtime::clock_network_transition(
+                network_warm_task_ != nullptr, local_time_ready,
+                wifi_configured);
         clock_network_stop_pending_ =
-            !utc_clock_.has_local_time() &&
-            settings_.has_wifi_credentials();
+            !local_time_ready && wifi_configured;
         clock_network_stop_started_at_ms_ = now_ms;
-        if (clock_network_stop_pending_) {
-            // Clock can become active before the asynchronous startup
-            // connection has supplied UTC and a timezone. Keep that bounded
-            // acquisition alive, then stop Wi-Fi from the runtime loop.
-            if (stop_ble_for_request()) {
-                start_network_early(true);
+        for (std::size_t index = 0;
+             index < network_transition.size; ++index) {
+            switch (network_transition.steps[index]) {
+                case runtime::ClockNetworkTransitionStep::
+                    join_recording_worker:
+                    join_network_warm_worker();
+                    break;
+                case runtime::ClockNetworkTransitionStep::
+                    acquire_local_time:
+                    // Clock can become active before the asynchronous startup
+                    // connection has supplied UTC and a timezone. Keep that
+                    // bounded acquisition alive, then stop Wi-Fi from the
+                    // runtime loop.
+                    if (stop_ble_for_request()) {
+                        start_network_early(true);
+                    }
+                    break;
+                case runtime::ClockNetworkTransitionStep::
+                    stop_network_and_restart_ble:
+                    stop_clock_network();
+                    break;
             }
-        } else {
-            stop_clock_network();
         }
         footer_shown_ = false;
         clock_refreshed_second_ = 0xff;

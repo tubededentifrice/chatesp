@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 if __package__:
+    from tools.project_version import current_project_version
     from tools.watch_monitor import (
         SerialRedactor,
         close_safe_serial,
@@ -20,6 +21,7 @@ if __package__:
         redact_serial_text,
     )
 else:
+    from project_version import current_project_version  # type: ignore[no-redef]
     from watch_monitor import (  # type: ignore[no-redef]
         SerialRedactor,
         close_safe_serial,
@@ -105,18 +107,6 @@ def diagnose_boot(log: str, expected_version: str) -> BootDiagnosis:
     return BootDiagnosis(
         tuple(issues), app_version, brightness_percent
     )
-
-
-def current_git_version(root: Path) -> str:
-    """Get the short commit that ESP-IDF puts in the application image."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--short=7", "HEAD"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 def redact_doctor_text(text: str, port: str) -> str:
@@ -250,7 +240,7 @@ def run_doctor(
     upload: bool,
 ) -> int:
     """Repair the ChatESP device and check all automatic display start gates."""
-    expected_version = current_git_version(root)
+    expected_version = current_project_version(root)
     if upload:
         print("Repair: build and upload the current development firmware.")
         if upload_development_firmware(root, port) != 0:

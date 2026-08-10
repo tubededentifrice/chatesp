@@ -103,6 +103,7 @@ struct BLEProvisionerPolicy {
     static let connectionTimeout: TimeInterval = 10
     static let serviceDiscoveryTimeout: TimeInterval = 10
     static let frameTimeout: TimeInterval = 10
+    static let phoneProxyResponseTimeout: TimeInterval = 180
     static let deviceContextInterval: TimeInterval = 3_600
     static let reconnectScanTimeout: TimeInterval = 30
     static let reconnectDelays: [TimeInterval] = [0]
@@ -123,6 +124,12 @@ struct BLEProvisionerPolicy {
 
     static func acceptsCallback(selectedID: UUID?, callbackID: UUID) -> Bool {
         selectedID == callbackID
+    }
+
+    static func acceptsPhoneProxyOperation(
+        activeOperationID: UInt64?, callbackOperationID: UInt64
+    ) -> Bool {
+        activeOperationID == callbackOperationID
     }
 
     static func reconnectDelay(attempt: Int) -> TimeInterval? {
@@ -204,6 +211,18 @@ struct BLEProvisionerPolicy {
     ) -> Bool {
         guard let lastSentAt else { return true }
         return now - lastSentAt >= deviceContextInterval
+    }
+
+    static func shouldRequestDeviceContextLocation(
+        isDeviceConnected: Bool
+    ) -> Bool {
+        isDeviceConnected
+    }
+
+    static func shouldClearMemoryDraft(
+        submitted: String, current: String, wasAdded: Bool
+    ) -> Bool {
+        wasAdded && current == submitted
     }
 }
 
@@ -294,8 +313,11 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private var memoryListRestartCount = 0
     private var memoryRefreshNeeded = false
     private var phoneProxyAssembler = PhoneProxyRequestAssembler()
+    private var nextPhoneProxyOperationID: UInt64 = 1
+    private var phoneProxyOperationID: UInt64?
     private var phoneProxyTask: Task<Void, Never>?
     private var phoneProxySession: URLSession?
+    private var phoneProxyResponseTimeoutWork: DispatchWorkItem?
     private var phoneProxyRequestID: UInt32?
     private var phoneProxyResponseData = Data()
     private var phoneProxyResponseOffset = 0
@@ -356,6 +378,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         reconnectScanTimeoutWork?.cancel()
         reconnectCooldownWork?.cancel()
         memoryTimeoutWork?.cancel()
+        phoneProxyResponseTimeoutWork?.cancel()
         phoneProxyTask?.cancel()
         phoneProxySession?.invalidateAndCancel()
         locationManager.stopMonitoringSignificantLocationChanges()
@@ -709,12 +732,16 @@ final class BLEProvisioner: NSObject, ObservableObject {
         startMemoryList()
     }
 
-    func addMemory(_ fact: String) {
+    func addMemory(
+        _ fact: String, completion: @escaping (Bool) -> Void = { _ in }
+    ) {
         guard MemoryProtocolV1.validFact(fact) else {
             memoryMessage = "Enter one fact of at most 128 UTF-8 bytes."
+            completion(false)
             return
         }
-        runMemoryMutation(operation: .add, fact: fact)
+        runMemoryMutation(
+            operation: .add, fact: fact, completion: completion)
     }
 
     func deleteMemory(id: UInt32) {
@@ -744,9 +771,12 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func clearPhoneProxyConnectionState() {
-        phoneProxyTask?.cancel()
+        phoneProxyOperationID = nil
+        phoneProxyResponseTimeoutWork?.cancel()
+        phoneProxyResponseTimeoutWork = nil
+        let task = phoneProxyTask
         phoneProxyTask = nil
-        phoneProxySession?.invalidateAndCancel()
+        let session = phoneProxySession
         phoneProxySession = nil
         phoneProxyAssembler.reset()
         phoneProxyRequestID = nil
@@ -760,6 +790,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
         phoneProxyPendingFrame = nil
         phoneProxyWaitingForWriteResponse = false
         endPhoneProxyBackgroundTask()
+        task?.cancel()
+        session?.invalidateAndCancel()
     }
 
     private func endPhoneProxyBackgroundTask() {
@@ -776,27 +808,60 @@ final class BLEProvisioner: NSObject, ObservableObject {
         } catch {
             trace("phone_proxy_request_rejected", error: error)
             phoneProxyAssembler.reset()
-            if frame.count >= PhoneProxyProtocolV1.commonHeaderSize {
-                sendPhoneProxyError(
+            if phoneProxyOperationID == nil,
+               frame.count >= PhoneProxyProtocolV1.commonHeaderSize {
+                startPhoneProxyError(
                     requestID: frame.readBigEndianUInt32(at: 6), code: 3)
             }
         }
     }
 
+    private func allocatePhoneProxyOperationID() -> UInt64 {
+        let operationID = nextPhoneProxyOperationID
+        nextPhoneProxyOperationID = nextPhoneProxyOperationID == UInt64.max
+            ? 1
+            : nextPhoneProxyOperationID + 1
+        return operationID
+    }
+
+    private func isActivePhoneProxyOperation(_ operationID: UInt64) -> Bool {
+        BLEProvisionerPolicy.acceptsPhoneProxyOperation(
+            activeOperationID: phoneProxyOperationID,
+            callbackOperationID: operationID)
+    }
+
+    private func beginPhoneProxyOperation(requestID: UInt32) -> UInt64? {
+        guard phoneProxyOperationID == nil,
+              phoneProxyRequestID == nil else { return nil }
+        let operationID = allocatePhoneProxyOperationID()
+        phoneProxyOperationID = operationID
+        phoneProxyRequestID = requestID
+        return operationID
+    }
+
+    private func startPhoneProxyError(requestID: UInt32, code: UInt8) {
+        guard requestID != 0,
+              let operationID = beginPhoneProxyOperation(
+                requestID: requestID) else { return }
+        sendPhoneProxyError(
+            operationID: operationID, requestID: requestID, code: code)
+    }
+
     private func startPhoneProxyRequest(_ proxyRequest: PhoneProxyRequest) {
         guard phoneProxyTask == nil,
-              phoneProxyRequestID == nil else {
-            sendPhoneProxyError(requestID: proxyRequest.requestID, code: 3)
-            return
-        }
+              let operationID = beginPhoneProxyOperation(
+                requestID: proxyRequest.requestID) else { return }
         trace("phone_proxy_request_begin")
-        phoneProxyRequestID = proxyRequest.requestID
         phoneProxyBackgroundTask = UIApplication.shared.beginBackgroundTask(
             withName: "ChatESP phone proxy"
         ) { [weak self] in
             Task { @MainActor in
-                self?.phoneProxyTask?.cancel()
-                self?.phoneProxySession?.invalidateAndCancel()
+                guard let self,
+                      self.isActivePhoneProxyOperation(operationID) else {
+                    return
+                }
+                self.phoneProxyTask?.cancel()
+                self.phoneProxySession?.invalidateAndCancel()
             }
         }
         let configuration = URLSessionConfiguration.ephemeral
@@ -813,23 +878,27 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 maximumRedirects: proxyRequest.maximumRedirects),
             delegateQueue: nil)
         phoneProxySession = session
-        phoneProxyTask = Task { [weak self] in
+        phoneProxyTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
                 let (bytes, response) = try await session.bytes(
                     for: proxyRequest.request)
                 try Task.checkCancellation()
                 guard let response = response as? HTTPURLResponse else {
-                    self.sendPhoneProxyError(
-                        requestID: proxyRequest.requestID, code: 3)
+                    await self.sendPhoneProxyError(
+                        operationID: operationID,
+                        requestID: proxyRequest.requestID,
+                        code: 3)
                     return
                 }
                 let expectedLength = response.expectedContentLength
                 let contentType = response.value(
                     forHTTPHeaderField: "Content-Type") ?? ""
                 if expectedLength > Int64(proxyRequest.maximumResponseSize) {
-                    self.sendPhoneProxyError(
-                        requestID: proxyRequest.requestID, code: 2)
+                    await self.sendPhoneProxyError(
+                        operationID: operationID,
+                        requestID: proxyRequest.requestID,
+                        code: 2)
                     return
                 }
                 if let contentLength =
@@ -838,7 +907,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
                         expectedLength,
                         maximumResponseSize:
                             proxyRequest.maximumResponseSize) {
-                    try self.beginPhoneProxyResponse(
+                    try await self.beginPhoneProxyResponse(
+                        operationID: operationID,
                         requestID: proxyRequest.requestID,
                         response: response,
                         contentLength: contentLength)
@@ -849,67 +919,84 @@ final class BLEProvisioner: NSObject, ObservableObject {
                         chunk.append(byte)
                         if chunk.count ==
                             PhoneProxyProtocolV1.streamingChunkSize {
-                            try self.appendPhoneProxyResponse(chunk)
+                            try await self.appendPhoneProxyResponse(
+                                operationID: operationID, chunk)
                             chunk.removeAll(keepingCapacity: true)
                             await Task.yield()
                         }
                     }
                     if !chunk.isEmpty {
-                        try self.appendPhoneProxyResponse(chunk)
+                        try await self.appendPhoneProxyResponse(
+                            operationID: operationID, chunk)
                     }
-                    try self.completePhoneProxyResponseDownload()
+                    try await self.completePhoneProxyResponseDownload(
+                        operationID: operationID)
                 } else {
                     var data = Data()
                     for try await byte in bytes {
                         guard data.count <
                                 proxyRequest.maximumResponseSize else {
                             session.invalidateAndCancel()
-                            self.sendPhoneProxyError(
-                                requestID: proxyRequest.requestID, code: 2)
+                            await self.sendPhoneProxyError(
+                                operationID: operationID,
+                                requestID: proxyRequest.requestID,
+                                code: 2)
                             return
                         }
                         data.append(byte)
                     }
-                    try self.sendPhoneProxyResponse(
+                    try await self.sendPhoneProxyResponse(
+                        operationID: operationID,
                         requestID: proxyRequest.requestID,
                         response: response,
                         data: data)
                 }
             } catch is CancellationError {
-                if self.phoneProxyRequestID == proxyRequest.requestID,
-                   self.isDeviceConnected {
-                    self.sendPhoneProxyError(
-                        requestID: proxyRequest.requestID, code: 3)
+                if await self.isActivePhoneProxyOperation(operationID),
+                   await self.isDeviceConnected {
+                    await self.sendPhoneProxyError(
+                        operationID: operationID,
+                        requestID: proxyRequest.requestID,
+                        code: 3)
                 } else {
-                    self.finishPhoneProxyResponse()
+                    await self.finishPhoneProxyResponse(
+                        operationID: operationID)
                 }
             } catch {
                 let code: UInt8 = (error as? URLError)?.code == .timedOut
                     ? 1
                     : 3
-                self.sendPhoneProxyError(
-                    requestID: proxyRequest.requestID, code: code)
+                await self.sendPhoneProxyError(
+                    operationID: operationID,
+                    requestID: proxyRequest.requestID,
+                    code: code)
             }
         }
     }
 
     private func sendPhoneProxyResponse(
-        requestID: UInt32, response: HTTPURLResponse, data: Data
+        operationID: UInt64,
+        requestID: UInt32,
+        response: HTTPURLResponse,
+        data: Data
     ) throws {
         try beginPhoneProxyResponse(
+            operationID: operationID,
             requestID: requestID,
             response: response,
             contentLength: data.count)
-        try appendPhoneProxyResponse(data)
-        try completePhoneProxyResponseDownload()
+        try appendPhoneProxyResponse(operationID: operationID, data)
+        try completePhoneProxyResponseDownload(operationID: operationID)
     }
 
     private func beginPhoneProxyResponse(
+        operationID: UInt64,
         requestID: UInt32,
         response: HTTPURLResponse,
         contentLength: Int
     ) throws {
-        guard phoneProxyRequestID == requestID,
+        guard isActivePhoneProxyOperation(operationID),
+              phoneProxyRequestID == requestID,
               phoneProxyResponseExpectedSize == nil,
               contentLength >= 0 else {
             throw PhoneProxyError.invalidResponse
@@ -933,63 +1020,78 @@ final class BLEProvisioner: NSObject, ObservableObject {
         phoneProxyPendingErrorCode = nil
         phoneProxyResponseEndSent = false
         phoneProxyErrorOnly = false
-        queuePhoneProxyFrame(head)
+        queuePhoneProxyFrame(operationID: operationID, head)
     }
 
-    private func appendPhoneProxyResponse(_ data: Data) throws {
-        guard let expectedSize = phoneProxyResponseExpectedSize,
+    private func appendPhoneProxyResponse(
+        operationID: UInt64, _ data: Data
+    ) throws {
+        guard isActivePhoneProxyOperation(operationID),
+              let expectedSize = phoneProxyResponseExpectedSize,
               phoneProxyResponseData.count <= expectedSize,
               data.count <= expectedSize - phoneProxyResponseData.count else {
             throw PhoneProxyError.invalidResponse
         }
         phoneProxyResponseData.append(data)
         if phoneProxyPendingFrame == nil {
-            sendNextPhoneProxyResponseFrame()
+            sendNextPhoneProxyResponseFrame(operationID: operationID)
         }
     }
 
-    private func completePhoneProxyResponseDownload() throws {
-        guard let expectedSize = phoneProxyResponseExpectedSize,
+    private func completePhoneProxyResponseDownload(
+        operationID: UInt64
+    ) throws {
+        guard isActivePhoneProxyOperation(operationID),
+              let expectedSize = phoneProxyResponseExpectedSize,
               phoneProxyResponseData.count == expectedSize else {
             throw PhoneProxyError.invalidResponse
         }
         phoneProxyDownloadComplete = true
         if phoneProxyPendingFrame == nil {
-            sendNextPhoneProxyResponseFrame()
+            sendNextPhoneProxyResponseFrame(operationID: operationID)
         }
     }
 
-    private func sendPhoneProxyError(requestID: UInt32, code: UInt8) {
-        guard phoneProxyRequestID == nil ||
-                phoneProxyRequestID == requestID else { return }
-        phoneProxyRequestID = requestID
+    private func sendPhoneProxyError(
+        operationID: UInt64, requestID: UInt32, code: UInt8
+    ) {
+        guard isActivePhoneProxyOperation(operationID),
+              phoneProxyRequestID == requestID else { return }
         phoneProxyPendingErrorCode = code
         phoneProxyDownloadComplete = true
         if phoneProxyPendingFrame == nil {
-            sendNextPhoneProxyResponseFrame()
+            sendNextPhoneProxyResponseFrame(operationID: operationID)
         }
     }
 
-    private func queuePhoneProxyFrame(_ frame: Data) {
+    private func queuePhoneProxyFrame(
+        operationID: UInt64, _ frame: Data
+    ) {
+        guard isActivePhoneProxyOperation(operationID) else { return }
+        startPhoneProxyResponseTimeout(operationID: operationID)
         guard phoneProxyPendingFrame == nil else {
-            finishPhoneProxyResponse()
+            finishPhoneProxyResponse(
+                operationID: operationID, cancelNetwork: true)
             return
         }
         phoneProxyPendingFrame = frame
-        drainPhoneProxyFrame()
+        drainPhoneProxyFrame(operationID: operationID)
     }
 
-    private func drainPhoneProxyFrame() {
-        guard let selected,
+    private func drainPhoneProxyFrame(operationID: UInt64) {
+        guard isActivePhoneProxyOperation(operationID),
+              let selected,
               let characteristic = httpProxyResponseCharacteristic,
               isActive(selected),
               let frame = phoneProxyPendingFrame else {
-            finishPhoneProxyResponse()
+            finishPhoneProxyResponse(
+                operationID: operationID, cancelNetwork: true)
             return
         }
         let type = phoneProxyWriteType(for: frame)
         guard frame.count <= selected.maximumWriteValueLength(for: type) else {
-            finishPhoneProxyResponse()
+            finishPhoneProxyResponse(
+                operationID: operationID, cancelNetwork: true)
             return
         }
         if type == .withResponse {
@@ -1001,7 +1103,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
             selected.writeValue(frame, for: characteristic, type: type)
             phoneProxyPendingFrame = nil
             DispatchQueue.main.async { [weak self] in
-                self?.sendNextPhoneProxyResponseFrame()
+                self?.sendNextPhoneProxyResponseFrame(
+                    operationID: operationID)
             }
         }
     }
@@ -1016,20 +1119,22 @@ final class BLEProvisioner: NSObject, ObservableObject {
         return .withoutResponse
     }
 
-    private func sendNextPhoneProxyResponseFrame() {
-        guard let requestID = phoneProxyRequestID,
+    private func sendNextPhoneProxyResponseFrame(operationID: UInt64) {
+        guard isActivePhoneProxyOperation(operationID),
+              let requestID = phoneProxyRequestID,
               let selected else {
-            finishPhoneProxyResponse()
+            finishPhoneProxyResponse(operationID: operationID)
             return
         }
         if phoneProxyErrorOnly {
-            finishPhoneProxyResponse()
+            finishPhoneProxyResponse(operationID: operationID)
             return
         }
         if let errorCode = phoneProxyPendingErrorCode {
             phoneProxyPendingErrorCode = nil
             phoneProxyErrorOnly = true
             queuePhoneProxyFrame(
+                operationID: operationID,
                 PhoneProxyProtocolV1.responseError(
                     requestID: requestID, code: errorCode))
             return
@@ -1038,7 +1143,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
             let capacity = selected.maximumWriteValueLength(
                 for: .withoutResponse) - PhoneProxyProtocolV1.dataHeaderSize
             guard capacity > 0 else {
-                finishPhoneProxyResponse()
+                finishPhoneProxyResponse(
+                    operationID: operationID, cancelNetwork: true)
                 return
             }
             let end = min(
@@ -1051,7 +1157,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 offset: phoneProxyResponseOffset,
                 bytes: bytes)
             phoneProxyResponseOffset = end
-            queuePhoneProxyFrame(frame)
+            queuePhoneProxyFrame(operationID: operationID, frame)
             return
         }
         if !phoneProxyDownloadComplete {
@@ -1060,6 +1166,7 @@ final class BLEProvisioner: NSObject, ObservableObject {
         if !phoneProxyResponseEndSent {
             phoneProxyResponseEndSent = true
             queuePhoneProxyFrame(
+                operationID: operationID,
                 PhoneProxyProtocolV1.responseEnd(
                     requestID: requestID,
                     size: phoneProxyResponseExpectedSize ??
@@ -1067,11 +1174,39 @@ final class BLEProvisioner: NSObject, ObservableObject {
             return
         }
         trace("phone_proxy_request_complete")
-        finishPhoneProxyResponse()
+        finishPhoneProxyResponse(operationID: operationID)
     }
 
-    private func finishPhoneProxyResponse() {
-        phoneProxySession?.finishTasksAndInvalidate()
+    private func startPhoneProxyResponseTimeout(operationID: UInt64) {
+        guard isActivePhoneProxyOperation(operationID),
+              phoneProxyResponseTimeoutWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isActivePhoneProxyOperation(operationID) else { return }
+            self.trace("phone_proxy_response_timeout")
+            let peripheral = self.selected
+            self.finishPhoneProxyResponse(
+                operationID: operationID, cancelNetwork: true)
+            if let peripheral, self.isSelected(peripheral) {
+                self.cancelConnection(
+                    peripheral, reason: "phone_proxy_response_timeout")
+            }
+        }
+        phoneProxyResponseTimeoutWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + BLEProvisionerPolicy.phoneProxyResponseTimeout,
+            execute: work)
+    }
+
+    private func finishPhoneProxyResponse(
+        operationID: UInt64, cancelNetwork: Bool = false
+    ) {
+        guard isActivePhoneProxyOperation(operationID) else { return }
+        phoneProxyOperationID = nil
+        phoneProxyResponseTimeoutWork?.cancel()
+        phoneProxyResponseTimeoutWork = nil
+        let task = phoneProxyTask
+        let session = phoneProxySession
         phoneProxySession = nil
         phoneProxyTask = nil
         phoneProxyRequestID = nil
@@ -1085,6 +1220,12 @@ final class BLEProvisioner: NSObject, ObservableObject {
         phoneProxyPendingFrame = nil
         phoneProxyWaitingForWriteResponse = false
         endPhoneProxyBackgroundTask()
+        if cancelNetwork {
+            task?.cancel()
+            session?.invalidateAndCancel()
+        } else {
+            session?.finishTasksAndInvalidate()
+        }
     }
 
     private func allocateMemoryRequestID() -> UInt32 {
@@ -1203,16 +1344,19 @@ final class BLEProvisioner: NSObject, ObservableObject {
     private func runMemoryMutation(
         operation: MemoryOperation,
         memoryID: UInt32 = 0,
-        fact: String = ""
+        fact: String = "",
+        completion: ((Bool) -> Void)? = nil
     ) {
         guard memoryAvailable else {
             memoryMessage = isDeviceConnected
                 ? "Update the ChatESP device firmware to manage memories."
                 : "Connect a ChatESP device to manage memories."
+            completion?(false)
             return
         }
         guard pendingMemoryCommand == nil else {
             memoryMessage = "A memory request is already in progress."
+            completion?(false)
             return
         }
         do {
@@ -1228,26 +1372,32 @@ final class BLEProvisioner: NSObject, ObservableObject {
                 switch result {
                 case .failure(let error):
                     self.memoryMessage = self.memoryErrorText(error)
+                    completion?(false)
                 case .success(let response):
                     switch response.status {
                     case .applied, .unchanged:
                         self.memoryRevision = response.revision
                         self.memoryFingerprint = response.fingerprint
+                        completion?(true)
                         self.refreshMemories()
                     case .full:
                         self.memoryMessage =
                             "Ask ChatESP to compact memories, or remove a fact."
+                        completion?(false)
                     case .revisionConflict:
                         self.memoryMessage =
                             "Memories changed on the ChatESP device. The list was reloaded."
+                        completion?(false)
                         self.refreshMemories()
                     default:
                         self.memoryMessage = self.memoryStatusText(response.status)
+                        completion?(false)
                     }
                 }
             }
         } catch {
             memoryMessage = memoryErrorText(error)
+            completion?(false)
         }
     }
 
@@ -1387,6 +1537,8 @@ final class BLEProvisioner: NSObject, ObservableObject {
     }
 
     private func sendDeviceContextAfterFreshLocation() {
+        guard BLEProvisionerPolicy.shouldRequestDeviceContextLocation(
+            isDeviceConnected: isDeviceConnected) else { return }
         cancelFreshLocationWait()
         waitingForFreshLocation = true
         requestFreshLocation()
@@ -2220,14 +2372,17 @@ extension BLEProvisioner: CBPeripheralDelegate {
                 return
             }
             if characteristic.uuid == Self.httpProxyResponse {
-                guard self.phoneProxyWaitingForWriteResponse else { return }
+                guard let operationID = self.phoneProxyOperationID,
+                      self.phoneProxyWaitingForWriteResponse else { return }
                 self.phoneProxyWaitingForWriteResponse = false
                 self.phoneProxyPendingFrame = nil
                 if let error {
                     self.trace("phone_proxy_response_write_failed", error: error)
-                    self.finishPhoneProxyResponse()
+                    self.finishPhoneProxyResponse(
+                        operationID: operationID, cancelNetwork: true)
                 } else {
-                    self.sendNextPhoneProxyResponseFrame()
+                    self.sendNextPhoneProxyResponseFrame(
+                        operationID: operationID)
                 }
                 return
             }
@@ -2272,8 +2427,9 @@ extension BLEProvisioner: CBPeripheralDelegate {
         toSendWriteWithoutResponse peripheral: CBPeripheral
     ) {
         Task { @MainActor in
-            guard self.isActive(peripheral) else { return }
-            self.drainPhoneProxyFrame()
+            guard self.isActive(peripheral),
+                  let operationID = self.phoneProxyOperationID else { return }
+            self.drainPhoneProxyFrame(operationID: operationID)
         }
     }
 

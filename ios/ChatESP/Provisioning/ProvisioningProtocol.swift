@@ -761,6 +761,7 @@ enum PhoneProxyProtocolV1 {
     static let maximumURLSize = 768
     static let maximumEnvelopeSize = 1_100_000
     static let maximumResponseSize = 2_160_000
+    static let maximumRequestTimeoutMilliseconds: UInt32 = 180_000
     static let streamingChunkSize = 4_096
 
     enum FrameType: UInt8 {
@@ -968,6 +969,8 @@ struct PhoneProxyRequestAssembler {
                   maximumResponseSize > 0,
                   maximumResponseSize <= PhoneProxyProtocolV1.maximumResponseSize,
                   timeoutMilliseconds > 0,
+                  timeoutMilliseconds <=
+                    PhoneProxyProtocolV1.maximumRequestTimeoutMilliseconds,
                   method <= 1,
                   frame[27] <= 1,
                   maximumRedirects <= 2,

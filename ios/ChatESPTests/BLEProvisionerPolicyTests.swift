@@ -114,6 +114,31 @@ final class BLEProvisionerPolicyTests: XCTestCase {
                 callbackID: selected))
     }
 
+    func testPhoneProxyCallbacksRequireTheActiveLocalOperation() {
+        XCTAssertTrue(
+            BLEProvisionerPolicy.acceptsPhoneProxyOperation(
+                activeOperationID: 7,
+                callbackOperationID: 7))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.acceptsPhoneProxyOperation(
+                activeOperationID: 8,
+                callbackOperationID: 7))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.acceptsPhoneProxyOperation(
+                activeOperationID: nil,
+                callbackOperationID: 7))
+    }
+
+    func testPhoneProxyResponseHasABoundedFullSizeDeadline() {
+        let minimumPCMTransferTime = TimeInterval(
+            PhoneProxyProtocolV1.maximumResponseSize) / 48_000
+
+        XCTAssertEqual(BLEProvisionerPolicy.phoneProxyResponseTimeout, 180)
+        XCTAssertGreaterThanOrEqual(
+            BLEProvisionerPolicy.phoneProxyResponseTimeout,
+            minimumPCMTransferTime)
+    }
+
     func testScanAndReconnectOperationsHaveFixedBounds() {
         XCTAssertEqual(BLEProvisionerPolicy.scanTimeout, 10)
         XCTAssertEqual(BLEProvisionerPolicy.serviceDiscoveryTimeout, 10)
@@ -249,5 +274,23 @@ final class BLEProvisionerPolicyTests: XCTestCase {
             BLEProvisionerPolicy.deviceContextSyncIsDue(
                 lastSentAt: 100,
                 now: 99))
+    }
+
+    func testHourlyLocationRequestRequiresAConnectedDevice() {
+        XCTAssertTrue(
+            BLEProvisionerPolicy.shouldRequestDeviceContextLocation(
+                isDeviceConnected: true))
+        XCTAssertFalse(
+            BLEProvisionerPolicy.shouldRequestDeviceContextLocation(
+                isDeviceConnected: false))
+    }
+
+    func testMemoryDraftClearsOnlyAfterTheSubmittedFactIsAdded() {
+        XCTAssertTrue(BLEProvisionerPolicy.shouldClearMemoryDraft(
+            submitted: "Likes tea", current: "Likes tea", wasAdded: true))
+        XCTAssertFalse(BLEProvisionerPolicy.shouldClearMemoryDraft(
+            submitted: "Likes tea", current: "Likes tea", wasAdded: false))
+        XCTAssertFalse(BLEProvisionerPolicy.shouldClearMemoryDraft(
+            submitted: "Likes tea", current: "Likes coffee", wasAdded: true))
     }
 }

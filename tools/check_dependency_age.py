@@ -335,6 +335,41 @@ def yaml_scalar(value: str) -> str:
     return value
 
 
+def yaml_content(line: str) -> str:
+    """Remove a YAML comment without changing a quoted hash character."""
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(line):
+        if quote == '"' and character == "\\" and not escaped:
+            escaped = True
+            continue
+        if character in {'"', "'"} and not escaped:
+            if quote is None:
+                quote = character
+            elif quote == character:
+                quote = None
+        if (
+            character == "#"
+            and quote is None
+            and (index == 0 or line[index - 1].isspace())
+        ):
+            return line[:index].rstrip()
+        escaped = False
+    return line.rstrip()
+
+
+def yaml_mapping(content: str) -> tuple[str, str] | None:
+    """Read one simple YAML mapping line used by IDF manifests."""
+    match = re.fullmatch(
+        r'(?:"([^"\\]+)"|\'([^\']+)\'|([A-Za-z0-9_./-]+)):\s*(.*)',
+        content,
+    )
+    if not match:
+        return None
+    key = next(value for value in match.groups()[:3] if value is not None)
+    return key, match.group(4).strip()
+
+
 def check_idf_manifests(
     root: Path,
 ) -> tuple[set[tuple[str, str, str]], dict[str, tuple[str, str]]]:
@@ -350,61 +385,116 @@ def check_idf_manifests(
     )
     for path in manifests:
         lines = path.read_text().splitlines()
-        in_dependencies = False
         index = 0
         while index < len(lines):
-            line = lines[index]
-            if line == "dependencies:":
-                in_dependencies = True
+            line = yaml_content(lines[index])
+            if not line.strip():
                 index += 1
                 continue
-            if in_dependencies and line and not line.startswith(" "):
-                in_dependencies = False
-            match = re.match(r"^  ([a-z0-9_.-]+/[a-z0-9_.-]+):\s*(.*)$", line)
-            if not in_dependencies or not match:
+            indent = len(line) - len(line.lstrip(" "))
+            section = yaml_mapping(line)
+            if indent != 0 or section is None or section[0] != "dependencies":
                 index += 1
                 continue
-
-            name = match.group(1)
-            inline = yaml_scalar(match.group(2))
-            fields: dict[str, str] = {}
-            index += 1
-            while index < len(lines) and not re.match(r"^  \S", lines[index]):
-                field_match = re.match(r"^    ([a-z_]+):\s*(.*)$", lines[index])
-                if field_match:
-                    fields[field_match.group(1)] = yaml_scalar(field_match.group(2))
-                index += 1
-
-            if inline:
-                version = inline
-                if version[0] in "^~<>=*" or "," in version:
-                    raise PolicyError(
-                        f"IDF component dependency is not exact in {path}: {name} {version}"
-                    )
-                expected[name] = ("registry", version)
-                continue
-
-            version = fields.get("version", "")
-            git_url = fields.get("git", "")
-            if git_url:
-                url_match = GITHUB_URL_RE.fullmatch(git_url)
-                if not url_match or not GIT_COMMIT_RE.fullmatch(version):
-                    raise PolicyError(
-                        f"IDF Git component must use GitHub HTTPS and a full commit: {name}"
-                    )
-                reference = (
-                    url_match.group("owner"),
-                    url_match.group("repo").removesuffix(".git"),
-                    version,
-                )
-                git_references.add(reference)
-                expected[name] = ("git", version)
-            elif not version or version[0] in "^~<>=*" or "," in version:
+            if section[1]:
                 raise PolicyError(
-                    f"IDF component dependency is not exactly pinned in {path}: {name}"
+                    f"IDF dependencies must use a block mapping in {path}"
                 )
-            else:
-                expected[name] = ("registry", version)
+
+            index += 1
+            section_lines: list[tuple[int, str]] = []
+            while index < len(lines):
+                item = yaml_content(lines[index])
+                if not item.strip():
+                    index += 1
+                    continue
+                leading = item[: len(item) - len(item.lstrip())]
+                if not leading:
+                    break
+                if "\t" in leading:
+                    raise PolicyError(
+                        f"IDF dependencies must use spaces in {path}"
+                    )
+                item_indent = len(item) - len(item.lstrip(" "))
+                section_lines.append((item_indent, item.strip()))
+                index += 1
+            if not section_lines:
+                continue
+
+            entry_indent = min(item[0] for item in section_lines)
+            entry_index = 0
+            while entry_index < len(section_lines):
+                item_indent, content = section_lines[entry_index]
+                if item_indent != entry_indent:
+                    raise PolicyError(
+                        f"IDF dependency content is not a mapping in {path}"
+                    )
+                entry = yaml_mapping(content)
+                if entry is None:
+                    raise PolicyError(
+                        f"IDF dependency entry cannot be parsed in {path}: {content}"
+                    )
+                name, raw_inline = entry
+                block_start = entry_index + 1
+                block_end = block_start
+                while (
+                    block_end < len(section_lines)
+                    and section_lines[block_end][0] > entry_indent
+                ):
+                    block_end += 1
+                entry_index = block_end
+                if not re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", name):
+                    continue
+
+                inline = yaml_scalar(raw_inline)
+                if inline.startswith(("{", "[", "&", "*")):
+                    raise PolicyError(
+                        f"IDF component dependency uses unsupported YAML in {path}: {name}"
+                    )
+                fields: dict[str, str] = {}
+                parsed_fields: list[tuple[int, tuple[str, str]]] = []
+                for field_indent, field_content in section_lines[
+                    block_start:block_end
+                ]:
+                    field = yaml_mapping(field_content)
+                    if field is not None:
+                        parsed_fields.append((field_indent, field))
+                if parsed_fields:
+                    direct_indent = min(item[0] for item in parsed_fields)
+                    for field_indent, field in parsed_fields:
+                        if field_indent == direct_indent:
+                            fields[field[0]] = yaml_scalar(field[1])
+
+                if inline:
+                    version = inline
+                    if version[0] in "^~<>=*" or "," in version:
+                        raise PolicyError(
+                            f"IDF component dependency is not exact in {path}: {name} {version}"
+                        )
+                    expected[name] = ("registry", version)
+                    continue
+
+                version = fields.get("version", "")
+                git_url = fields.get("git", "")
+                if git_url:
+                    url_match = GITHUB_URL_RE.fullmatch(git_url)
+                    if not url_match or not GIT_COMMIT_RE.fullmatch(version):
+                        raise PolicyError(
+                            f"IDF Git component must use GitHub HTTPS and a full commit: {name}"
+                        )
+                    reference = (
+                        url_match.group("owner"),
+                        url_match.group("repo").removesuffix(".git"),
+                        version,
+                    )
+                    git_references.add(reference)
+                    expected[name] = ("git", version)
+                elif not version or version[0] in "^~<>=*" or "," in version:
+                    raise PolicyError(
+                        f"IDF component dependency is not exactly pinned in {path}: {name}"
+                    )
+                else:
+                    expected[name] = ("registry", version)
     return git_references, expected
 
 

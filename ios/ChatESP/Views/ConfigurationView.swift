@@ -414,8 +414,15 @@ private struct DeviceSettingsView: View {
                     TextField("One concise fact", text: $newMemory)
                         .textInputAutocapitalization(.sentences)
                     Button("Add") {
-                        provisioner.addMemory(newMemory)
-                        newMemory = ""
+                        let submitted = newMemory
+                        provisioner.addMemory(submitted) { wasAdded in
+                            if BLEProvisionerPolicy.shouldClearMemoryDraft(
+                                submitted: submitted,
+                                current: newMemory,
+                                wasAdded: wasAdded) {
+                                newMemory = ""
+                            }
+                        }
                     }
                     .disabled(!MemoryProtocolV1.validFact(newMemory))
                 }

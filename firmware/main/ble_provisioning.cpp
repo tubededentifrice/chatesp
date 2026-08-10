@@ -55,6 +55,7 @@ constexpr std::uint32_t kStopTaskReclaimDelayMs = 10;
 constexpr std::uint32_t kDisconnectTimeoutMs = 2'000;
 constexpr std::uint32_t kAdvertiseRetryMs = 100;
 constexpr std::uint8_t kAdvertiseRetryLimit = 5;
+constexpr std::uint32_t kAcknowledgementRetryMs = 100;
 constexpr char kLogTag[] = "ble_provisioning";
 
 #if !defined(CONFIG_BT_NIMBLE_NVS_PERSIST) || \
@@ -202,6 +203,8 @@ ble_npl_callout s_advertise_retry_callout{};
 bool s_advertise_retry_initialized = false;
 std::uint8_t s_advertise_retry_count = 0;
 std::atomic<bool> s_advertise_recovery_requested{false};
+ble_npl_callout s_acknowledgement_retry_callout{};
+bool s_acknowledgement_retry_initialized = false;
 runtime::BleShutdown s_shutdown;
 runtime::AsyncShutdownGate s_stop_gate;
 SemaphoreHandle_t s_stop_done = nullptr;
@@ -471,6 +474,50 @@ provisioning::LinkSecurity link_security(std::uint16_t connection_handle) {
 
 void try_send_acknowledgement();
 
+void sync_acknowledgement_state() {
+    s_acknowledgement_waiting.store(
+        s_acknowledgement_gate.waiting(), std::memory_order_release);
+    s_acknowledgement_in_flight.store(
+        s_acknowledgement_gate.in_flight(), std::memory_order_release);
+    s_settings_confirmation_pending.store(
+        s_acknowledgement_gate.settings_confirmation_pending(),
+        std::memory_order_release);
+}
+
+bool schedule_acknowledgement_retry() {
+    if (!s_running.load(std::memory_order_acquire) ||
+        s_stop_gate.running() || !s_acknowledgement_retry_initialized) {
+        return false;
+    }
+    return ble_npl_callout_reset(
+               &s_acknowledgement_retry_callout,
+               ble_npl_time_ms_to_ticks32(kAcknowledgementRetryMs)) ==
+        BLE_NPL_OK;
+}
+
+void handle_acknowledgement_failure(
+    provisioning::IndicationDeliveryAction action) {
+    sync_acknowledgement_state();
+    const bool retry =
+        action == provisioning::IndicationDeliveryAction::retry ||
+        action == provisioning::IndicationDeliveryAction::settings_retry;
+    if (action == provisioning::IndicationDeliveryAction::settings_retry ||
+        action == provisioning::IndicationDeliveryAction::settings_failed) {
+        crash_diagnostics::mark(runtime::CrashEvent::settings_ack_failed);
+    }
+    if (retry) {
+        if (!schedule_acknowledgement_retry() &&
+            s_running.load(std::memory_order_acquire) &&
+            !s_stop_gate.running()) {
+            s_acknowledgement_gate.reset_delivery();
+            sync_acknowledgement_state();
+            ESP_LOGW(kLogTag, "BLE acknowledgement retry timer failed");
+        }
+        return;
+    }
+    try_send_acknowledgement();
+}
+
 void send_acknowledgement(
     std::uint16_t connection_handle,
     const provisioning::SessionResult &result) {
@@ -492,10 +539,8 @@ void send_acknowledgement(
         }
         return;
     }
-    s_acknowledgement_waiting.store(
-        s_acknowledgement_gate.waiting(), std::memory_order_release);
+    sync_acknowledgement_state();
     if (settings_confirmation) {
-        s_settings_confirmation_pending.store(true, std::memory_order_release);
         crash_diagnostics::mark(runtime::CrashEvent::settings_ack_waiting);
     }
     try_send_acknowledgement();
@@ -511,8 +556,7 @@ void send_device_context_acknowledgement(
     if (s_acknowledgement_gate.enqueue(
             connection_handle, provisioning::IndicationKind::device_context,
             acknowledgement.data(), acknowledgement.size(), false)) {
-        s_acknowledgement_waiting.store(
-            s_acknowledgement_gate.waiting(), std::memory_order_release);
+        sync_acknowledgement_state();
     }
     try_send_acknowledgement();
 }
@@ -531,8 +575,13 @@ void try_send_acknowledgement() {
             connection_handle, data, size)) {
         return;
     }
+    if (!s_acknowledgement_gate.begin_attempt()) {
+        return;
+    }
     os_mbuf *packet = ble_hs_mbuf_from_flat(data, size);
     if (packet == nullptr) {
+        handle_acknowledgement_failure(
+            s_acknowledgement_gate.send_failed());
         return;
     }
     s_indication_send_active.store(true, std::memory_order_release);
@@ -540,14 +589,12 @@ void try_send_acknowledgement() {
         connection_handle, s_acknowledgement_handle, packet);
     s_indication_send_active.store(false, std::memory_order_release);
     if (result != 0) {
-        if (s_settings_confirmation_pending.load(std::memory_order_acquire)) {
-            crash_diagnostics::mark(runtime::CrashEvent::settings_ack_failed);
-        }
+        handle_acknowledgement_failure(
+            s_acknowledgement_gate.send_failed());
         return;
     }
     (void)s_acknowledgement_gate.mark_sent();
-    s_acknowledgement_waiting.store(false, std::memory_order_release);
-    s_acknowledgement_in_flight.store(true, std::memory_order_release);
+    sync_acknowledgement_state();
     if (s_settings_confirmation_pending.load(std::memory_order_acquire)) {
         crash_diagnostics::mark(runtime::CrashEvent::settings_ack_sent);
     }
@@ -852,11 +899,11 @@ void release_connection(std::uint16_t connection_handle) {
         }
         memory_ble_unlock();
     }
-    if (s_acknowledgement_gate.clear_connection(connection_handle)) {
-        s_settings_confirmation_pending.store(false, std::memory_order_release);
+    if (s_acknowledgement_retry_initialized) {
+        ble_npl_callout_stop(&s_acknowledgement_retry_callout);
     }
-    s_acknowledgement_waiting.store(false, std::memory_order_release);
-    s_acknowledgement_in_flight.store(false, std::memory_order_release);
+    (void)s_acknowledgement_gate.clear_connection(connection_handle);
+    sync_acknowledgement_state();
     s_http_proxy_subscribed.store(false, std::memory_order_release);
     s_http_proxy_secure.store(false, std::memory_order_release);
     if (s_http_proxy_response_queue != nullptr) {
@@ -981,6 +1028,27 @@ void advertise_retry_event(ble_npl_event *) {
     advertise_or_retry();
 }
 
+void acknowledgement_retry_event(ble_npl_event *) {
+    if (!s_running.load(std::memory_order_acquire) ||
+        s_stop_gate.running()) {
+        return;
+    }
+    try_send_acknowledgement();
+    if (memory_ble_lock()) {
+        try_send_memory_indication_locked();
+        memory_ble_unlock();
+    }
+}
+
+void deinitialize_acknowledgement_retry() {
+    if (!s_acknowledgement_retry_initialized) {
+        return;
+    }
+    ble_npl_callout_stop(&s_acknowledgement_retry_callout);
+    ble_npl_callout_deinit(&s_acknowledgement_retry_callout);
+    s_acknowledgement_retry_initialized = false;
+}
+
 void deinitialize_advertise_retry() {
     if (s_advertise_retry_initialized) {
         ble_npl_callout_stop(&s_advertise_retry_callout);
@@ -1003,6 +1071,9 @@ void on_reset(int) {
     if (s_advertise_retry_initialized) {
         ble_npl_callout_stop(&s_advertise_retry_callout);
     }
+    if (s_acknowledgement_retry_initialized) {
+        ble_npl_callout_stop(&s_acknowledgement_retry_callout);
+    }
     s_advertise_retry_count = 0;
     std::uint16_t active_connection = kNoConnection;
     s_session.disconnect();
@@ -1018,10 +1089,8 @@ void on_reset(int) {
         s_cached_memory_response_size = 0;
         memory_ble_unlock();
     }
-    s_acknowledgement_gate.reset();
-    s_acknowledgement_waiting.store(false, std::memory_order_release);
-    s_acknowledgement_in_flight.store(false, std::memory_order_release);
-    s_settings_confirmation_pending.store(false, std::memory_order_release);
+    s_acknowledgement_gate.reset_delivery();
+    sync_acknowledgement_state();
     s_indication_send_active.store(false, std::memory_order_release);
     s_http_proxy_subscribed.store(false, std::memory_order_release);
     s_http_proxy_secure.store(false, std::memory_order_release);
@@ -1086,6 +1155,9 @@ esp_err_t stop_host() {
         if (s_advertise_retry_initialized) {
             ble_npl_callout_stop(&s_advertise_retry_callout);
         }
+        if (s_acknowledgement_retry_initialized) {
+            ble_npl_callout_stop(&s_acknowledgement_retry_callout);
+        }
         (void)ble_gap_adv_stop();
         const esp_err_t disconnect_result = disconnect_active_link();
         if (disconnect_result != ESP_OK) {
@@ -1096,6 +1168,7 @@ esp_err_t stop_host() {
             return ESP_FAIL;
         }
         deinitialize_advertise_retry();
+        deinitialize_acknowledgement_retry();
         crash_diagnostics::mark(runtime::CrashEvent::ble_host_stop_complete);
         crash_diagnostics::mark(runtime::CrashEvent::ble_store_capture_begin);
         if (!capture_volatile_store()) {
@@ -1355,18 +1428,27 @@ int gap_event(ble_gap_event *event, void *) {
                 return 0;
             }
             if (event->notify_tx.attr_handle == s_acknowledgement_handle) {
-                const bool settings_confirmation =
-                    s_acknowledgement_gate.complete();
-                s_acknowledgement_in_flight.store(
-                    false, std::memory_order_release);
-                if (settings_confirmation) {
-                    s_settings_confirmation_pending.store(
-                        s_acknowledgement_gate.settings_confirmation_pending(),
-                        std::memory_order_release);
+                const auto action = s_acknowledgement_gate.complete(
+                    event->notify_tx.status == BLE_HS_EDONE);
+                sync_acknowledgement_state();
+                if (action == provisioning::IndicationDeliveryAction::
+                        settings_confirmed) {
                     crash_diagnostics::mark(
-                        event->notify_tx.status == BLE_HS_EDONE
-                            ? runtime::CrashEvent::settings_ack_confirmed
-                            : runtime::CrashEvent::settings_ack_failed);
+                        runtime::CrashEvent::settings_ack_confirmed);
+                } else if (
+                    action == provisioning::IndicationDeliveryAction::
+                            settings_retry ||
+                    action == provisioning::IndicationDeliveryAction::
+                            settings_failed) {
+                    handle_acknowledgement_failure(action);
+                    if (action == provisioning::IndicationDeliveryAction::
+                            settings_retry) {
+                        return 0;
+                    }
+                } else if (
+                    action == provisioning::IndicationDeliveryAction::retry) {
+                    handle_acknowledgement_failure(action);
+                    return 0;
                 }
             } else if (event->notify_tx.attr_handle ==
                        s_memory_response_handle) {
@@ -1798,6 +1880,26 @@ esp_err_t start(
     ESP_LOGI(
         kLogTag, "BLE stored bond ready: %d",
         s_bond_available.load(std::memory_order_acquire) ? 1 : 0);
+    if (ble_npl_callout_init(
+            &s_acknowledgement_retry_callout,
+            nimble_port_get_dflt_eventq(), acknowledgement_retry_event,
+            nullptr) != 0) {
+        deinitialize_advertise_retry();
+        nimble_port_deinit();
+        s_memory_store->set_change_callback(nullptr, nullptr);
+        delete_http_proxy_resources();
+        vSemaphoreDelete(s_memory_ble_mutex);
+        s_memory_ble_mutex = nullptr;
+        vSemaphoreDelete(s_disconnect_done);
+        s_disconnect_done = nullptr;
+        s_settings_store = nullptr;
+        s_memory_store = nullptr;
+        s_passkey_callback = nullptr;
+        s_device_context_callback = nullptr;
+        s_callback_context = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    s_acknowledgement_retry_initialized = true;
     s_shutdown.reset();
     s_running.store(true, std::memory_order_release);
     nimble_port_freertos_init(host_task);

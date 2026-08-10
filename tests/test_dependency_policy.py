@@ -225,6 +225,42 @@ class DependencyPolicyTests(unittest.TestCase):
             with self.assertRaises(PolicyError):
                 check_idf_manifests(root)
 
+    def test_accepts_indented_and_quoted_idf_component_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            main = root / "firmware" / "main"
+            main.mkdir(parents=True)
+            (main / "idf_component.yml").write_text(
+                "dependencies:\n"
+                "    \"vendor/board\": \"2.0.3\" # reviewed pin\n"
+                "    'vendor/driver':\n"
+                "        public: true\n"
+                "        version: '1.4.2' # reviewed pin\n"
+            )
+
+            references, expected = check_idf_manifests(root)
+
+            self.assertEqual(set(), references)
+            self.assertEqual(
+                {
+                    "vendor/board": ("registry", "2.0.3"),
+                    "vendor/driver": ("registry", "1.4.2"),
+                },
+                expected,
+            )
+
+    def test_rejects_unsupported_inline_idf_dependency_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            main = root / "firmware" / "main"
+            main.mkdir(parents=True)
+            (main / "idf_component.yml").write_text(
+                'dependencies:\n  vendor/board: {version: "2.0.3"}\n'
+            )
+
+            with self.assertRaisesRegex(PolicyError, "unsupported YAML"):
+                check_idf_manifests(root)
+
     def test_ignores_downloaded_idf_component_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

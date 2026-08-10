@@ -6,6 +6,7 @@
 #include <unity.h>
 
 #include "chatesp/byte_ring.hpp"
+#include "chatesp/clock_network_transition.hpp"
 #include "chatesp/crash_trace.hpp"
 #include "chatesp/device_preferences.hpp"
 #include "chatesp/pcm16_stream.hpp"
@@ -197,6 +198,34 @@ void test_device_preferences_reject_invalid_or_unknown_records() {
     encoded[7] = 1;
     TEST_ASSERT_FALSE(chatesp::runtime::decode_device_preferences(
         encoded.data(), encoded.size(), output));
+}
+
+void test_clock_with_local_time_joins_recording_network_before_ble_restart() {
+    const auto transition = chatesp::runtime::clock_network_transition(
+        true, true, true);
+    TEST_ASSERT_EQUAL_size_t(2, transition.size);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::ClockNetworkTransitionStep::
+            join_recording_worker),
+        static_cast<int>(transition.steps[0]));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::ClockNetworkTransitionStep::
+            stop_network_and_restart_ble),
+        static_cast<int>(transition.steps[1]));
+}
+
+void test_clock_without_local_time_joins_recording_network_before_access() {
+    const auto transition = chatesp::runtime::clock_network_transition(
+        true, false, true);
+    TEST_ASSERT_EQUAL_size_t(2, transition.size);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::ClockNetworkTransitionStep::
+            join_recording_worker),
+        static_cast<int>(transition.steps[0]));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::ClockNetworkTransitionStep::
+            acquire_local_time),
+        static_cast<int>(transition.steps[1]));
 }
 
 void test_stream_joins_a_sample_across_writes() {
@@ -703,6 +732,10 @@ int main(int, char **) {
     RUN_TEST(test_crash_trace_heartbeat_does_not_change_event_checksum);
     RUN_TEST(test_device_preferences_have_a_strict_versioned_record);
     RUN_TEST(test_device_preferences_reject_invalid_or_unknown_records);
+    RUN_TEST(
+        test_clock_with_local_time_joins_recording_network_before_ble_restart);
+    RUN_TEST(
+        test_clock_without_local_time_joins_recording_network_before_access);
     RUN_TEST(test_stream_joins_a_sample_across_writes);
     RUN_TEST(test_stream_rejects_an_incomplete_final_sample);
     RUN_TEST(test_stream_bounds_each_output_chunk);

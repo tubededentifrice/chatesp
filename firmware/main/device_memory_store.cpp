@@ -45,7 +45,12 @@ void sort_entries(agent::MemorySnapshot &snapshot) {
 }  // namespace
 
 DeviceMemoryStore::~DeviceMemoryStore() {
+    set_change_callback(nullptr, nullptr);
     clear_turn_state();
+    if (callback_mutex_ != nullptr) {
+        vSemaphoreDelete(callback_mutex_);
+        callback_mutex_ = nullptr;
+    }
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
@@ -63,64 +68,111 @@ void DeviceMemoryStore::unlock() {
     }
 }
 
+bool DeviceMemoryStore::callback_lock() {
+    return callback_mutex_ != nullptr &&
+        xSemaphoreTake(callback_mutex_, portMAX_DELAY) == pdTRUE;
+}
+
+void DeviceMemoryStore::callback_unlock() {
+    if (callback_mutex_ != nullptr) {
+        xSemaphoreGive(callback_mutex_);
+    }
+}
+
 esp_err_t DeviceMemoryStore::initialize() {
     if (initialized_) {
-        return persistent_ ? ESP_OK : ESP_ERR_INVALID_STATE;
+        return ESP_OK;
     }
-    initialized_ = true;
-    mutex_ = xSemaphoreCreateMutex();
+    const bool created_mutex = mutex_ == nullptr;
+    if (created_mutex) {
+        mutex_ = xSemaphoreCreateMutex();
+    }
     if (mutex_ == nullptr) {
         return ESP_ERR_NO_MEM;
     }
-    snapshot_.clear();
-    snapshot_.fingerprint = agent::compute_memory_fingerprint(snapshot_);
+    if (callback_mutex_ == nullptr) {
+        callback_mutex_ = xSemaphoreCreateMutex();
+    }
+    if (callback_mutex_ == nullptr) {
+        if (created_mutex) {
+            vSemaphoreDelete(mutex_);
+            mutex_ = nullptr;
+        }
+        return ESP_ERR_NO_MEM;
+    }
+
     const esp_err_t init_result = nvs_flash_init();
     if (init_result != ESP_OK) {
         return init_result;
     }
-    persistent_ = true;
+
+    agent::MemorySnapshot loaded_snapshot;
+    loaded_snapshot.clear();
+    loaded_snapshot.fingerprint =
+        agent::compute_memory_fingerprint(loaded_snapshot);
+    std::uint8_t loaded_active_slot = 0;
     nvs_handle_t handle = 0;
     const esp_err_t open_result = nvs_open(kNamespace, NVS_READONLY, &handle);
     if (open_result == ESP_ERR_NVS_NOT_FOUND) {
+        snapshot_ = loaded_snapshot;
+        active_slot_ = loaded_active_slot;
+        persistent_ = true;
+        initialized_ = true;
         return ESP_OK;
     }
     if (open_result != ESP_OK) {
-        persistent_ = false;
         return open_result;
     }
     std::uint8_t active_slot = 0;
     esp_err_t result = nvs_get_u8(handle, kActiveKey, &active_slot);
     if (result == ESP_ERR_NVS_NOT_FOUND) {
         nvs_close(handle);
+        snapshot_ = loaded_snapshot;
+        active_slot_ = loaded_active_slot;
+        persistent_ = true;
+        initialized_ = true;
         return ESP_OK;
     }
     if (result != ESP_OK || (active_slot != 1 && active_slot != 2)) {
         nvs_close(handle);
-        persistent_ = result == ESP_OK;
-        return result == ESP_OK ? ESP_OK : result;
+        if (result != ESP_OK) {
+            return result;
+        }
+        snapshot_ = loaded_snapshot;
+        active_slot_ = loaded_active_slot;
+        persistent_ = true;
+        initialized_ = true;
+        return ESP_OK;
     }
     std::size_t size = 0;
     result = nvs_get_blob(handle, record_key(active_slot), nullptr, &size);
     if (result != ESP_OK || size > agent::max_encoded_memory_record_bytes) {
         nvs_close(handle);
-        persistent_ = result == ESP_OK || result == ESP_ERR_NVS_NOT_FOUND;
-        return result == ESP_OK || result == ESP_ERR_NVS_NOT_FOUND
-            ? ESP_OK
-            : result;
+        if (result != ESP_OK && result != ESP_ERR_NVS_NOT_FOUND) {
+            return result;
+        }
+        snapshot_ = loaded_snapshot;
+        active_slot_ = loaded_active_slot;
+        persistent_ = true;
+        initialized_ = true;
+        return ESP_OK;
     }
     agent::EncodedMemoryRecord encoded{};
     result = nvs_get_blob(
         handle, record_key(active_slot), encoded.data(), &size);
     nvs_close(handle);
     if (result != ESP_OK) {
-        persistent_ = false;
         return result;
     }
     agent::MemorySnapshot decoded;
     if (agent::decode_memory_record(encoded.data(), size, decoded)) {
-        snapshot_ = decoded;
-        active_slot_ = active_slot;
+        loaded_snapshot = decoded;
+        loaded_active_slot = active_slot;
     }
+    snapshot_ = loaded_snapshot;
+    active_slot_ = loaded_active_slot;
+    persistent_ = true;
+    initialized_ = true;
     return ESP_OK;
 }
 
@@ -207,9 +259,13 @@ bool DeviceMemoryStore::persist_locked(
 
 void DeviceMemoryStore::notify_change(
     const agent::MemorySnapshot &snapshot) {
+    if (!callback_lock()) {
+        return;
+    }
     if (change_callback_ != nullptr) {
         change_callback_(snapshot, change_context_);
     }
+    callback_unlock();
 }
 
 agent::Error DeviceMemoryStore::remember_locked(
@@ -551,10 +607,10 @@ agent::Error DeviceMemoryStore::clear_from_ble(
 
 void DeviceMemoryStore::set_change_callback(
     ChangeCallback callback, void *context) {
-    if (!lock()) return;
+    if (!callback_lock()) return;
     change_callback_ = callback;
     change_context_ = context;
-    unlock();
+    callback_unlock();
 }
 
 }  // namespace chatesp

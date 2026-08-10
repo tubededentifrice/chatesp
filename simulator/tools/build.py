@@ -111,6 +111,24 @@ def compile_target(
 
 def run_tests(simulator_binary: Path, test_binary: Path) -> None:
     subprocess.run([str(test_binary)], check=True, cwd=REPOSITORY_ROOT)
+    rejected_touch = subprocess.run(
+        [str(simulator_binary)],
+        input="ready\ntouch down 999 999\n",
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    rejected_records = [
+        json.loads(line) for line in rejected_touch.stdout.splitlines()
+    ]
+    if (
+        rejected_touch.returncode == 0
+        or len(rejected_records) != 2
+        or rejected_records[0].get("ok") is not True
+        or rejected_records[1].get("ok") is not False
+    ):
+        raise RuntimeError("Simulator accepted an invalid touch command")
     scenarios = sorted((SIMULATOR_ROOT / "scenarios").glob("*.sim"))
     if not scenarios:
         raise RuntimeError("No simulator scenarios are available")

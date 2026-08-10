@@ -159,7 +159,7 @@ The 36-byte request-start frame uses type `0x01`:
 | 10 | 4 | Complete envelope length, at most 1,100,000 |
 | 14 | 4 | Body length |
 | 18 | 4 | Maximum response length, at most 2,160,000 |
-| 22 | 4 | Total timeout in milliseconds |
+| 22 | 4 | Total timeout in milliseconds, 1 through 180,000 |
 | 26 | 1 | Method: `0` GET or `1` POST |
 | 27 | 1 | HTTPS redirect permission: `0` or `1` |
 | 28 | 1 | Maximum redirects, zero through two |
@@ -183,6 +183,10 @@ cannot contain a control byte.
 The app uses an ephemeral URL session. It does not use the URL cache or shared
 cookies. It applies the same URL rules to each redirect and follows no more
 than the request limit. It buffers no more than the declared response limit.
+It rejects a total timeout above the 180-second product request limit. Each
+local proxy operation has a separate identity. A callback from a canceled
+operation cannot change a newer operation, including when the device reuses a
+request ID.
 For an `audio/pcm` response with a valid `Content-Length`, it sends the response
 head at once and forwards bounded data chunks while the HTTPS body arrives. It
 checks that the final byte count equals the declared length. It keeps the
@@ -207,6 +211,11 @@ leaving the device in a response timeout. A 14-byte response-end frame uses
 type `0x13`; offset 10 contains the complete response length. A response-error
 frame uses type `0x14`; offset 10 contains `1` for a timeout, `2` for an
 excessive response, or `3` for another link or request error.
+After the first response frame is ready, the app gives the complete BLE
+response 180 seconds. This limit permits the maximum 2,160,000-byte response.
+If write readiness or a confirmed boundary response does not arrive in this
+time, the app clears the operation and its background task and disconnects the
+stalled link.
 
 The device validates each request ID, frame length, offset, declared response
 length, HTTP status, content type, and completion length. A missing, malformed,
@@ -316,6 +325,13 @@ writes the changed settings and metadata to plaintext NVS as one logical
 transaction. It must verify durable storage before it sends `applied`. A repeat
 with the same revision and fingerprint sends `unchanged` and causes no NVS
 write. A validation or storage error must not make a partial setting set active.
+Only the NimBLE `BLE_HS_EDONE` indication result confirms an `applied` or
+`unchanged` acknowledgement and opens the runtime settings-apply gate. Another
+completion result, an acknowledgement-buffer allocation failure, or an
+immediate indication-send failure uses at most three delivery attempts with a
+100-millisecond gap. A disconnect or exhausted retry keeps the apply gate
+closed until a later matching acknowledgement is confirmed. BLE shutdown
+cancels the retry and clears the gate as part of full runtime shutdown.
 The production profile does not use the ESP32-S3 HMAC NVS security provider.
 It must not enable NVS encryption because HMAC key setup can burn an eFuse.
 This means a person with physical flash access can read stored credentials.

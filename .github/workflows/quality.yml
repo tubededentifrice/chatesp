@@ -33,3 +33,50 @@ jobs:
         run: uv run --locked python -m unittest discover -s tests -p 'test_*.py'
       - name: Scan commit candidates for secrets
         run: uv run --locked python tools/check_secrets.py
+
+  linux-product:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: true
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          enable-cache: false
+          version: "0.11.32"
+      - name: Install locked tools
+        run: uv sync --locked
+      - name: Run native firmware tests
+        run: uv run --locked python tools/pio.py test -e native
+      - name: Build watch development firmware
+        run: uv run --locked python tools/pio.py run -e watch_dev
+      - name: Run the sanitized product simulator
+        run: uv run --locked python simulator/tools/build.py --test --sanitize
+
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build the unsigned iOS app
+        run: >-
+          xcodebuild
+          -project ios/ChatESP.xcodeproj
+          -scheme ChatESP
+          -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Run the iOS test bundle
+        run: >-
+          xcodebuild
+          -project ios/ChatESP.xcodeproj
+          -scheme ChatESP
+          -configuration Debug
+          -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+          CODE_SIGNING_ALLOWED=NO
+          test

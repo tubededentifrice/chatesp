@@ -349,10 +349,14 @@ void test_indication_gate_keeps_settings_until_confirmation() {
     TEST_ASSERT_EQUAL_size_t(settings.size(), size);
     TEST_ASSERT_EQUAL_UINT8_ARRAY(settings.data(), data, size);
 
+    TEST_ASSERT_TRUE(gate.begin_attempt());
     TEST_ASSERT_TRUE(gate.mark_sent());
     TEST_ASSERT_TRUE(gate.in_flight());
     TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
-    TEST_ASSERT_TRUE(gate.complete());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            provisioning::IndicationDeliveryAction::settings_confirmed),
+        static_cast<int>(gate.complete(true)));
     TEST_ASSERT_FALSE(gate.waiting());
     TEST_ASSERT_FALSE(gate.in_flight());
     TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
@@ -379,6 +383,8 @@ void test_indication_gate_does_not_replace_a_pending_acknowledgement() {
     TEST_ASSERT_EQUAL_size_t(settings.size(), size);
     TEST_ASSERT_EQUAL_UINT8_ARRAY(settings.data(), data, size);
     TEST_ASSERT_TRUE(gate.clear_connection(4));
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+    gate.reset();
     TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
 }
 
@@ -389,6 +395,7 @@ void test_indication_gate_queues_settings_behind_an_active_context() {
     TEST_ASSERT_TRUE(gate.enqueue(
         4, provisioning::IndicationKind::device_context,
         context.data(), context.size(), false));
+    TEST_ASSERT_TRUE(gate.begin_attempt());
     TEST_ASSERT_TRUE(gate.mark_sent());
     TEST_ASSERT_TRUE(gate.enqueue(
         4, provisioning::IndicationKind::settings,
@@ -397,10 +404,16 @@ void test_indication_gate_queues_settings_behind_an_active_context() {
     TEST_ASSERT_TRUE(gate.waiting());
     TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
 
-    TEST_ASSERT_FALSE(gate.complete());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(provisioning::IndicationDeliveryAction::complete),
+        static_cast<int>(gate.complete(true)));
     TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+    TEST_ASSERT_TRUE(gate.begin_attempt());
     TEST_ASSERT_TRUE(gate.mark_sent());
-    TEST_ASSERT_TRUE(gate.complete());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            provisioning::IndicationDeliveryAction::settings_confirmed),
+        static_cast<int>(gate.complete(true)));
     TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
 }
 
@@ -412,6 +425,7 @@ void test_indication_gate_replaces_waiting_context_with_settings() {
     TEST_ASSERT_TRUE(gate.enqueue(
         4, provisioning::IndicationKind::device_context,
         active_context.data(), active_context.size(), false));
+    TEST_ASSERT_TRUE(gate.begin_attempt());
     TEST_ASSERT_TRUE(gate.mark_sent());
     TEST_ASSERT_TRUE(gate.enqueue(
         4, provisioning::IndicationKind::device_context,
@@ -426,6 +440,129 @@ void test_indication_gate_replaces_waiting_context_with_settings() {
     TEST_ASSERT_TRUE(gate.pending(connection_handle, data, size));
     TEST_ASSERT_EQUAL_size_t(settings.size(), size);
     TEST_ASSERT_EQUAL_UINT8_ARRAY(settings.data(), data, size);
+}
+
+void test_settings_indication_retries_failed_confirmations_with_a_bound() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 4> settings{1, 2, 3, 4};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        9, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+
+    for (std::uint8_t attempt = 1;
+         attempt <= provisioning::IndicationGate::kMaximumAttempts;
+         ++attempt) {
+        TEST_ASSERT_TRUE(gate.begin_attempt());
+        TEST_ASSERT_TRUE(gate.mark_sent());
+        const auto expected =
+            attempt < provisioning::IndicationGate::kMaximumAttempts
+            ? provisioning::IndicationDeliveryAction::settings_retry
+            : provisioning::IndicationDeliveryAction::settings_failed;
+        TEST_ASSERT_EQUAL_INT(
+            static_cast<int>(expected),
+            static_cast<int>(gate.complete(false)));
+        TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+    }
+
+    TEST_ASSERT_FALSE(gate.waiting());
+    TEST_ASSERT_FALSE(gate.in_flight());
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+}
+
+void test_settings_indication_retries_immediate_send_failures_with_a_bound() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 4> settings{1, 2, 3, 4};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        9, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+
+    for (std::uint8_t attempt = 1;
+         attempt <= provisioning::IndicationGate::kMaximumAttempts;
+         ++attempt) {
+        TEST_ASSERT_TRUE(gate.begin_attempt());
+        const auto expected =
+            attempt < provisioning::IndicationGate::kMaximumAttempts
+            ? provisioning::IndicationDeliveryAction::settings_retry
+            : provisioning::IndicationDeliveryAction::settings_failed;
+        TEST_ASSERT_EQUAL_INT(
+            static_cast<int>(expected),
+            static_cast<int>(gate.send_failed()));
+        TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+    }
+
+    TEST_ASSERT_FALSE(gate.waiting());
+    TEST_ASSERT_FALSE(gate.in_flight());
+    TEST_ASSERT_TRUE(gate.enqueue(
+        10, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+    TEST_ASSERT_TRUE(gate.begin_attempt());
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            provisioning::IndicationDeliveryAction::settings_confirmed),
+        static_cast<int>(gate.complete(true)));
+    TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
+}
+
+void test_delivery_reset_keeps_the_apply_gate_closed_until_full_reset() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 4> settings{1, 2, 3, 4};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        9, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+    TEST_ASSERT_TRUE(gate.begin_attempt());
+    TEST_ASSERT_TRUE(gate.mark_sent());
+
+    gate.reset_delivery();
+    TEST_ASSERT_FALSE(gate.waiting());
+    TEST_ASSERT_FALSE(gate.in_flight());
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+
+    TEST_ASSERT_TRUE(gate.enqueue(
+        10, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+    TEST_ASSERT_TRUE(gate.begin_attempt());
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            provisioning::IndicationDeliveryAction::settings_confirmed),
+        static_cast<int>(gate.complete(true)));
+    TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
+
+    TEST_ASSERT_TRUE(gate.enqueue(
+        10, provisioning::IndicationKind::settings,
+        settings.data(), settings.size(), true));
+    gate.reset();
+    TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
+}
+
+void test_confirmed_settings_keeps_a_second_settings_confirmation_pending() {
+    provisioning::IndicationGate gate;
+    const std::array<std::uint8_t, 4> first{1, 2, 3, 4};
+    const std::array<std::uint8_t, 4> second{5, 6, 7, 8};
+    TEST_ASSERT_TRUE(gate.enqueue(
+        9, provisioning::IndicationKind::settings,
+        first.data(), first.size(), true));
+    TEST_ASSERT_TRUE(gate.begin_attempt());
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_TRUE(gate.enqueue(
+        9, provisioning::IndicationKind::settings,
+        second.data(), second.size(), true));
+
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            provisioning::IndicationDeliveryAction::settings_confirmed),
+        static_cast<int>(gate.complete(true)));
+    TEST_ASSERT_TRUE(gate.settings_confirmation_pending());
+    TEST_ASSERT_TRUE(gate.waiting());
+
+    TEST_ASSERT_TRUE(gate.begin_attempt());
+    TEST_ASSERT_TRUE(gate.mark_sent());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            provisioning::IndicationDeliveryAction::settings_confirmed),
+        static_cast<int>(gate.complete(true)));
+    TEST_ASSERT_FALSE(gate.settings_confirmation_pending());
 }
 
 void test_indication_gate_rejects_invalid_payloads() {
@@ -458,6 +595,10 @@ int main(int, char **) {
     RUN_TEST(test_indication_gate_does_not_replace_a_pending_acknowledgement);
     RUN_TEST(test_indication_gate_queues_settings_behind_an_active_context);
     RUN_TEST(test_indication_gate_replaces_waiting_context_with_settings);
+    RUN_TEST(test_settings_indication_retries_failed_confirmations_with_a_bound);
+    RUN_TEST(test_settings_indication_retries_immediate_send_failures_with_a_bound);
+    RUN_TEST(test_delivery_reset_keeps_the_apply_gate_closed_until_full_reset);
+    RUN_TEST(test_confirmed_settings_keeps_a_second_settings_confirmation_pending);
     RUN_TEST(test_indication_gate_rejects_invalid_payloads);
     return UNITY_END();
 }

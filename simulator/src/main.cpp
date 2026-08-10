@@ -261,12 +261,14 @@ CommandResult process_command(Simulator &simulator, std::string_view line) {
         const auto bounded_x = static_cast<std::int16_t>(x);
         const auto bounded_y = static_cast<std::int16_t>(y);
         if (action == "down") {
-            (void)simulator.touch_down(bounded_x, bounded_y);
-            return CommandResult::accepted;
+            return simulator.touch_down(bounded_x, bounded_y)
+                ? CommandResult::accepted
+                : CommandResult::rejected;
         }
         if (action == "up") {
-            (void)simulator.touch_up(bounded_x, bounded_y);
-            return CommandResult::accepted;
+            return simulator.touch_up(bounded_x, bounded_y)
+                ? CommandResult::accepted
+                : CommandResult::rejected;
         }
         return CommandResult::rejected;
     }

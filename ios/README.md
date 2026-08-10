@@ -60,8 +60,11 @@ follows no more than the device-specified two-redirect limit. It sends bulk
 response data with Core Bluetooth write-without-response flow control. It
 confirms response boundary frames. It forwards bounded `audio/pcm` data while
 a declared-length HTTPS body arrives. It keeps other responses bounded before
-transfer. If this proxy is not ready, the firmware uses its configured Wi-Fi
-path.
+transfer. A device timeout cannot exceed the 180-second product request limit.
+Each local operation has a separate identity. The complete BLE response has a
+180-second limit after its first response frame is ready. A stalled response
+clears its background task and disconnects the link. If this proxy is not
+ready, the firmware uses its configured Wi-Fi path.
 
 If the app lost its local revision record, current firmware can return the
 active revision and fingerprint in a flagged error.
@@ -73,7 +76,8 @@ offset, and a position rounded to 0.1 degree when the device connects and at
 most once per hour while connected. Significant-location monitoring runs only
 when the user already gave Always location access. With While Using the App access,
 the app requests one location while it is active. The live location stays in
-memory and is not saved in the preferences record.
+memory and is not saved in the preferences record. The hourly timer does not
+request a live location while the selected device is disconnected.
 
 While the selected ChatESP device is connected, the app can list, add, delete,
 and clear its saved memories. The ChatESP device is the only source of truth.

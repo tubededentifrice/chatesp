@@ -875,6 +875,38 @@ final class ProvisioningProtocolTests: XCTestCase {
         XCTAssertThrowsError(try assembler.consume(data))
     }
 
+    func testPhoneProxyRejectsTimeoutAboveProductRequestLimit() throws {
+        func startFrame(timeoutMilliseconds: UInt32) -> Data {
+            let url = Data("https://example.test".utf8)
+            var frame = PhoneProxyProtocolV1.commonFrame(
+                type: .requestStart, requestID: 4)
+            frame.appendBigEndian(UInt32(url.count))
+            frame.appendBigEndian(UInt32(0))
+            frame.appendBigEndian(UInt32(100))
+            frame.appendBigEndian(timeoutMilliseconds)
+            frame.append(0)
+            frame.append(0)
+            frame.append(0)
+            frame.append(0)
+            frame.appendBigEndian(UInt16(url.count))
+            frame.appendBigEndian(UInt32(url.count))
+            return frame
+        }
+
+        XCTAssertEqual(
+            PhoneProxyProtocolV1.maximumRequestTimeoutMilliseconds,
+            180_000)
+        var maximumAssembler = PhoneProxyRequestAssembler()
+        XCTAssertNil(try maximumAssembler.consume(startFrame(
+            timeoutMilliseconds:
+                PhoneProxyProtocolV1.maximumRequestTimeoutMilliseconds)))
+
+        var excessiveAssembler = PhoneProxyRequestAssembler()
+        XCTAssertThrowsError(try excessiveAssembler.consume(startFrame(
+            timeoutMilliseconds:
+                PhoneProxyProtocolV1.maximumRequestTimeoutMilliseconds + 1)))
+    }
+
     func testPhoneProxyResponseFramesCarryOffsetsAndLengths() throws {
         let head = try PhoneProxyProtocolV1.responseHead(
             requestID: 9,

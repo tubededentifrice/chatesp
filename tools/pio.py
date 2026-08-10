@@ -18,6 +18,11 @@ from pathlib import Path
 
 import fcntl
 
+if __package__:
+    from tools.project_version import current_project_version
+else:
+    from project_version import current_project_version  # type: ignore[no-redef]
+
 
 IDF_ENV_VERSION = "1.0.0"
 IDF_FRAMEWORK_VERSION = "5.5.3"
@@ -133,18 +138,6 @@ def remove_stale_version_watch_builds(
             shutil.rmtree(build_dir)
             removed.append(profile)
     return removed
-
-
-def current_project_version(root: Path) -> str:
-    """Return the Git version that ESP-IDF puts in the application image."""
-    result = subprocess.run(
-        ["git", "describe", "--always", "--tags", "--dirty"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 def dependency_policy_digest(root: Path) -> str:

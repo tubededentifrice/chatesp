@@ -47,6 +47,8 @@ public:
 private:
     bool lock();
     void unlock();
+    bool callback_lock();
+    void callback_unlock();
     void fill_result_locked(
         agent::MemoryMutationStatus status,
         agent::MemoryMutationResult &result, std::uint32_t id = 0,
@@ -70,6 +72,7 @@ private:
     agent::MemorySnapshot snapshot_{};
     agent::FixedText<agent::Limits::max_memory_fact_bytes> pending_fact_;
     SemaphoreHandle_t mutex_ = nullptr;
+    SemaphoreHandle_t callback_mutex_ = nullptr;
     ChangeCallback change_callback_ = nullptr;
     void *change_context_ = nullptr;
     bool initialized_ = false;
