@@ -383,6 +383,15 @@ within 4,096 bytes. It marks printed text as truncated if JSON escaping cannot
 fit the complete bounded output. A failed optional Python heap allocation
 removes this tool but does not disable the other voice tools.
 
+The model route uses a structured plot action instead of generated Python
+syntax. It supplies 2 through 24 matching literal x and y points plus an
+optional printable ASCII title. A null y point makes a gap. The tool validates
+strictly increasing x points, matching lengths, finite values, the title, and
+at least one line segment before
+it publishes plot data. Thus, a model cannot use the route response budget on
+unavailable imports or invalid loop syntax. The interpreter keeps its separate
+1,024-byte hard source limit for other bounded calculations.
+
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
 
@@ -502,7 +511,7 @@ normal answer must fit a spoken interaction.
 
 ## Tools
 
-Version 1 has twelve tools:
+Version 1 has thirteen tools:
 
 - `search_web(query)`: returns a small list of titles, URLs, and snippets.
 - `search_images(query)`: returns a small list with short result IDs.
@@ -513,11 +522,14 @@ Version 1 has twelve tools:
 - `power_off()`: schedules power-off only after an explicit current request.
 - `restart_device()`: schedules a software restart only after an explicit
   current request.
-- `run_python(code)`: runs bounded MicroPython for short calculations. Printed
-  text enters the tool result. `plot.line(x, y, title)` can select one line
-  plot with 2 through 128 entries and a title of at most 48 bytes. Each x value
-  and each defined y value must be finite. A `None` y value makes a gap for an
-  undefined function value, such as zero in a plot of `1/x`.
+- `run_python(code)`: runs bounded MicroPython code for short calculations.
+  Printed calculation text enters the tool result. Code can also use the
+  internal plot store with 2 through 128 entries.
+- `plot_line(plot)`: validates one structured line plot without generated
+  Python syntax. A model plot has 2 through 24 increasing literal entries and a
+  printable ASCII title of at most 48 bytes. Each x value and each defined y
+  value must be finite. A null y value makes a gap for an undefined function
+  value, such as zero in a plot of `1/x`.
 - `remember_memory(fact)`: saves one concise fact only after an explicit user
   request. An exact duplicate returns `unchanged` without a write.
 - `forget_memory(id)`: removes one fact by the ID in the current prompt.
@@ -569,18 +581,27 @@ removes the old result set, and a selection can be used only once. If the model
 starts its final answer after only a successful search, the firmware selects
 the first current result once so the requested image still appears.
 
-After model selection, the device can get the selected Brave thumbnail from
-the trusted `imgs.search.brave.com` proxy. It does not send a credential with
-this request and it does not follow a redirect. The
-download has a 768 KiB limit and a 20-second provider limit inside the full
-180-second interaction limit.
+Image search keeps only unique HTTPS thumbnails from the exact trusted
+`imgs.search.brave.com` proxy. After model selection, the selected result is
+first in a bounded candidate list and the other results keep provider rank. If
+there is no explicit selection, the provider order stays unchanged. The device
+tries at most three candidates under one shared 20-second monotonic budget.
+Each candidate gets one transport attempt and only the remaining part of that
+budget. The device does not send a credential with these requests and does not
+follow a redirect. Each download also has a 768 KiB limit. The response accepts
+the JPEG media type without case sensitivity and permits valid media-type
+parameters, then verifies the JPEG bytes and dimensions.
 
 Version 1 accepts baseline sequential JPEG with dimensions up to 2,048 by
 2,048. It rejects progressive JPEG, PNG, WebP, CMYK JPEG, and other unsupported
 data. The ROM decoder scales and center-crops the image into one fixed 368 by
 448 RGB565 PSRAM frame. It scales up a small image to cover the display. The
 image stays on the full screen until the next button action or sleep. An image
-error does not change a successful text or spoken answer.
+error does not change a successful text or spoken answer. If all candidates
+fail, or if the display cannot publish the decoded frame, the answer stays
+visible with an `IMAGE UNAVAILABLE` notice. Image work
+normally starts after speech playback starts. If speech fails before playback,
+image work can start after the speech worker releases its resources.
 
 A successful Python plot appears after the spoken answer. It uses a black
 full-screen chart with a white line and bounded axis ranges. The plot stays

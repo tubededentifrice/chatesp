@@ -364,6 +364,12 @@ The connected V2 board must pass these checks for this control change:
 The full-screen image path must pass these checks on the V2 AMOLED:
 
 - a selected baseline JPEG fills the screen with a centered cover crop;
+- an invalid first thumbnail falls through to a later trusted current result,
+  and all candidates share one 20-second limit;
+- a valid JPEG media type with case changes or parameters is accepted;
+- after all bounded candidates fail, the text answer stays visible with a
+  clear image-unavailable notice;
+- an image can still appear when speech fails before playback starts;
 - a successful image search that has no second model selection shows the first
   current result instead of only claiming that an image is visible;
 - red, green, and blue test areas have the correct color and byte order;

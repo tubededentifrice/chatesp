@@ -1,7 +1,6 @@
 #include "chatesp/image_layout.hpp"
 
 #include <algorithm>
-#include <cstring>
 #include <limits>
 
 namespace chatesp {
@@ -94,13 +93,6 @@ std::uint16_t rgb888_to_rgb565(
 std::uint16_t rom_rgb888_to_rgb565(
     std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
     return rgb888_to_rgb565(red, green, blue);
-}
-
-bool is_trusted_brave_thumbnail_url(const char *url) {
-    constexpr char origin[] = "https://imgs.search.brave.com";
-    constexpr std::size_t origin_size = sizeof(origin) - 1U;
-    return url != nullptr && std::strncmp(url, origin, origin_size) == 0 &&
-        url[origin_size] == '/';
 }
 
 namespace {

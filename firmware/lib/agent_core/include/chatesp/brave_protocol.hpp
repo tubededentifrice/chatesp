@@ -28,5 +28,9 @@ Error parse_brave_web_response(
 Error parse_brave_image_response(
     const char *json, std::size_t size, ImageResults &results);
 
+[[nodiscard]] bool is_trusted_brave_thumbnail_url(const char *url);
+[[nodiscard]] bool is_trusted_brave_thumbnail_url(
+    const char *url, std::size_t size);
+
 }  // namespace agent
 }  // namespace chatesp

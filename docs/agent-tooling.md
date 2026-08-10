@@ -63,6 +63,28 @@ The simulator compiles the real portable app, packet, transfer, settings, and
 provisioning-session code. It does not compile ESP-IDF or NimBLE. A local pass
 does not close a physical board or iPhone gate.
 
+## Check the live model route
+
+Use the ignored `.secrets/device.env` values to run the exact checked-in model
+route contract against OpenRouter:
+
+```sh
+uv run --locked python tools/model_conformance.py --trials 10
+```
+
+The command derives the prompt, default model, registered tools, descriptions,
+and schemas from the firmware source. It uses the firmware streaming request
+shape. Each trial checks the exact French reciprocal-plot and red-apple image
+requests. It also checks image result selection with current result IDs. Output
+contains only trial numbers, tool names, argument-valid flags, and fixed error
+categories. It does not print prompts, generated code, search queries, answers,
+or credentials.
+
+Use `--model PROVIDER/MODEL` for a bounded comparison. A pass requires all
+three route checks in all trials to pass. This command does not run speech
+recognition, the device MicroPython engine, Brave Search, JPEG decode, speech,
+or the AMOLED. Run their native and physical gates separately.
+
 ## Improve a repeatable workflow
 
 When a tool or workflow fails:

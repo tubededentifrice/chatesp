@@ -21,7 +21,7 @@ struct Limits {
     static constexpr std::size_t max_chat_request_bytes = 32'768;
     static constexpr std::size_t max_chat_response_bytes = 128'000;
     static constexpr std::size_t max_sse_line_bytes = 16'384;
-    static constexpr std::size_t max_tool_count = 12;
+    static constexpr std::size_t max_tool_count = 13;
     static constexpr std::size_t max_tool_rounds = 3;
     static constexpr std::size_t max_tool_name_bytes = 32;
     static constexpr std::size_t max_tool_description_bytes = 192;
@@ -55,6 +55,7 @@ struct Limits {
     static constexpr std::uint32_t max_image_dimension = 2'048;
     static constexpr std::uint8_t max_image_redirects = 2;
     static constexpr std::size_t max_tts_pcm_bytes = 2'160'000;
+    static constexpr std::uint16_t max_route_output_tokens = 192;
     static constexpr std::uint16_t max_chat_output_tokens = 160;
 };
 

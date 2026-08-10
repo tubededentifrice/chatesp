@@ -76,6 +76,8 @@ public:
     }
     [[nodiscard]] bool take_selected(ImageResult &result);
     [[nodiscard]] bool take_selected_or_first(ImageResult &result);
+    [[nodiscard]] bool take_selected_or_first_candidates(
+        ImageResults &results);
     [[nodiscard]] bool has_pending_image() const;
     void clear_results();
 
@@ -106,6 +108,23 @@ public:
 
 private:
     PythonExecutionProvider &provider_;
+    PlotData pending_plot_;
+};
+
+class PlotLineTool final : public Tool {
+public:
+    [[nodiscard]] const char *name() const override;
+    [[nodiscard]] const char *description() const override;
+    [[nodiscard]] const char *parameters_schema() const override;
+    [[nodiscard]] bool ends_tool_sequence() const override { return true; }
+    Error execute(
+        const char *arguments, std::size_t size,
+        FixedText<Limits::max_tool_result_bytes> &result,
+        CancellationToken &cancellation) override;
+    [[nodiscard]] bool take_plot(PlotData &plot);
+    void clear_plot();
+
+private:
     PlotData pending_plot_;
 };
 

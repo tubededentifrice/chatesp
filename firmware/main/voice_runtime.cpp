@@ -103,6 +103,8 @@ constexpr UBaseType_t kNetworkWarmPriority = 3;
 constexpr std::uint32_t kNetworkWarmStackBytes = 6 * 1024;
 constexpr UBaseType_t kImagePriority = 3;
 constexpr std::uint32_t kImageStackBytes = 20 * 1024;
+constexpr std::size_t kMaximumImageCandidateAttempts = 3;
+constexpr std::uint32_t kImageCandidateBudgetMs = 20'000;
 constexpr UBaseType_t kNetworkContextPriority = 3;
 constexpr std::uint32_t kNetworkContextStackBytes = 20 * 1024;
 constexpr std::uint64_t kMinimumValidEpochSeconds = 1'577'836'800ULL;
@@ -189,7 +191,7 @@ private:
 class DeadlineCancellation final : public agent::CancellationToken {
 public:
     DeadlineCancellation(
-        AtomicCancellation &source, std::uint32_t started_ms,
+        agent::CancellationToken &source, std::uint32_t started_ms,
         std::uint32_t timeout_ms)
         : source_(source), deadline_(started_ms, timeout_ms) {}
 
@@ -206,7 +208,7 @@ public:
     }
 
 private:
-    AtomicCancellation &source_;
+    agent::CancellationToken &source_;
     runtime::MonotonicDeadline deadline_;
 };
 
@@ -435,6 +437,7 @@ public:
           web_tool_(web_provider_),
           image_tool_(image_provider_),
           python_tool_(python_executor_),
+          plot_tool_(),
           device_status_tool_(device_control_),
           brightness_tool_(device_control_),
           volume_tool_(device_control_),
@@ -457,6 +460,7 @@ public:
             tools_.add(image_tool_) == agent::Error::none &&
             (!python_executor_.available() ||
              tools_.add(python_tool_) == agent::Error::none) &&
+            tools_.add(plot_tool_) == agent::Error::none &&
             tools_.add(device_status_tool_) == agent::Error::none &&
             tools_.add(brightness_tool_) == agent::Error::none &&
             tools_.add(volume_tool_) == agent::Error::none &&
@@ -730,8 +734,12 @@ public:
             case agent::AgentProgressEvent::speech_start:
                 timing_.mark(runtime::TurnPhase::playback_start, now_ms);
                 interaction_.speech_started(now_ms);
+                speech_started_for_turn_.store(
+                    true, std::memory_order_release);
                 show_state(interaction_.state());
-                start_image_worker();
+                if (speech_cancellation_ != nullptr) {
+                    start_image_worker(*speech_cancellation_);
+                }
                 break;
         }
     }
@@ -818,14 +826,13 @@ private:
         static_cast<Impl *>(context)->run_network_context_worker();
     }
 
-    void start_image_worker() {
-        if (image_task_ != nullptr || speech_cancellation_ == nullptr ||
-            speech_events_ == nullptr ||
-            selected_image_result_.thumbnail_url.empty()) {
+    void start_image_worker(DeadlineCancellation &cancellation) {
+        if (image_task_ != nullptr || speech_events_ == nullptr ||
+            image_candidates_.size == 0) {
             return;
         }
         image_frame_.reset();
-        image_cancellation_ = speech_cancellation_;
+        image_cancellation_ = &cancellation;
         image_error_.store(agent::Error::none, std::memory_order_release);
         xEventGroupClearBits(speech_events_, kImageDoneBit);
         const BaseType_t created = xTaskCreatePinnedToCore(
@@ -834,40 +841,104 @@ private:
         if (created != pdPASS) {
             image_task_ = nullptr;
             image_cancellation_ = nullptr;
-            selected_image_result_.clear();
+            image_candidates_.clear();
+            image_error_.store(
+                agent::Error::model_failed, std::memory_order_release);
+            image_unavailable_.store(true, std::memory_order_release);
         }
+    }
+
+    void clear_runtime_image_state() {
+        image_candidates_.clear();
+        image_frame_.reset();
+        image_error_.store(agent::Error::none, std::memory_order_release);
+        image_requested_.store(false, std::memory_order_release);
+        image_unavailable_.store(false, std::memory_order_release);
+    }
+
+    void clear_all_image_state() {
+        image_transport_.cancel_active();
+        join_image_worker();
+        image_tool_.clear_results();
+        clear_runtime_image_state();
     }
 
     void prepare_visual() {
         pending_plot_.clear();
-        selected_image_result_.clear();
-        image_frame_.reset();
-        if (python_tool_.take_plot(pending_plot_)) {
+        clear_runtime_image_state();
+        if (plot_tool_.take_plot(pending_plot_) ||
+            python_tool_.take_plot(pending_plot_)) {
             return;
         }
-        (void)image_tool_.take_selected_or_first(selected_image_result_);
+        const bool requested =
+            image_tool_.take_selected_or_first_candidates(image_candidates_);
+        image_requested_.store(requested, std::memory_order_release);
     }
 
     void run_image_worker() {
         agent::Error error = agent::Error::model_failed;
         if (image_cancellation_ != nullptr) {
-            image::JpegImageSink sink(*image_cancellation_);
-            const agent::ImageFetchRequest request{
-                selected_image_result_.thumbnail_url.c_str(),
-                agent::Limits::max_image_download_bytes,
-                agent::Limits::max_image_dimension,
-                0,
-                agent::image_fetch_policy(),
-            };
-            error = image_fetch_provider_.fetch(
-                request, sink, *image_cancellation_);
-            if (error == agent::Error::none && sink.ready()) {
-                image_frame_ = sink.take_frame();
-            } else if (error == agent::Error::none) {
-                error = agent::Error::malformed_response;
+            const std::uint32_t started_ms = monotonic_ms();
+            DeadlineCancellation image_deadline(
+                *image_cancellation_, started_ms,
+                kImageCandidateBudgetMs);
+            const std::size_t attempt_count = std::min(
+                image_candidates_.size, kMaximumImageCandidateAttempts);
+            for (std::size_t index = 0; index < attempt_count; ++index) {
+                if (image_deadline.cancelled()) {
+                    error = image_deadline.normalize(
+                        agent::Error::cancelled);
+                    break;
+                }
+                const std::uint32_t elapsed_ms =
+                    monotonic_ms() - started_ms;
+                if (elapsed_ms >= kImageCandidateBudgetMs) {
+                    error = agent::Error::total_timeout;
+                    break;
+                }
+                const std::uint32_t remaining_budget_ms =
+                    kImageCandidateBudgetMs - elapsed_ms;
+                agent::RequestPolicy policy = agent::image_fetch_policy();
+                policy.connect_timeout_ms = std::min(
+                    policy.connect_timeout_ms, remaining_budget_ms);
+                policy.first_byte_timeout_ms = std::min(
+                    policy.first_byte_timeout_ms, remaining_budget_ms);
+                policy.idle_timeout_ms = std::min(
+                    policy.idle_timeout_ms, remaining_budget_ms);
+                policy.total_timeout_ms = remaining_budget_ms;
+                policy.max_attempts = 1;
+
+                image::JpegImageSink sink(image_deadline);
+                const agent::ImageFetchRequest request{
+                    image_candidates_.items[index].thumbnail_url.c_str(),
+                    agent::Limits::max_image_download_bytes,
+                    agent::Limits::max_image_dimension,
+                    0,
+                    policy,
+                };
+                error = image_fetch_provider_.fetch(
+                    request, sink, image_deadline);
+                if (error == agent::Error::none &&
+                    image_deadline.cancelled()) {
+                    error = image_deadline.normalize(
+                        agent::Error::cancelled);
+                }
+                if (error == agent::Error::none && sink.ready()) {
+                    image_frame_ = sink.take_frame();
+                    break;
+                }
+                if (error == agent::Error::none) {
+                    error = agent::Error::malformed_response;
+                }
+                if (error == agent::Error::cancelled ||
+                    image_deadline.cancelled()) {
+                    error = image_deadline.normalize(
+                        agent::Error::cancelled);
+                    break;
+                }
             }
         }
-        selected_image_result_.clear();
+        image_candidates_.clear();
         image_error_.store(error, std::memory_order_release);
         xEventGroupSetBits(speech_events_, kImageDoneBit);
         vTaskDelete(nullptr);
@@ -885,7 +956,10 @@ private:
             image_error_.load(std::memory_order_acquire);
         if (image_frame_.available()) {
             timing_.mark(runtime::TurnPhase::image_ready, monotonic_ms());
-        } else if (error != agent::Error::cancelled) {
+        } else if (
+            image_requested_.load(std::memory_order_acquire) &&
+            error != agent::Error::cancelled) {
+            image_unavailable_.store(true, std::memory_order_release);
             ESP_LOGW(
                 kTag, "Optional image was not available (category %u)",
                 static_cast<unsigned>(error));
@@ -1119,6 +1193,7 @@ private:
             return false;
         }
         speech_segmenter_.reset();
+        speech_started_for_turn_.store(false, std::memory_order_release);
         xEventGroupClearBits(speech_events_, kSpeechDoneBit);
         speech_cancellation_ = &cancellation;
         speech_result_.store(
@@ -1315,10 +1390,9 @@ private:
         interaction_.ready(now_ms);
         previous_state_ = interaction_.state();
         agent_loop_->clear_thread();
-        image_tool_.clear_results();
+        clear_all_image_state();
         python_tool_.clear_plot();
-        selected_image_result_.clear();
-        image_frame_.reset();
+        plot_tool_.clear_plot();
         pending_plot_.clear();
         const bool local_time_ready = utc_clock_.has_local_time();
         const bool wifi_configured = settings_.has_wifi_credentials();
@@ -2001,7 +2075,9 @@ private:
     void begin_recording(std::uint32_t now_ms) {
         pcm_sink_.cancel_and_stop();
         capture_.discard();
+        clear_all_image_state();
         python_tool_.clear_plot();
+        plot_tool_.clear_plot();
         pending_plot_.clear();
         cancellation_.reset();
         if (capture_.start() != ESP_OK) {
@@ -2190,15 +2266,14 @@ private:
         memory_store_.clear_turn_state();
         image_tool_.clear_results();
         python_tool_.clear_plot();
+        plot_tool_.clear_plot();
         error = request_cancellation.normalize(error);
         if (error != agent::Error::none) {
-            image_transport_.cancel_active();
             speech_segmenter_.reset();
             speech_channel_.discard_pending_and_finish();
             const agent::Error speech_error = wait_for_speech_worker();
             (void)speech_error;
-            join_image_worker();
-            image_frame_.reset();
+            clear_all_image_state();
             pending_plot_.clear();
             if (device_control_.power_off_pending() &&
                 !cancellation_.cancelled()) {
@@ -2238,6 +2313,7 @@ private:
             speech_channel_.cancel();
             const agent::Error speech_error = wait_for_speech_worker();
             (void)speech_error;
+            clear_all_image_state();
             if (device_control_.power_off_pending() &&
                 !cancellation_.cancelled()) {
                 finish_model_power_off();
@@ -2259,6 +2335,14 @@ private:
 
         error = request_cancellation.normalize(wait_for_speech_worker());
         timing_.mark(runtime::TurnPhase::playback_finish, monotonic_ms());
+        if (error != agent::Error::none &&
+            !speech_started_for_turn_.load(std::memory_order_acquire) &&
+            image_requested_.load(std::memory_order_acquire) &&
+            !request_cancellation.cancelled()) {
+            // The speech task has released its stack and codec resources.
+            // The optional image can now use the remaining memory.
+            start_image_worker(request_cancellation);
+        }
         join_image_worker();
         bool speech_failed = false;
         if (error != agent::Error::none) {
@@ -2297,9 +2381,26 @@ private:
         interaction_.interaction_finished(monotonic_ms());
         previous_state_ = interaction_.state();
         if (!speech_failed) {
-            show_state(previous_state_);
+            if (image_unavailable_.load(std::memory_order_acquire)) {
+                with_display([&answer]() {
+                    ui::show_answer_notice(
+                        {answer.data(), answer.size()},
+                        "IMAGE UNAVAILABLE");
+                });
+            } else {
+                show_state(previous_state_);
+            }
         }
-        publish_selected_visual(image_frame_, pending_plot_);
+        const bool visual_published =
+            publish_selected_visual(image_frame_, pending_plot_);
+        if (!visual_published && !speech_failed) {
+            image_unavailable_.store(true, std::memory_order_release);
+            with_display([&answer]() {
+                ui::show_answer_notice(
+                    {answer.data(), answer.size()},
+                    "IMAGE UNAVAILABLE");
+            });
+        }
         timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
         log_turn_timing();
         voice_priority_.store(false, std::memory_order_release);
@@ -2317,7 +2418,7 @@ private:
         }
     }
 
-    void publish_selected_visual(
+    bool publish_selected_visual(
         image::Rgb565Frame &frame, agent::PlotData &plot) {
         if (plot.ready()) {
             bool shown = false;
@@ -2331,10 +2432,10 @@ private:
             } else {
                 ESP_LOGI(kTag, "The bounded plot is on the display");
             }
-            return;
+            return true;
         }
         if (!frame.available()) {
-            return;
+            return true;
         }
         bool shown = false;
         with_display([&frame, &shown]() {
@@ -2345,16 +2446,15 @@ private:
         } else {
             ESP_LOGI(kTag, "The bounded image is on the display");
         }
+        return shown;
     }
 
     void finish_model_power_off() {
         crash_diagnostics::mark(
             runtime::CrashEvent::sleep_model_request);
-        image_transport_.cancel_active();
-        join_image_worker();
-        selected_image_result_.clear();
-        image_frame_.reset();
+        clear_all_image_state();
         python_tool_.clear_plot();
+        plot_tool_.clear_plot();
         pending_plot_.clear();
         with_display([]() {
             ui::show_answer_notice("TURNING OFF", "POWER OFF");
@@ -2392,10 +2492,9 @@ private:
         capture_.discard();
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
-        image_tool_.clear_results();
+        clear_all_image_state();
         python_tool_.clear_plot();
-        selected_image_result_.clear();
-        image_frame_.reset();
+        plot_tool_.clear_plot();
         pending_plot_.clear();
         hide_visual();
         interaction_.ready(monotonic_ms());
@@ -2410,10 +2509,9 @@ private:
         capture_.discard();
         speech_channel_.cancel();
         pcm_sink_.cancel_and_stop();
-        image_tool_.clear_results();
+        clear_all_image_state();
         python_tool_.clear_plot();
-        selected_image_result_.clear();
-        image_frame_.reset();
+        plot_tool_.clear_plot();
         pending_plot_.clear();
         interaction_.fail(monotonic_ms());
         previous_state_ = interaction_.state();
@@ -2459,10 +2557,9 @@ private:
         }
         reset_transports();
         agent_loop_->clear_thread();
-        image_tool_.clear_results();
+        clear_all_image_state();
         python_tool_.clear_plot();
-        selected_image_result_.clear();
-        image_frame_.reset();
+        plot_tool_.clear_plot();
         pending_plot_.clear();
         hide_visual();
         with_display([this]() {
@@ -2521,8 +2618,9 @@ private:
         capture_.discard();
         pcm_sink_.cancel_and_stop();
         agent_loop_->clear_thread();
-        image_tool_.clear_results();
+        clear_all_image_state();
         python_tool_.clear_plot();
+        plot_tool_.clear_plot();
         pending_plot_.clear();
         hide_visual();
         if (network_initialized_) {
@@ -2738,6 +2836,7 @@ private:
     agent::SearchWebTool web_tool_;
     agent::SearchImagesTool image_tool_;
     agent::RunPythonTool python_tool_;
+    agent::PlotLineTool plot_tool_;
     agent::GetDeviceStatusTool device_status_tool_;
     agent::SetBrightnessTool brightness_tool_;
     agent::SetVolumeTool volume_tool_;
@@ -2756,7 +2855,7 @@ private:
     runtime::SpeechSegmenter speech_segmenter_;
     runtime::TurnTiming timing_;
     SpeechSegmentChannel speech_channel_;
-    agent::ImageResult selected_image_result_;
+    agent::ImageResults image_candidates_;
     image::Rgb565Frame image_frame_;
     agent::PlotData pending_plot_;
     InteractionStateMachine interaction_;
@@ -2778,6 +2877,9 @@ private:
     std::atomic<agent::Error> speech_result_{agent::Error::model_failed};
     std::atomic<bool> network_warm_initialized_{false};
     std::atomic<agent::Error> image_error_{agent::Error::none};
+    std::atomic<bool> image_requested_{false};
+    std::atomic<bool> image_unavailable_{false};
+    std::atomic<bool> speech_started_for_turn_{false};
     std::atomic<agent::Error> network_context_result_{
         agent::Error::model_failed};
     std::atomic<bool> queue_overflow_{false};

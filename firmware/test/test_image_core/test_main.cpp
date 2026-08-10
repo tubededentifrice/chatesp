@@ -141,20 +141,6 @@ void test_rom_rgb888_conversion_keeps_red_and_blue() {
         0x001F, chatesp::image::rom_rgb888_to_rgb565(0, 0, 255));
 }
 
-void test_trusted_thumbnail_url_requires_the_exact_brave_origin() {
-    TEST_ASSERT_TRUE(chatesp::image::is_trusted_brave_thumbnail_url(
-        "https://imgs.search.brave.com/a.jpg"));
-    TEST_ASSERT_FALSE(chatesp::image::is_trusted_brave_thumbnail_url(nullptr));
-    TEST_ASSERT_FALSE(chatesp::image::is_trusted_brave_thumbnail_url(
-        "http://imgs.search.brave.com/a.jpg"));
-    TEST_ASSERT_FALSE(chatesp::image::is_trusted_brave_thumbnail_url(
-        "https://user@imgs.search.brave.com/a.jpg"));
-    TEST_ASSERT_FALSE(chatesp::image::is_trusted_brave_thumbnail_url(
-        "https://imgs.search.brave.com:443/a.jpg"));
-    TEST_ASSERT_FALSE(chatesp::image::is_trusted_brave_thumbnail_url(
-        "https://imgs.search.brave.com.example.test/a.jpg"));
-}
-
 void test_cover_map_reports_a_visible_destination_region() {
     ImageLayout layout;
     TEST_ASSERT_TRUE(chatesp::image::plan_jpeg_layout(
@@ -249,7 +235,6 @@ int main(int, char **) {
     RUN_TEST(test_small_and_one_axis_images_always_cover_the_display);
     RUN_TEST(test_rgb888_conversion_has_native_rgb565_values);
     RUN_TEST(test_rom_rgb888_conversion_keeps_red_and_blue);
-    RUN_TEST(test_trusted_thumbnail_url_requires_the_exact_brave_origin);
     RUN_TEST(test_cover_map_reports_a_visible_destination_region);
     RUN_TEST(test_cover_map_distinguishes_outside_and_invalid_blocks);
     RUN_TEST(test_cover_map_maps_the_last_display_pixel_without_overflow);

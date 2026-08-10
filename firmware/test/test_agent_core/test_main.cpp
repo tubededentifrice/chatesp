@@ -139,11 +139,10 @@ public:
         ++route_calls;
         route.kind = TurnRouteKind::tool_call;
         route.tool_call.id.assign("plot_call");
-        route.tool_call.name.assign("run_python");
+        route.tool_call.name.assign("plot_line");
         route.tool_call.arguments.assign(
-            "{\"code\":\"import plot\\nx=[i/63 for i in range(-63,64)]"
-            "\\ny=[None if v==0 else 1/v for v in x]"
-            "\\nplot.line(x,y,'1/x')\"}");
+            "{\"plot\":{\"title\":\"1/x\",\"y\":[-1,-2,null,2,1],"
+            "\"x\":[-1,-0.5,0,0.5,1]}}");
         return Error::none;
     }
 
@@ -182,8 +181,39 @@ public:
         results.items[0].id.assign("img0");
         results.items[0].title.assign("A result");
         results.items[0].page_url.assign("https://example.test/page");
-        results.items[0].thumbnail_url.assign("https://example.test/thumb.jpg");
+        results.items[0].thumbnail_url.assign(
+            "https://imgs.search.brave.com/thumb.jpg");
         results.items[0].image_url.assign("https://example.test/full.jpg");
+        return Error::none;
+    }
+};
+
+class RankedImageSearch final : public ImageSearchProvider {
+public:
+    Error search(
+        const char *, std::size_t, ImageResults &results,
+        CancellationToken &) override {
+        static constexpr const char *urls[] = {
+            "https://imgs.search.brave.com/zero.jpg",
+            "https://imgs.search.brave.com/one.jpg",
+            "https://imgs.search.brave.com/two.jpg",
+            "https://imgs.search.brave.com/three.jpg",
+            "https://imgs.search.brave.com/one.jpg",
+            "https://imgs.search.brave.com/five.jpg",
+        };
+        results.size = Limits::max_image_results;
+        for (std::size_t index = 0; index < results.size; ++index) {
+            char id[Limits::max_image_id_bytes + 1]{};
+            const int written = std::snprintf(
+                id, sizeof(id), "img%u", static_cast<unsigned>(index));
+            if (written <= 0 ||
+                !results.items[index].id.assign(
+                    id, static_cast<std::size_t>(written)) ||
+                !results.items[index].title.assign("Result") ||
+                !results.items[index].thumbnail_url.assign(urls[index])) {
+                return Error::limit_exceeded;
+            }
+        }
         return Error::none;
     }
 };
@@ -402,11 +432,17 @@ void test_prompt_is_short_and_voice_focused() {
         std::strstr(system_prompt, "Never claim that search is unsupported"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "get_device_status"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "run_python"));
-    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "plot.line"));
-    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "2 to 128"));
-    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "None"));
+    TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "plot_line"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "2 to 24"));
+    TEST_ASSERT_NOT_NULL(std::strstr(system_prompt, "null"));
     TEST_ASSERT_NOT_NULL(
-        std::strstr(routing_prompt(), "do not call run_python again"));
+        std::strstr(routing_prompt(), "plot object"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(routing_prompt(), "2 to 24"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(routing_prompt(), "Do not give Python code for a plot"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(routing_prompt(), "plot_line call completes routing"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "explicitly asks"));
     TEST_ASSERT_NOT_NULL(std::strstr(routing_prompt(), "restart_device"));
     TEST_ASSERT_NOT_NULL(
@@ -658,20 +694,8 @@ void test_agent_loop_stops_after_three_tool_rounds() {
     TEST_ASSERT_EQUAL_INT(4, chat.calls);
 }
 
-void test_agent_loop_finishes_after_one_python_plot() {
-    TestPythonExecution provider;
-    provider.next_execution.plot.count = 5;
-    provider.next_execution.plot.x[0] = -1.0;
-    provider.next_execution.plot.x[1] = -0.5;
-    provider.next_execution.plot.x[2] = 0.0;
-    provider.next_execution.plot.x[3] = 0.5;
-    provider.next_execution.plot.x[4] = 1.0;
-    provider.next_execution.plot.y[0] = -1.0;
-    provider.next_execution.plot.y[1] = -2.0;
-    provider.next_execution.plot.y[2] = NAN;
-    provider.next_execution.plot.y[3] = 2.0;
-    provider.next_execution.plot.y[4] = 1.0;
-    RunPythonTool tool(provider);
+void test_agent_loop_finishes_after_one_structured_plot() {
+    PlotLineTool tool;
     ToolRegistry registry;
     assert_error(Error::none, registry.add(tool));
     RepeatingPythonRouteChat chat;
@@ -685,10 +709,8 @@ void test_agent_loop_finishes_after_one_python_plot() {
         Error::none,
         loop.run(request, sizeof(request) - 1, answer, cancellation));
     TEST_ASSERT_EQUAL_INT(1, chat.route_calls);
-    TEST_ASSERT_EQUAL_INT(1, provider.calls);
     TEST_ASSERT_EQUAL_INT(1, chat.answer_calls);
     TEST_ASSERT_EQUAL_STRING("The plot is displayed.", answer.c_str());
-    TEST_ASSERT_NOT_NULL(std::strstr(provider.last_source.c_str(), "None"));
 
     PlotData plot;
     TEST_ASSERT_TRUE(tool.take_plot(plot));
@@ -1037,6 +1059,9 @@ void test_python_tool_returns_output_and_one_plot() {
     provider.next_execution.plot.y[2] = 9.0;
     provider.next_execution.plot.title.assign("Squares");
     RunPythonTool tool(provider);
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(tool.description(), "numeric calculation"));
+    TEST_ASSERT_NOT_NULL(std::strstr(tool.parameters_schema(), "\"code\""));
     TestCancellation cancellation;
     FixedText<Limits::max_tool_result_bytes> result;
     constexpr char arguments[] =
@@ -1101,6 +1126,72 @@ void test_python_tool_reports_limits_and_validates_exact_input() {
     TEST_ASSERT_EQUAL_INT(1, provider.calls);
 }
 
+void test_python_tool_accepts_structured_plot_in_any_key_order() {
+    PlotLineTool tool;
+    TEST_ASSERT_NOT_NULL(std::strstr(tool.description(), "2 to 24"));
+    TEST_ASSERT_NOT_NULL(std::strstr(tool.description(), "null y point"));
+    TEST_ASSERT_NOT_NULL(
+        std::strstr(tool.parameters_schema(), "\"maxItems\":24"));
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+    constexpr char arguments[] =
+        "{\"plot\":{\"y\":[1,null,3,4],\"title\":\"Line\","
+        "\"x\":[-1,0,1,2]}}";
+
+    assert_error(
+        Error::none,
+        tool.execute(arguments, sizeof(arguments) - 1, result, cancellation));
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"status\":\"ok\",\"plot_ready\":true}",
+        result.c_str());
+
+    PlotData plot;
+    TEST_ASSERT_TRUE(tool.take_plot(plot));
+    TEST_ASSERT_EQUAL_UINT32(4, plot.count);
+    TEST_ASSERT_TRUE(plot.x[0] == -1.0);
+    TEST_ASSERT_TRUE(std::isnan(plot.y[1]));
+    TEST_ASSERT_TRUE(plot.y[3] == 4.0);
+    TEST_ASSERT_EQUAL_STRING("Line", plot.title.c_str());
+}
+
+void test_python_tool_rejects_invalid_structured_plots() {
+    PlotLineTool tool;
+    TestCancellation cancellation;
+    FixedText<Limits::max_tool_result_bytes> result;
+    constexpr const char *invalid[] = {
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1,2]}}",
+        "{\"plot\":{\"x\":[0,1,2],\"y\":[1,null,2]}}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[1,null]}}",
+        "{\"plot\":{\"x\":[0,1e999],\"y\":[0,1]}}",
+        "{\"plot\":{\"x\":[0,1.],\"y\":[0,1]}}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1],\"title\":\"a\\u0000b\"}}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1],\"title\":\"a\\nb\"}}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1],\"title\":\"caf\\u00e9\"}}",
+        "{\"plot\":{\"x\":[0,0],\"y\":[0,1]}}",
+        "{\"plot\":{\"x\":[1,0],\"y\":[1,0]}}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1],\"title\":"
+        "\"1234567890123456789012345678901234567890123456789\"}}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1]},\"code\":\"print(1)\"}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1],\"extra\":0}}",
+        "{\"plot\":{\"x\":[0,1],\"y\":[0,1]}} trailing",
+    };
+    for (const char *arguments : invalid) {
+        assert_error(
+            Error::invalid_argument,
+            tool.execute(
+                arguments, std::strlen(arguments), result, cancellation));
+    }
+
+    constexpr char over_limit[] =
+        "{\"plot\":{\"x\":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,"
+        "16,17,18,19,20,21,22,23,24],\"y\":[0,1,2,3,4,5,6,7,8,9,10,"
+        "11,12,13,14,15,16,17,18,19,20,21,22,23,24]}}";
+    assert_error(
+        Error::invalid_argument,
+        tool.execute(
+            over_limit, sizeof(over_limit) - 1, result, cancellation));
+}
+
 void test_python_tool_bounds_escaped_output_and_arguments() {
     TestPythonExecution provider;
     for (std::size_t index = 0;
@@ -1156,6 +1247,7 @@ void test_registry_holds_search_and_device_tools() {
     PowerOffTool power_off(device_provider);
     RestartDeviceTool restart(device_provider);
     RunPythonTool python(python_provider);
+    PlotLineTool plot;
     RememberMemoryTool remember(memory_provider);
     ForgetMemoryTool forget(memory_provider);
     ClearMemoriesTool clear(memory_provider);
@@ -1170,12 +1262,13 @@ void test_registry_holds_search_and_device_tools() {
     assert_error(Error::none, registry.add(power_off));
     assert_error(Error::none, registry.add(restart));
     assert_error(Error::none, registry.add(python));
+    assert_error(Error::none, registry.add(plot));
     assert_error(Error::none, registry.add(remember));
     assert_error(Error::none, registry.add(forget));
     assert_error(Error::none, registry.add(clear));
     assert_error(Error::none, registry.add(compact));
-    TEST_ASSERT_EQUAL_UINT32(12, registry.size());
-    TEST_ASSERT_EQUAL_UINT32(12, Limits::max_tool_count);
+    TEST_ASSERT_EQUAL_UINT32(13, registry.size());
+    TEST_ASSERT_EQUAL_UINT32(13, Limits::max_tool_count);
 }
 
 void test_memory_tool_text_uses_configured_limits() {
@@ -1510,6 +1603,54 @@ void test_image_tool_can_use_one_fallback_after_a_search() {
     TEST_ASSERT_TRUE(selected.id.empty());
 }
 
+void test_image_tool_returns_selected_then_ranked_unique_candidates_once() {
+    TestCancellation cancellation;
+    RankedImageSearch provider;
+    SearchImagesTool tool(provider);
+    FixedText<Limits::max_tool_result_bytes> result;
+    const char query[] = "{\"query\":\"Dubai\"}";
+    const char selection[] = "{\"select\":\"img3\"}";
+
+    assert_error(
+        Error::none,
+        tool.execute(query, sizeof(query) - 1, result, cancellation));
+    result.clear();
+    assert_error(
+        Error::none,
+        tool.execute(selection, sizeof(selection) - 1, result, cancellation));
+
+    ImageResults candidates;
+    TEST_ASSERT_TRUE(tool.take_selected_or_first_candidates(candidates));
+    TEST_ASSERT_EQUAL_UINT32(5, candidates.size);
+    TEST_ASSERT_EQUAL_STRING("img3", candidates.items[0].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img0", candidates.items[1].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img1", candidates.items[2].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img2", candidates.items[3].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img5", candidates.items[4].id.c_str());
+    TEST_ASSERT_FALSE(tool.take_selected_or_first_candidates(candidates));
+    TEST_ASSERT_EQUAL_UINT32(0, candidates.size);
+}
+
+void test_image_tool_candidate_fallback_keeps_provider_order() {
+    TestCancellation cancellation;
+    RankedImageSearch provider;
+    SearchImagesTool tool(provider);
+    FixedText<Limits::max_tool_result_bytes> result;
+    const char query[] = "{\"query\":\"Dubai\"}";
+
+    assert_error(
+        Error::none,
+        tool.execute(query, sizeof(query) - 1, result, cancellation));
+    ImageResults candidates;
+    TEST_ASSERT_TRUE(tool.take_selected_or_first_candidates(candidates));
+    TEST_ASSERT_EQUAL_UINT32(5, candidates.size);
+    TEST_ASSERT_EQUAL_STRING("img0", candidates.items[0].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img1", candidates.items[1].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img2", candidates.items[2].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img3", candidates.items[3].id.c_str());
+    TEST_ASSERT_EQUAL_STRING("img5", candidates.items[4].id.c_str());
+}
+
 void test_agent_loop_searches_selects_and_then_answers() {
     TestImageSearch provider;
     SearchImagesTool tool(provider);
@@ -1580,7 +1721,7 @@ void test_openrouter_chat_builder_has_bounded_contract() {
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "answer_direct"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "search_web"));
     TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"tool_choice\":\"required\""));
-    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":96"));
+    TEST_ASSERT_NOT_NULL(std::strstr(body.c_str(), "\"max_tokens\":192"));
 
     assert_error(
         Error::none,
@@ -1924,11 +2065,18 @@ void test_brave_parsers_keep_only_narrow_fields() {
     TEST_ASSERT_EQUAL_STRING("Snippet", web.items[0].snippet.c_str());
 
     const char image_json[] =
-        "{\"type\":\"images\",\"results\":[{\"title\":\"Image\","
-        "\"url\":\"https://example.test/page\","
-        "\"thumbnail\":{\"src\":\"https://example.test/thumb.jpg\"},"
+        "{\"type\":\"images\",\"results\":["
+        "{\"title\":\"Untrusted\",\"thumbnail\":{\"src\":"
+        "\"https://example.test/thumb.jpg\"}},"
+        "{\"title\":\"Hidden suffix\",\"thumbnail\":{\"src\":"
+        "\"https://imgs.search.brave.com/thumb.jpg\\u0000other\"}},"
+        "{\"title\":\"Image\",\"url\":\"https://example.test/page\","
+        "\"thumbnail\":{\"src\":"
+        "\"https://imgs.search.brave.com/thumb.jpg\"},"
         "\"properties\":{\"url\":\"https://example.test/full.jpg\","
-        "\"width\":500,\"height\":400}}],\"extra\":{}}";
+        "\"width\":500,\"height\":400}},"
+        "{\"title\":\"Duplicate\",\"thumbnail\":{\"src\":"
+        "\"https://imgs.search.brave.com/thumb.jpg\"}}],\"extra\":{}}";
     ImageResults images;
     assert_error(
         Error::none,
@@ -1938,8 +2086,18 @@ void test_brave_parsers_keep_only_narrow_fields() {
     TEST_ASSERT_EQUAL_STRING("img0", images.items[0].id.c_str());
     TEST_ASSERT_EQUAL_UINT32(500, images.items[0].width);
     TEST_ASSERT_EQUAL_STRING(
-        "https://example.test/thumb.jpg",
+        "https://imgs.search.brave.com/thumb.jpg",
         images.items[0].thumbnail_url.c_str());
+    TEST_ASSERT_TRUE(is_trusted_brave_thumbnail_url(
+        images.items[0].thumbnail_url.c_str()));
+    TEST_ASSERT_FALSE(is_trusted_brave_thumbnail_url(
+        "https://imgs.search.brave.com.example.test/thumb.jpg"));
+    TEST_ASSERT_FALSE(is_trusted_brave_thumbnail_url(
+        "https://imgs.search.brave.com/with space.jpg"));
+    constexpr char hidden_suffix[] =
+        "https://imgs.search.brave.com/thumb.jpg\0other";
+    TEST_ASSERT_FALSE(is_trusted_brave_thumbnail_url(
+        hidden_suffix, sizeof(hidden_suffix) - 1));
 }
 
 void test_retry_policy_never_retries_after_output() {
@@ -1996,7 +2154,7 @@ int main(int, char **) {
     RUN_TEST(test_agent_loop_executes_one_tool_and_keeps_history);
     RUN_TEST(test_agent_loop_keeps_short_followups_bounded);
     RUN_TEST(test_agent_loop_stops_after_three_tool_rounds);
-    RUN_TEST(test_agent_loop_finishes_after_one_python_plot);
+    RUN_TEST(test_agent_loop_finishes_after_one_structured_plot);
     RUN_TEST(test_agent_loop_honors_cancellation_before_provider);
     RUN_TEST(test_agent_loop_rolls_back_cancelled_turn);
     RUN_TEST(test_agent_loop_gives_model_a_sanitized_tool_error);
@@ -2012,6 +2170,8 @@ int main(int, char **) {
     RUN_TEST(test_restart_device_tool_is_strict_and_cancellable);
     RUN_TEST(test_python_tool_returns_output_and_one_plot);
     RUN_TEST(test_python_tool_reports_limits_and_validates_exact_input);
+    RUN_TEST(test_python_tool_accepts_structured_plot_in_any_key_order);
+    RUN_TEST(test_python_tool_rejects_invalid_structured_plots);
     RUN_TEST(test_python_tool_bounds_escaped_output_and_arguments);
     RUN_TEST(test_registry_holds_search_and_device_tools);
     RUN_TEST(test_memory_tool_text_uses_configured_limits);
@@ -2023,6 +2183,8 @@ int main(int, char **) {
     RUN_TEST(test_image_tool_selects_only_a_current_result_id_once);
     RUN_TEST(test_image_tool_clears_selection_on_search_and_clear);
     RUN_TEST(test_image_tool_can_use_one_fallback_after_a_search);
+    RUN_TEST(test_image_tool_returns_selected_then_ranked_unique_candidates_once);
+    RUN_TEST(test_image_tool_candidate_fallback_keeps_provider_order);
     RUN_TEST(test_agent_loop_searches_selects_and_then_answers);
     RUN_TEST(test_openrouter_chat_builder_has_bounded_contract);
     RUN_TEST(test_openrouter_memory_context_escapes_instruction_like_maximum_list);

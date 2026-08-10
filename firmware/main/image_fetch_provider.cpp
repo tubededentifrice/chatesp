@@ -2,10 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 
+#include "chatesp/brave_protocol.hpp"
 #include "chatesp/image_layout.hpp"
+#include "chatesp/transport_policy.hpp"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -219,8 +220,8 @@ public:
         if (status_error != agent::Error::none) {
             return status_error;
         }
-        if (content_type == nullptr ||
-            std::strcmp(content_type, kJpegContentType) != 0) {
+        if (!transport::content_type_matches(
+                content_type, kJpegContentType)) {
             return agent::Error::unsupported_media;
         }
         if (content_length <= 0 ||
@@ -306,7 +307,7 @@ agent::Error HttpImageFetchProvider::fetch(
     if (error != agent::Error::none) {
         return error;
     }
-    if (!is_trusted_brave_thumbnail_url(request.url) ||
+    if (!agent::is_trusted_brave_thumbnail_url(request.url) ||
         request.max_redirects != 0) {
         return agent::Error::invalid_argument;
     }

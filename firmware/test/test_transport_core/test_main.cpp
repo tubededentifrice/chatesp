@@ -70,6 +70,8 @@ void test_transfer_limits_have_absolute_and_request_caps() {
 void test_content_type_is_case_insensitive_and_allows_parameters() {
     TEST_ASSERT_TRUE(content_type_matches(
         "Application/JSON; charset=utf-8", "application/json"));
+    TEST_ASSERT_TRUE(content_type_matches(
+        "IMAGE/JPEG ; charset=binary", "image/jpeg"));
     TEST_ASSERT_FALSE(content_type_matches("text/html", "application/json"));
     TEST_ASSERT_FALSE(content_type_matches("application/jsonp", "application/json"));
 }

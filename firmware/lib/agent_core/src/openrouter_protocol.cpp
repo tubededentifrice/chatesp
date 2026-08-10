@@ -506,10 +506,19 @@ Error build_openrouter_route_request(
             return Error::request_too_large;
         }
     }
-    if (!body.append(
+    char output_tokens[8]{};
+    const int output_token_size = std::snprintf(
+        output_tokens, sizeof(output_tokens), "%u",
+        static_cast<unsigned>(Limits::max_route_output_tokens));
+    if (output_token_size <= 0 ||
+        static_cast<std::size_t>(output_token_size) >= sizeof(output_tokens) ||
+        !body.append(
             "],\"tool_choice\":\"required\",\"parallel_tool_calls\":false,"
             "\"reasoning\":{\"effort\":\"none\",\"exclude\":true},"
-            "\"max_tokens\":96,\"temperature\":0,\"stream\":") ||
+            "\"max_tokens\":") ||
+        !body.append(
+            output_tokens, static_cast<std::size_t>(output_token_size)) ||
+        !body.append(",\"temperature\":0,\"stream\":") ||
         !body.append(stream ? "true}" : "false}")) {
         body.clear();
         return Error::request_too_large;

@@ -1,9 +1,12 @@
 #include "chatesp/tool_registry.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
+#include "chatesp/brave_protocol.hpp"
 #include "json.hpp"
 
 namespace chatesp {
@@ -24,6 +27,18 @@ constexpr char image_action_schema[] =
 constexpr char python_schema[] =
     "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\","
     "\"maxLength\":1024}},\"required\":[\"code\"],"
+    "\"additionalProperties\":false}";
+
+constexpr char plot_schema[] =
+    "{\"type\":\"object\",\"properties\":{\"plot\":{\"type\":\"object\","
+    "\"properties\":{"
+    "\"x\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":24,\"items\":{"
+    "\"type\":\"number\"}},\"y\":{\"type\":\"array\",\"minItems\":2,"
+    "\"maxItems\":24,\"items\":{\"type\":[\"number\",\"null\"]}},"
+    "\"title\":{\"type\":\"string\",\"maxLength\":48,"
+    "\"pattern\":\"^[ -~]{0,48}$\"}},"
+    "\"required\":[\"x\",\"y\"],\"additionalProperties\":false}},"
+    "\"required\":[\"plot\"],"
     "\"additionalProperties\":false}";
 
 constexpr char empty_object_schema[] =
@@ -154,9 +169,124 @@ Error parse_query(
     return Error::none;
 }
 
-Error parse_python_source(
-    const char *arguments, std::size_t size,
-    FixedText<Limits::max_python_source_bytes> &source) {
+constexpr std::size_t max_structured_plot_points = 24;
+
+enum class PythonActionKind : std::uint8_t { code, plot };
+
+struct PythonAction {
+    PythonActionKind kind = PythonActionKind::code;
+    FixedText<Limits::max_python_source_bytes> source;
+};
+
+Error parse_plot_values(
+    detail::JsonReader &reader,
+    std::array<double, Limits::max_plot_points> &values,
+    std::size_t &count, bool allow_null) {
+    if (!reader.consume('[')) {
+        return Error::invalid_argument;
+    }
+    count = 0;
+    if (reader.consume(']')) {
+        return Error::none;
+    }
+    while (true) {
+        if (count == max_structured_plot_points) {
+            return Error::invalid_argument;
+        }
+        if (allow_null && reader.peek() == 'n') {
+            if (!reader.consume_literal("null")) {
+                return Error::invalid_argument;
+            }
+            values[count] = std::numeric_limits<double>::quiet_NaN();
+        } else if (!reader.read_double(values[count])) {
+            return Error::invalid_argument;
+        }
+        ++count;
+        if (reader.consume(']')) {
+            return Error::none;
+        }
+        if (!reader.consume(',')) {
+            return Error::malformed_response;
+        }
+    }
+}
+
+Error parse_structured_plot(detail::JsonReader &reader, PlotData &plot) {
+    if (!reader.consume('{')) {
+        return Error::invalid_argument;
+    }
+    bool found_x = false;
+    bool found_y = false;
+    bool found_title = false;
+    std::size_t x_count = 0;
+    std::size_t y_count = 0;
+    if (!reader.consume('}')) {
+        while (true) {
+            FixedText<16> key;
+            if (!reader.read_string(key) || !reader.consume(':')) {
+                return Error::malformed_response;
+            }
+            Error error = Error::none;
+            if (key.equals("x") && !found_x) {
+                error = parse_plot_values(reader, plot.x, x_count, false);
+                found_x = true;
+            } else if (key.equals("y") && !found_y) {
+                error = parse_plot_values(reader, plot.y, y_count, true);
+                found_y = true;
+            } else if (key.equals("title") && !found_title) {
+                if (!reader.read_string(plot.title)) {
+                    return Error::invalid_argument;
+                }
+                found_title = true;
+            } else {
+                return Error::invalid_argument;
+            }
+            if (error != Error::none) {
+                return error;
+            }
+            if (reader.consume('}')) {
+                break;
+            }
+            if (!reader.consume(',')) {
+                return Error::malformed_response;
+            }
+        }
+    }
+    if (!found_x || !found_y || x_count != y_count || x_count < 2 ||
+        x_count > max_structured_plot_points) {
+        return Error::invalid_argument;
+    }
+    for (std::size_t index = 0; index < plot.title.size(); ++index) {
+        const auto byte =
+            static_cast<unsigned char>(plot.title.data()[index]);
+        if (byte < 0x20U || byte > 0x7eU) {
+            return Error::invalid_argument;
+        }
+    }
+    bool adjacent_line = false;
+    for (std::size_t index = 0; index < x_count; ++index) {
+        if (!std::isfinite(plot.x[index]) ||
+            (!std::isfinite(plot.y[index]) && !std::isnan(plot.y[index]))) {
+            return Error::invalid_argument;
+        }
+        if (index != 0 && plot.x[index - 1] >= plot.x[index]) {
+            return Error::invalid_argument;
+        }
+        if (index != 0 && std::isfinite(plot.y[index - 1]) &&
+            std::isfinite(plot.y[index])) {
+            adjacent_line = true;
+        }
+    }
+    if (!adjacent_line) {
+        return Error::invalid_argument;
+    }
+    plot.count = x_count;
+    return Error::none;
+}
+
+Error parse_python_action(
+    const char *arguments, std::size_t size, PythonAction &action,
+    PlotData &plot) {
     if (arguments == nullptr || size == 0 ||
         size > Limits::max_tool_arguments_bytes) {
         return Error::invalid_argument;
@@ -165,15 +295,50 @@ Error parse_python_source(
     if (!reader.consume('{')) {
         return Error::malformed_response;
     }
-    FixedText<16> key;
-    if (!reader.read_string(key) || !key.equals("code") ||
-        !reader.consume(':') || !reader.read_string(source) ||
-        !reader.consume('}') || !reader.finish() || source.empty()) {
+    bool found_code = false;
+    bool found_plot = false;
+    if (!reader.consume('}')) {
+        while (true) {
+            FixedText<16> key;
+            if (!reader.read_string(key) || !reader.consume(':')) {
+                return Error::malformed_response;
+            }
+            if (key.equals("code") && !found_code) {
+                if (!reader.read_string(action.source)) {
+                    return Error::invalid_argument;
+                }
+                found_code = true;
+            } else if (key.equals("plot") && !found_plot) {
+                const Error error = parse_structured_plot(reader, plot);
+                if (error != Error::none) {
+                    return error;
+                }
+                found_plot = true;
+            } else {
+                return Error::invalid_argument;
+            }
+            if (reader.consume('}')) {
+                break;
+            }
+            if (!reader.consume(',')) {
+                return Error::malformed_response;
+            }
+        }
+    }
+    if (!reader.finish() || found_code == found_plot) {
         return Error::invalid_argument;
     }
-    for (std::size_t index = 0; index < source.size(); ++index) {
-        if (source.data()[index] == '\0') {
-            source.clear();
+    if (found_plot) {
+        action.kind = PythonActionKind::plot;
+        return Error::none;
+    }
+    action.kind = PythonActionKind::code;
+    if (action.source.empty()) {
+        return Error::invalid_argument;
+    }
+    for (std::size_t index = 0; index < action.source.size(); ++index) {
+        if (action.source.data()[index] == '\0') {
+            action.source.clear();
             return Error::invalid_argument;
         }
     }
@@ -757,8 +922,8 @@ const char *SearchImagesTool::parameters_schema() const {
 const char *RunPythonTool::name() const { return "run_python"; }
 
 const char *RunPythonTool::description() const {
-    return "Run bounded MicroPython math. Print needed values. For one line "
-           "plot, give plot.line 2 to 128 points; use None for an undefined y.";
+    return "Run bounded Python code for a numeric calculation. Print each "
+           "value needed for the answer.";
 }
 
 const char *RunPythonTool::parameters_schema() const { return python_schema; }
@@ -871,18 +1036,25 @@ Error RunPythonTool::execute(
     FixedText<Limits::max_tool_result_bytes> &result,
     CancellationToken &cancellation) {
     pending_plot_.clear();
-    FixedText<Limits::max_python_source_bytes> source;
-    Error error = parse_python_source(arguments, size, source);
+    PythonAction action;
+    Error error = parse_python_action(
+        arguments, size, action, pending_plot_);
     if (error != Error::none) {
+        pending_plot_.clear();
         return error;
     }
     if (cancellation.cancelled()) {
+        pending_plot_.clear();
         return Error::cancelled;
+    }
+    if (action.kind == PythonActionKind::plot) {
+        pending_plot_.clear();
+        return Error::invalid_argument;
     }
     PythonExecution execution;
     error = provider_.execute(
-        source.data(), source.size(), execution, cancellation);
-    source.clear();
+        action.source.data(), action.source.size(), execution, cancellation);
+    action.source.clear();
     if (error != Error::none || cancellation.cancelled()) {
         execution.clear();
         return cancellation.cancelled() ? Error::cancelled : error;
@@ -917,6 +1089,51 @@ bool RunPythonTool::take_plot(PlotData &plot) {
 }
 
 void RunPythonTool::clear_plot() { pending_plot_.clear(); }
+
+const char *PlotLineTool::name() const { return "plot_line"; }
+
+const char *PlotLineTool::description() const {
+    return "Show one line plot from 2 to 24 increasing literal x points and "
+           "matching y points. Use a null y point for a visible gap.";
+}
+
+const char *PlotLineTool::parameters_schema() const { return plot_schema; }
+
+Error PlotLineTool::execute(
+    const char *arguments, std::size_t size,
+    FixedText<Limits::max_tool_result_bytes> &result,
+    CancellationToken &cancellation) {
+    pending_plot_.clear();
+    PythonAction action;
+    Error error = parse_python_action(
+        arguments, size, action, pending_plot_);
+    if (error != Error::none || action.kind != PythonActionKind::plot) {
+        pending_plot_.clear();
+        return error != Error::none ? error : Error::invalid_argument;
+    }
+    if (cancellation.cancelled()) {
+        pending_plot_.clear();
+        return Error::cancelled;
+    }
+    if (!result.append(
+            "{\"status\":\"ok\",\"plot_ready\":true}")) {
+        pending_plot_.clear();
+        return Error::limit_exceeded;
+    }
+    return Error::none;
+}
+
+bool PlotLineTool::take_plot(PlotData &plot) {
+    if (!pending_plot_.ready()) {
+        plot.clear();
+        return false;
+    }
+    plot = pending_plot_;
+    pending_plot_.clear();
+    return true;
+}
+
+void PlotLineTool::clear_plot() { pending_plot_.clear(); }
 
 Error SearchImagesTool::execute(
     const char *arguments, std::size_t size,
@@ -1011,6 +1228,44 @@ bool SearchImagesTool::take_selected_or_first(ImageResult &result) {
     result = last_results_.items[0];
     fallback_ready_ = false;
     return true;
+}
+
+bool SearchImagesTool::take_selected_or_first_candidates(
+    ImageResults &results) {
+    results.clear();
+    if (!selection_ready_ &&
+        (!fallback_ready_ || last_results_.size == 0)) {
+        return false;
+    }
+
+    const auto append_unique = [&results](const ImageResult &candidate) {
+        if (!is_trusted_brave_thumbnail_url(
+                candidate.thumbnail_url.data(),
+                candidate.thumbnail_url.size())) {
+            return;
+        }
+        for (std::size_t index = 0; index < results.size; ++index) {
+            if (results.items[index].thumbnail_url.equals(
+                    candidate.thumbnail_url.c_str())) {
+                return;
+            }
+        }
+        if (results.size < results.items.size()) {
+            results.items[results.size++] = candidate;
+        }
+    };
+
+    if (selection_ready_) {
+        append_unique(selected_result_);
+    }
+    for (std::size_t index = 0; index < last_results_.size; ++index) {
+        append_unique(last_results_.items[index]);
+    }
+
+    selected_result_.clear();
+    selection_ready_ = false;
+    fallback_ready_ = false;
+    return results.size != 0;
 }
 
 bool SearchImagesTool::has_pending_image() const {

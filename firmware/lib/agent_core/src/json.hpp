@@ -17,6 +17,7 @@ public:
     bool consume(char expected);
     bool consume_literal(const char *literal);
     bool skip_value(std::uint8_t depth = 0);
+    bool read_double(double &value);
     bool read_u32(std::uint32_t &value);
     bool finish();
     [[nodiscard]] char peek();

@@ -35,7 +35,6 @@ struct ImageLayout {
     std::uint8_t red, std::uint8_t green, std::uint8_t blue);
 [[nodiscard]] std::uint16_t rom_rgb888_to_rgb565(
     std::uint8_t red, std::uint8_t green, std::uint8_t blue);
-[[nodiscard]] bool is_trusted_brave_thumbnail_url(const char *url);
 
 // Tiny JPEG rectangles include the right and bottom pixels.
 struct InclusiveRect {

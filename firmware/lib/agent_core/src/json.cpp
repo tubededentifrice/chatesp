@@ -1,6 +1,8 @@
 #include "json.hpp"
 
 #include <cctype>
+#include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace chatesp {
@@ -79,6 +81,72 @@ bool JsonReader::read_u32(std::uint32_t &value) {
         ++position_;
     }
     value = static_cast<std::uint32_t>(result);
+    return true;
+}
+
+bool JsonReader::read_double(double &value) {
+    skip_space();
+    const std::size_t start = position_;
+    std::size_t cursor = start;
+    if (cursor < size_ && data_[cursor] == '-') {
+        ++cursor;
+    }
+    if (cursor == size_) {
+        return false;
+    }
+    if (data_[cursor] == '0') {
+        ++cursor;
+    } else {
+        if (data_[cursor] < '1' || data_[cursor] > '9') {
+            return false;
+        }
+        while (cursor < size_ && data_[cursor] >= '0' &&
+               data_[cursor] <= '9') {
+            ++cursor;
+        }
+    }
+    if (cursor < size_ && data_[cursor] == '.') {
+        ++cursor;
+        const std::size_t decimal = cursor;
+        while (cursor < size_ && data_[cursor] >= '0' &&
+               data_[cursor] <= '9') {
+            ++cursor;
+        }
+        if (cursor == decimal) {
+            return false;
+        }
+    }
+    if (cursor < size_ &&
+        (data_[cursor] == 'e' || data_[cursor] == 'E')) {
+        ++cursor;
+        if (cursor < size_ &&
+            (data_[cursor] == '+' || data_[cursor] == '-')) {
+            ++cursor;
+        }
+        const std::size_t exponent = cursor;
+        while (cursor < size_ && data_[cursor] >= '0' &&
+               data_[cursor] <= '9') {
+            ++cursor;
+        }
+        if (cursor == exponent) {
+            return false;
+        }
+    }
+
+    constexpr std::size_t max_number_bytes = 63;
+    const std::size_t length = cursor - start;
+    if (length == 0 || length > max_number_bytes) {
+        return false;
+    }
+    char number[max_number_bytes + 1]{};
+    std::memcpy(number, data_ + start, length);
+    char *end = nullptr;
+    const double parsed = std::strtod(number, &end);
+    if (end != number + length || !std::isfinite(parsed)) {
+        return false;
+    }
+    value = parsed;
+    position_ = cursor;
     return true;
 }
 

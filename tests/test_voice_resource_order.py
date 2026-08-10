@@ -69,11 +69,98 @@ class VoiceResourceOrderTests(unittest.TestCase):
         ]
 
         self.assertNotIn("start_image_worker();", answer_case)
-        self.assertIn("start_image_worker();", speech_case)
+        self.assertIn("start_image_worker(*speech_cancellation_);", speech_case)
         self.assertIn(
-            "image_tool_.take_selected_or_first(selected_image_result_)",
+            "image_tool_.take_selected_or_first_candidates(image_candidates_)",
             prepare_visual,
         )
+
+    def test_image_candidate_recovery_is_bounded(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        worker = runtime[
+            runtime.index("void run_image_worker()") :
+            runtime.index("void join_image_worker()")
+        ]
+
+        self.assertIn("kMaximumImageCandidateAttempts = 3", runtime)
+        self.assertIn("kImageCandidateBudgetMs = 20'000", runtime)
+        self.assertIn(
+            "image_candidates_.size, kMaximumImageCandidateAttempts", worker
+        )
+        self.assertIn("monotonic_ms() - started_ms", worker)
+        self.assertIn("kImageCandidateBudgetMs - elapsed_ms", worker)
+        self.assertIn("policy.total_timeout_ms = remaining_budget_ms;", worker)
+        self.assertIn("policy.max_attempts = 1;", worker)
+        self.assertIn("image_deadline.cancelled()", worker)
+        self.assertIn("JpegImageSink sink(image_deadline)", worker)
+        self.assertNotIn("ESP_LOG", worker)
+
+    def test_image_recovery_runs_after_an_early_speech_failure(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        interaction = runtime[
+            runtime.index(
+                "error = request_cancellation.normalize(wait_for_speech_worker())"
+            ) : runtime.index("bool speech_failed = false;")
+        ]
+
+        speech_wait = interaction.index("wait_for_speech_worker()")
+        image_start = interaction.index("start_image_worker(request_cancellation);")
+        image_join = interaction.index("join_image_worker();")
+        self.assertLess(speech_wait, image_start)
+        self.assertLess(image_start, image_join)
+        self.assertIn("!speech_started_for_turn_.load", interaction)
+        self.assertIn("!request_cancellation.cancelled()", interaction)
+
+    def test_image_failure_notice_keeps_speech_failure_priority(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        completion = runtime[
+            runtime.index("if (!speech_failed) {") :
+            runtime.index("timing_.mark(runtime::TurnPhase::completion")
+        ]
+
+        self.assertIn('"IMAGE UNAVAILABLE"', completion)
+        self.assertIn("ui::show_answer_notice(", completion)
+        self.assertIn("const bool visual_published", completion)
+        self.assertIn("if (!visual_published && !speech_failed)", completion)
+
+    def test_cleanup_clears_all_runtime_image_state(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        cleanup = runtime[
+            runtime.index("void clear_runtime_image_state()") :
+            runtime.index("void prepare_visual()")
+        ]
+
+        self.assertIn("image_candidates_.clear();", cleanup)
+        self.assertIn("image_frame_.reset();", cleanup)
+        self.assertIn("image_requested_.store(false", cleanup)
+        self.assertIn("image_unavailable_.store(false", cleanup)
+        self.assertIn("image_tool_.clear_results();", cleanup)
+        self.assertLess(
+            cleanup.index("image_transport_.cancel_active();"),
+            cleanup.index("join_image_worker();"),
+        )
+        self.assertLess(
+            cleanup.index("join_image_worker();"),
+            cleanup.index("clear_runtime_image_state();"),
+        )
+        for function_name in (
+            "void cancel_current()",
+            "void fail(const char *message)",
+            "void enter_sleep()",
+        ):
+            function = runtime[
+                runtime.index(function_name) :
+                runtime.index("\n    }", runtime.index(function_name))
+            ]
+            self.assertIn("clear_all_image_state();", function)
 
     def test_micropython_plot_reaches_the_display_after_speech(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
@@ -84,7 +171,7 @@ class VoiceResourceOrderTests(unittest.TestCase):
             runtime.index("void run_image_worker()")
         ]
         publish_visual = runtime[
-            runtime.index("void publish_selected_visual(") :
+            runtime.index("bool publish_selected_visual(") :
             runtime.index("void finish_model_power_off()")
         ]
         interaction = runtime[
@@ -95,7 +182,7 @@ class VoiceResourceOrderTests(unittest.TestCase):
         self.assertLess(
             prepare_visual.index("python_tool_.take_plot(pending_plot_)"),
             prepare_visual.index(
-                "image_tool_.take_selected_or_first(selected_image_result_)"
+                "image_tool_.take_selected_or_first_candidates(image_candidates_)"
             ),
         )
         self.assertIn("ui::show_fullscreen_plot(plot)", publish_visual)

@@ -40,6 +40,25 @@ bool append_url_encoded(
     return true;
 }
 
+bool trusted_brave_thumbnail_url(const char *url, std::size_t url_size) {
+    constexpr char origin[] = "https://imgs.search.brave.com";
+    constexpr std::size_t origin_size = sizeof(origin) - 1U;
+    if (url == nullptr || url_size <= origin_size + 1U ||
+        url_size > Limits::max_url_bytes ||
+        std::memcmp(url, origin, origin_size) != 0 ||
+        url[origin_size] != '/') {
+        return false;
+    }
+    for (std::size_t index = origin_size + 1U; index < url_size; ++index) {
+        const auto byte = static_cast<unsigned char>(url[index]);
+        if (byte <= 0x20U || byte == 0x7fU || url[index] == '#' ||
+            url[index] == '\\') {
+            return false;
+        }
+    }
+    return true;
+}
+
 Error build_target(
     const char *base, const char *query, std::size_t size,
     const BraveSearchOptions &options, SearchRequestTarget &target) {
@@ -172,6 +191,17 @@ bool parse_image_result(detail::JsonReader &reader, ImageResult &result) {
     }
 }
 
+bool has_thumbnail(
+    const ImageResults &results,
+    const FixedText<Limits::max_url_bytes> &thumbnail_url) {
+    for (std::size_t index = 0; index < results.size; ++index) {
+        if (results.items[index].thumbnail_url.equals(thumbnail_url.c_str())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool parse_image_array(detail::JsonReader &reader, ImageResults &results) {
     if (!reader.consume('[')) return false;
     if (reader.peek() == ']') return reader.consume(']');
@@ -179,7 +209,11 @@ bool parse_image_array(detail::JsonReader &reader, ImageResults &results) {
         if (results.size < Limits::max_image_results) {
             ImageResult candidate;
             if (!parse_image_result(reader, candidate)) return false;
-            if (!candidate.title.empty() && !candidate.thumbnail_url.empty()) {
+            if (!candidate.title.empty() &&
+                trusted_brave_thumbnail_url(
+                    candidate.thumbnail_url.data(),
+                    candidate.thumbnail_url.size()) &&
+                !has_thumbnail(results, candidate.thumbnail_url)) {
                 char identifier[Limits::max_image_id_bytes + 1]{};
                 const int written = std::snprintf(
                     identifier, sizeof(identifier), "img%u",
@@ -281,6 +315,23 @@ Error parse_brave_image_response(
         if (!reader.consume(',')) return Error::malformed_response;
     }
     return reader.finish() && found ? Error::none : Error::malformed_response;
+}
+
+bool is_trusted_brave_thumbnail_url(const char *url) {
+    if (url == nullptr) {
+        return false;
+    }
+    std::size_t size = 0;
+    while (size <= Limits::max_url_bytes && url[size] != '\0') {
+        ++size;
+    }
+    return size <= Limits::max_url_bytes &&
+        trusted_brave_thumbnail_url(url, size);
+}
+
+bool is_trusted_brave_thumbnail_url(
+    const char *url, std::size_t size) {
+    return trusted_brave_thumbnail_url(url, size);
 }
 
 }  // namespace agent
