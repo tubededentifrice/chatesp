@@ -404,10 +404,11 @@ all runs.
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
 
-The monotonic conversation inactivity timer does not run while a request or
-speech playback is active. It starts when playback finishes. If a request
-ends with an error, it starts when the runtime reports that error. After 30
-seconds, the runtime requests sleep, clears the PSRAM thread, and stops Wi-Fi.
+The monotonic conversation inactivity timer does not run while a response
+action is active. It starts only after speech finishes or fails, optional image
+work finishes, the selected image or plot is displayed or fails, and the last
+answer, ready, or error view is drawn. After 30 seconds, the runtime requests
+sleep, clears the PSRAM thread, and stops Wi-Fi.
 Clock keeps BLE available for time context. It sleeps after five minutes
 without external power and stays on while external power is connected. Only a
 short BOOT-button press enters Clock.

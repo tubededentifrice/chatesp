@@ -2357,9 +2357,6 @@ private:
             });
         }
 
-        interaction_.interaction_finished(monotonic_ms());
-        previous_state_ = interaction_.state();
-        ESP_LOGI(kTag, "Interaction complete; idle timer started");
         join_image_worker();
 
         if (cancellation_.cancelled()) {
@@ -2376,6 +2373,8 @@ private:
             return;
         }
 
+        const bool visual_ready =
+            pending_plot_.ready() || image_frame_.available();
         if (!speech_failed) {
             if (image_unavailable_.load(std::memory_order_acquire)) {
                 with_display([&answer]() {
@@ -2383,8 +2382,8 @@ private:
                         {answer.data(), answer.size()},
                         "IMAGE UNAVAILABLE");
                 });
-            } else {
-                show_state(previous_state_);
+            } else if (!visual_ready) {
+                show_state(InteractionState::idle);
             }
         }
         const bool visual_published =
@@ -2397,7 +2396,11 @@ private:
                     "IMAGE UNAVAILABLE");
             });
         }
-        timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
+        const std::uint32_t completed_at_ms = monotonic_ms();
+        timing_.mark(runtime::TurnPhase::completion, completed_at_ms);
+        interaction_.interaction_finished(completed_at_ms);
+        previous_state_ = interaction_.state();
+        ESP_LOGI(kTag, "Interaction complete; idle timer started");
         log_turn_timing();
         voice_priority_.store(false, std::memory_order_release);
         ESP_LOGI(
@@ -2505,9 +2508,9 @@ private:
         clear_all_image_state();
         python_tool_.clear_plot();
         pending_plot_.clear();
+        show_error(message);
         interaction_.fail(monotonic_ms());
         previous_state_ = interaction_.state();
-        show_error(message);
         voice_priority_.store(false, std::memory_order_release);
     }
 
@@ -2790,10 +2793,10 @@ private:
         display_available_.store(true, std::memory_order_release);
         display_sleep_pending_ = false;
         ensure_ble_started();
-        interaction_.fail(now_ms);
-        previous_state_ = interaction_.state();
         request_display_wake(now_ms);
         show_error("CHATESP COULD NOT TURN OFF");
+        interaction_.fail(monotonic_ms());
+        previous_state_ = interaction_.state();
     }
 
     RuntimeSettings settings_;

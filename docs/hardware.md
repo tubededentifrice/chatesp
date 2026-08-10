@@ -268,8 +268,10 @@ The connected V2 board must pass these checks for this control change:
   sleep at the limit. A short bottom PWR press still requests sleep;
 - a bottom PWR press in Clock shows ChatESP without visible delay, and a held
   press starts `LISTENING` at the normal threshold;
-- 30 seconds after speech playback finishes or a request error occurs, ChatESP
-  sleeps, Wi-Fi stops, and the prior thread is not available;
+- 30 seconds after the complete response action finishes or fails, ChatESP
+  sleeps, Wi-Fi stops, and the prior thread is not available. Speech, requested
+  image or plot work, and the last display update finish before this interval
+  starts;
 - the footer shows the active Wi-Fi or secure BLE icon. Connected Wi-Fi shows
   one through three signal bars. The footer shows a valid battery percentage
   or a clear unavailable value. While external power is connected, its
@@ -375,6 +377,8 @@ The full-screen image path must pass these checks on the V2 AMOLED:
 - a valid JPEG media type with case changes or parameters is accepted;
 - after all bounded candidates fail, the text answer stays visible with a
   clear image-unavailable notice;
+- the 30-second interval starts after the selected image appears or after the
+  image-unavailable notice appears;
 - an image can still appear when speech fails before playback starts;
 - a successful image search that has no second model selection shows the first
   current result instead of only claiming that an image is visible;
@@ -400,6 +404,8 @@ The restricted Python path must pass these checks on the V2 AMOLED:
 - a plot of `1/x` from -1 through 1 completes in one Python tool call and does
   not draw a line through the undefined value at zero;
 - the plot title and axis ranges are readable with the correct board rotation;
+- the 30-second interval starts after the plot appears or its display attempt
+  fails;
 - a new PWR action and sleep remove the plot;
 - repeated calculations, limit failures, and plots do not cause a reset or a
   PSRAM leak.

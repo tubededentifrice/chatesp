@@ -35,8 +35,9 @@ ChatESP.*
 - **Useful tools:** Search the web, find and show images, run bounded
   calculations, draw line plots, and control or restart the device by voice.
 - **Short follow-up chat:** Continue the same conversation for 30 seconds after
-  speech playback ends or a request error occurs. The device then clears the
-  thread and sleeps.
+  the complete response action finishes or fails. Speech, a requested image or
+  plot, and the last display update finish before this window starts. The
+  device then clears the thread and sleeps.
 - **Travel Clock:** Use the large AMOLED as a landscape 24-hour clock with a
   one-pixel seconds line. Clock sleeps after five minutes on battery and stays
   on while external power is connected.
