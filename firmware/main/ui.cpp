@@ -33,6 +33,7 @@ constexpr std::size_t kMaximumWifiStatusBytes = 20;
 constexpr std::uint16_t kMinimumChatFontScalePercent = 100;
 constexpr std::uint16_t kMaximumChatFontScalePercent = 200;
 constexpr std::int32_t kLvglScaleBase = 256;
+constexpr std::int32_t kBatteryIconPercentGap = 2;
 constexpr std::int32_t kControlsPanelHeight = 280;
 constexpr std::int32_t kControlsPanelShownY = -12;
 constexpr std::int32_t kControlsHandleWidth = 44;
@@ -323,7 +324,7 @@ void apply_chat_font_scale() {
         lv_obj_align(battery_status_label, LV_ALIGN_TOP_RIGHT, -30, footer_y);
     }
     const std::int32_t battery_icon_right =
-        -30 - scaled_value(48, percent) - 4;
+        -30 - scaled_value(48, percent) - kBatteryIconPercentGap;
     if (battery_icon_label != nullptr) {
         lv_obj_align(
             battery_icon_label, LV_ALIGN_TOP_RIGHT,
@@ -1483,7 +1484,7 @@ void create_runtime_screen() {
         battery_icon_label,
         battery_status_label,
         LV_ALIGN_OUT_LEFT_MID,
-        -4,
+        -kBatteryIconPercentGap,
         0);
 
     // LVGL supplies separate standard battery and charge glyphs. Scale and

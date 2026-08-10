@@ -296,6 +296,8 @@ The connected V2 board must pass these checks for this control change:
 - a provisioned 200% chat font size enlarges all ChatESP text and status
   glyphs, wraps the answer within the display, and keeps long text scrollable;
 - changing the chat font size does not change the Clock face or its time font;
+- the battery icon keeps a two-pixel gap from the percentage at each chat font
+  size;
 - on a held cold start, Wi-Fi setup starts only after 100 ms of valid audio and
   does not stop microphone capture;
 - speech starts from the first complete sentence. One second TTS request has

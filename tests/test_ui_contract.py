@@ -152,6 +152,21 @@ class UiContractTests(unittest.TestCase):
         )
         self.assertNotIn('"%s" LV_SYMBOL_CHARGE', footer_source)
 
+    def test_battery_icon_has_a_tight_fixed_percent_gap(self) -> None:
+        ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "constexpr std::int32_t kBatteryIconPercentGap = 2;", ui
+        )
+        self.assertIn(
+            "-30 - scaled_value(48, percent) - kBatteryIconPercentGap", ui
+        )
+        self.assertIn(
+            "LV_ALIGN_OUT_LEFT_MID,\n        -kBatteryIconPercentGap", ui
+        )
+
     def test_chat_font_scale_reflows_text_and_does_not_scale_clock(self) -> None:
         ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
             encoding="utf-8"
