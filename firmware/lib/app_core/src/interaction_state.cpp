@@ -71,7 +71,6 @@ void InteractionStateMachine::tick(std::uint32_t now_ms) {
     if (state_ == InteractionState::error &&
         elapsed(now_ms, state_entered_at_ms_) >= config_.error_visible_ms) {
         set_state(InteractionState::idle, now_ms);
-        last_activity_at_ms_ = now_ms;
     }
 }
 
@@ -115,6 +114,7 @@ void InteractionStateMachine::fail(std::uint32_t now_ms) {
         button_down_ = false;
         wake_press_ = false;
         set_state(InteractionState::error, now_ms);
+        last_activity_at_ms_ = now_ms;
     }
 }
 

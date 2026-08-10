@@ -2343,7 +2343,6 @@ private:
             // The optional image can now use the remaining memory.
             start_image_worker(request_cancellation);
         }
-        join_image_worker();
         bool speech_failed = false;
         if (error != agent::Error::none) {
             pcm_sink_.cancel_and_stop();
@@ -2364,6 +2363,11 @@ private:
             });
         }
 
+        interaction_.interaction_finished(monotonic_ms());
+        previous_state_ = interaction_.state();
+        ESP_LOGI(kTag, "Interaction complete; idle timer started");
+        join_image_worker();
+
         if (cancellation_.cancelled()) {
             cancel_current();
             return;
@@ -2378,8 +2382,6 @@ private:
             return;
         }
 
-        interaction_.interaction_finished(monotonic_ms());
-        previous_state_ = interaction_.state();
         if (!speech_failed) {
             if (image_unavailable_.load(std::memory_order_acquire)) {
                 with_display([&answer]() {
@@ -2404,7 +2406,6 @@ private:
         timing_.mark(runtime::TurnPhase::completion, monotonic_ms());
         log_turn_timing();
         voice_priority_.store(false, std::memory_order_release);
-        ESP_LOGI(kTag, "Interaction complete; idle timer started");
         ESP_LOGI(
             kTag,
             "Runtime stack minimum free bytes: %u",

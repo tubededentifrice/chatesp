@@ -101,10 +101,13 @@ class VoiceResourceOrderTests(unittest.TestCase):
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
+        interaction_start = runtime.index(
+            "error = request_cancellation.normalize(wait_for_speech_worker())"
+        )
         interaction = runtime[
-            runtime.index(
-                "error = request_cancellation.normalize(wait_for_speech_worker())"
-            ) : runtime.index("bool speech_failed = false;")
+            interaction_start : runtime.index(
+                "if (cancellation_.cancelled())", interaction_start
+            )
         ]
 
         speech_wait = interaction.index("wait_for_speech_worker()")

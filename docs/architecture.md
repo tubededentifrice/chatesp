@@ -361,11 +361,12 @@ reached playback. A button press cancels model, search, image, TTS, and
 playback work and erases transient buffers.
 
 An HTTP response header is not audio progress. The first-audio timer stays
-active until the first PCM byte arrives. The idle-audio timer starts only after
-that byte and restarts after each later PCM block. Speech has a 60-second
-first-audio limit, a 30-second idle-audio limit, and a 180-second complete
-network limit. These limits include the raw PCM transfer through the phone
-proxy. The button cancellation path stays active during each wait.
+active until the first PCM byte arrives. A separate audio-transfer stall timer
+starts only after that byte and restarts after each later PCM block. Speech has
+a 60-second first-audio limit, a 30-second transfer-stall limit, and a
+180-second complete network limit. These limits include the raw PCM transfer
+through the phone proxy. They are not the conversation inactivity timer. The
+button cancellation path stays active during each wait.
 
 HTTPS uses four bounded lanes: OpenRouter control, OpenRouter audio, Brave
 search, and optional image download. Each lane keeps one client handle for one
@@ -402,11 +403,13 @@ unavailable imports or invalid loop syntax. The interpreter keeps its separate
 The voice worker uses a bounded internal-RAM stack. Large request buffers stay
 in PSRAM so flash operations remain safe and display DMA memory stays free.
 
-Each accepted interaction resets the monotonic inactivity timer. After 30
-seconds of idle ChatESP time, the runtime requests sleep, clears the PSRAM
-thread, and stops Wi-Fi. Clock keeps BLE available for time context. It sleeps
-after five minutes without external power and stays on while external power is
-connected. Only a short BOOT-button press enters Clock.
+The monotonic conversation inactivity timer does not run while a request or
+speech playback is active. It starts when playback finishes. If a request
+ends with an error, it starts when the runtime reports that error. After 30
+seconds, the runtime requests sleep, clears the PSRAM thread, and stops Wi-Fi.
+Clock keeps BLE available for time context. It sleeps after five minutes
+without external power and stays on while external power is connected. Only a
+short BOOT-button press enters Clock.
 AXP2101 system-off clears all volatile state. A PWR-button wake causes a cold
 boot and creates a new thread.
 
