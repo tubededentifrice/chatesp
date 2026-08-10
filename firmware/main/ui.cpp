@@ -1668,7 +1668,7 @@ bool start_hidden() {
         return true;
     }
     lv_display_t *display = bsp_display_start();
-    if (display == nullptr || bsp_display_backlight_off() != ESP_OK) {
+    if (display == nullptr) {
         return false;
     }
     display_handle = display;

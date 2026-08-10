@@ -34,6 +34,22 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
             runtime.index("command_queue_ = xQueueCreate"),
         )
 
+    def test_startup_storage_stack_is_released_before_runtime_tasks(self) -> None:
+        runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
+        startup = runtime.index("start_startup_services();")
+        release = runtime.index("release_startup_services_stack()", startup)
+        passkey = runtime.index("const BaseType_t passkey_task_result", release)
+        voice = runtime.index("const BaseType_t task_result", passkey)
+
+        self.assertLess(startup, release)
+        self.assertLess(release, passkey)
+        self.assertLess(passkey, voice)
+        self.assertIn("kStartupServicesStackBytes = 12 * 1024", runtime)
+        self.assertIn("kRuntimeStackBytes = 28 * 1024", runtime)
+        self.assertIn("pdMS_TO_TICKS(kControllerWaitMs)", runtime)
+
     def test_passkey_ui_has_stack_for_a_synchronous_display_refresh(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"

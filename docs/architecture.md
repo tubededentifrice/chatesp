@@ -12,18 +12,26 @@ flushes the splash while the AMOLED is off and raises the brightness only after
 the complete black frame is ready. It sends a second complete frame and repeats
 the selected brightness command after panel-on. This recovers a CO5300 that
 accepts the first commands but does not show the first pixel transfer. The
-startup path loads the small display-preference record on a low-priority task
-during the required panel sleep-out delay. It then builds only the content,
+startup path completes panel start and then loads the small display-preference
+record before it raises the brightness. This order keeps NVS work from letting
+LVGL run during a polling display transaction. It then builds only the content,
 recording, footer, passkey, and sleep views that the voice path can need.
-The voice runtime loads settings and saved memories on one bounded startup
-task while it can already accept a PWR hold. It probes touch and builds the
-optional control views only when voice work is idle. A new PWR action cancels
+One bounded startup task loads settings and saved memories after the capture
+views are ready. Firmware releases this task before it starts the input tasks.
+It probes touch and builds the optional control views only when voice work is
+idle. A new PWR action cancels
 this work between the touch probe and object construction. Firmware builds the
 Clock view only after an explicit BOOT-button action. It builds the image and
 plot overlays after capture stops and after it shows the transcript. The
 rounded Clock path uses double-precision geometry and a dedicated point buffer.
 Firmware allocates this buffer only on the first Clock entry. A touch start
 failure disables the optional control panel but does not block voice or sleep.
+The board adapter holds the LVGL lock while it completes polling panel commands
+and initial brightness setup.
+The storage startup task keeps its results in atomic state. Firmware gives it a
+five-second completion limit and releases its internal stack before it allocates
+the passkey and 28 KiB voice-runtime stacks. This size fits the measured largest
+internal-memory block with margin.
 Production also skips the optional full-PSRAM start test and uses a
 speed-optimized bootloader. Its bootloader reports only warnings and failures.
 These changes do not change system-off or steady active power policy. The

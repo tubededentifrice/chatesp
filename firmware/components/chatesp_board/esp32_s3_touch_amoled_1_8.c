@@ -783,14 +783,23 @@ lv_display_t *bsp_display_start(void)
 
 lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
 {
-    lv_display_t *disp;
+    lv_display_t *disp = NULL;
 
     assert(cfg != NULL);
     BSP_ERROR_CHECK_RETURN_NULL(lvgl_port_init(&cfg->lvgl_port_cfg));
 
-    BSP_NULL_CHECK(disp = bsp_display_lcd_init(cfg), NULL);
-
-    BSP_ERROR_CHECK_RETURN_NULL(bsp_display_brightness_init());
+    /* The LVGL task starts before the default display exists. Hold its lock
+     * while panel polling commands and brightness setup finish. */
+    if (!lvgl_port_lock(0))
+    {
+        return NULL;
+    }
+    disp = bsp_display_lcd_init(cfg);
+    if (disp != NULL && bsp_display_brightness_init() != ESP_OK)
+    {
+        disp = NULL;
+    }
+    lvgl_port_unlock();
 
     return disp;
 }

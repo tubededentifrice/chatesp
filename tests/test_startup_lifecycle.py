@@ -59,22 +59,19 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertIn("bsp_display_start_touch(display_handle)", deferred)
         self.assertIn("create_quick_controls(active_screen())", deferred)
 
-    def test_preferences_load_during_hidden_panel_start(self) -> None:
+    def test_preferences_load_after_hidden_panel_start(self) -> None:
         app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(
             encoding="utf-8"
         )
         main = app[app.index('extern "C" void app_main()') :]
 
-        task_start = main.index("const bool preference_task_started = xTaskCreate(")
         hidden_start = main.index("chatesp::ui::start_hidden()")
-        join = main.index("const esp_err_t preferences_result")
+        preferences = main.index("device_preferences_store.initialize()")
         publish = main.index("chatesp::ui::publish_startup(")
-        self.assertLess(task_start, hidden_start)
-        self.assertLess(hidden_start, join)
-        self.assertLess(join, publish)
-        self.assertIn("if (!task_started)", app)
-        self.assertIn("return load.store->initialize();", app)
-        self.assertIn("ulTaskNotifyTake(pdTRUE, portMAX_DELAY)", app)
+        self.assertLess(hidden_start, preferences)
+        self.assertLess(preferences, publish)
+        self.assertNotIn("preference_load_task", app)
+        self.assertNotIn('"device_preferences"', app)
 
     def test_startup_uses_confirmed_power_key_credit(self) -> None:
         app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(
@@ -114,8 +111,16 @@ class StartupLifecycleTests(unittest.TestCase):
 
         self.assertNotIn("bsp_display_indev_init", display_start)
         self.assertIn("bsp_display_indev_init", touch_start)
+        self.assertLess(
+            display_start.index("lvgl_port_lock(0)"),
+            display_start.index("bsp_display_lcd_init(cfg)"),
+        )
+        self.assertLess(
+            display_start.index("bsp_display_brightness_init()"),
+            display_start.index("lvgl_port_unlock()"),
+        )
 
-    def test_saved_memories_do_not_block_capture_start(self) -> None:
+    def test_saved_memories_are_not_loaded_on_main_task(self) -> None:
         app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(
             encoding="utf-8"
         )

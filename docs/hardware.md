@@ -119,18 +119,26 @@ firmware polling occurs in that state.
 The production profile does not run the optional full-PSRAM start test. It uses
 a speed-optimized bootloader that reports only warnings and failures.
 Development keeps the PSRAM start test and normal boot reports so firmware work
-still checks the fixed memory part. The UI sends the reliable two-frame splash
-while a low-priority task loads the small display-preference record. It then
-builds only the capture, footer, passkey, and sleep views. It defers touch and
+still checks the fixed memory part. The UI starts the hidden splash and then
+loads the small display-preference record before it raises the brightness. This
+sequence prevents LVGL work during polling display transactions. It then builds
+only the capture, footer, passkey, and sleep views. It defers touch and
 control views until voice work is idle. It builds Clock only on an explicit
 BOOT-button action. It builds plot and image overlays after capture stops and
-after it shows the transcript. It also defers saved settings and memories to a
-bounded startup task that runs while a PWR hold can start capture. It defers
+after it shows the transcript. It loads saved settings and memories on a
+bounded startup task and releases that task before input tasks start. It defers
 the rounded Clock path buffer and calculation until the first Clock entry.
 Thus, optional flash, touch, and Clock work do not delay the first visible
-feedback or the first microphone sample. These start changes do not change
+feedback. Required settings and memory work has a five-second start limit and
+completes before the first microphone sample. These start changes do not change
 system-off current or steady active settings. Measure PWR-to-pixels time and
 complete interaction energy on the board.
+The board adapter holds the LVGL lock from panel creation through initial
+brightness setup.
+Firmware also releases the completed storage startup stack before it allocates
+the persistent passkey and voice-runtime stacks. This order keeps a contiguous
+internal-memory block available for the 28 KiB voice-runtime stack. A
+five-second limit prevents storage work from blocking start without a bound.
 
 An active PWR press does not replay the panel initialization table before the
 firmware knows its action. A short press draws the black sleep frame without an

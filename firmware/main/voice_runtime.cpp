@@ -92,7 +92,7 @@ static_assert(
     AudioCapture::kSampleRateHz == kAudioSpectrumSampleRateHz,
     "The spectrum bin frequencies must match the capture sample rate");
 constexpr UBaseType_t kRuntimePriority = 5;
-constexpr std::uint32_t kRuntimeStackBytes = 32 * 1024;
+constexpr std::uint32_t kRuntimeStackBytes = 28 * 1024;
 constexpr UBaseType_t kDisplayControllerPriority = 4;
 constexpr std::uint32_t kDisplayControllerStackBytes = 8 * 1024;
 constexpr UBaseType_t kBleControllerPriority = 4;
@@ -582,6 +582,20 @@ public:
         }
         start_control_tasks();
         start_startup_services();
+        // Reclaim the completed internal stack before the two persistent
+        // runtime tasks need contiguous internal memory. The result stays in
+        // the atomics and is applied on the runtime task.
+        if (!release_startup_services_stack()) {
+            ESP_LOGE(kTag, "Startup services did not finish before start");
+            stop_control_tasks();
+            vQueueDelete(command_queue_);
+            vQueueDelete(passkey_queue_);
+            vQueueDelete(device_context_queue_);
+            command_queue_ = nullptr;
+            passkey_queue_ = nullptr;
+            device_context_queue_ = nullptr;
+            return ESP_ERR_TIMEOUT;
+        }
         const BaseType_t passkey_task_result = xTaskCreatePinnedToCore(
             passkey_task_entry,
             "ble_passkey_ui",
@@ -925,9 +939,24 @@ private:
 
     void run_startup_services() {
         run_startup_services_inline();
-        // The runtime reclaims this short-lived internal stack before it
-        // starts BLE.
+        // The start path reclaims this short-lived internal stack before it
+        // creates the input tasks.
         vTaskSuspend(nullptr);
+    }
+
+    bool release_startup_services_stack() {
+        const EventBits_t bits = xEventGroupWaitBits(
+            speech_events_, kStartupServicesDoneBit, pdFALSE, pdTRUE,
+            pdMS_TO_TICKS(kControllerWaitMs));
+        if ((bits & kStartupServicesDoneBit) == 0) {
+            return false;
+        }
+        if (startup_services_task_ != nullptr) {
+            TaskHandle_t completed = startup_services_task_;
+            startup_services_task_ = nullptr;
+            vTaskDelete(completed);
+        }
+        return true;
     }
 
     void stop_startup_services() {

@@ -112,6 +112,25 @@ Apply the record on the voice-runtime task, before its first startup command.
 Do not apply it on the main startup task. The complete record can overflow the
 smaller main stack and cause a reset loop after `settings_apply_begin`.
 
+### Production resets after the display starts and the codec initializes
+
+Observed signature:
+
+```text
+Display ready
+ES8311: Work in Slave mode
+***ERROR*** A stack overflow in task main has been detected.
+```
+
+This signature has two start limits. The LVGL task can run as soon as the
+default display exists. Hold the LVGL lock until panel polling commands and
+brightness setup finish. Release the completed storage startup stack before the
+persistent passkey and 28 KiB voice-runtime stack allocations. The runtime
+stack must fit the measured largest internal-memory block, not only the total
+free memory. Give storage startup a five-second completion limit.
+Load the small preference record after hidden panel start and before brightness
+rises. A successful start must reach `runtime_ready`.
+
 ### The iPhone misses a short advertising window
 
 The selected-device reconnect scan runs for 30 seconds. A failed scan has only
