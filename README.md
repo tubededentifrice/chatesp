@@ -27,7 +27,8 @@ ChatESP.*
   submit. There is no wake word and no background microphone stream.
 - **Fast cold wake:** Production system-off recognizes each bottom PWR press
   in 128 ms and starts the board before it knows if the press will be short or
-  held. A continued hold enters listening at the normal recording threshold.
+  held. The splash appears before touch setup. A continued hold enters
+  listening at the normal recording threshold without a second panel start.
 - **Fast spoken replies:** Text appears while the model works. The first
   sentence starts speech early. One second request contains the complete
   remaining spoken answer.

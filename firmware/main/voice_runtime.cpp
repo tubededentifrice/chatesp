@@ -378,6 +378,7 @@ struct RuntimeSettings {
 
 enum class CommandKind : std::uint8_t {
     button_down,
+    startup_button_down,
     wake_button_down,
     button_up,
     wake_from_poweroff,
@@ -585,7 +586,7 @@ public:
             cancellation_.cancel();
             context_cancellation_.cancel();
             const Command command{
-                CommandKind::wake_button_down, startup_at_ms};
+                CommandKind::startup_button_down, startup_at_ms};
             queue_command(command);
         }
         const BaseType_t task_result = xTaskCreatePinnedToCore(
@@ -1801,6 +1802,7 @@ private:
             return;
         }
         if ((command.kind == CommandKind::button_down ||
+             command.kind == CommandKind::startup_button_down ||
              command.kind == CommandKind::wake_button_down ||
              command.kind == CommandKind::wake_from_poweroff) &&
             app_mode_.load(std::memory_order_acquire) == AppMode::clock) {
@@ -1808,22 +1810,21 @@ private:
             // short-press or hold-to-talk state handling continues.
             enter_chat_mode(command.at_ms);
         }
-        if (command.kind == CommandKind::wake_button_down ||
+        if (command.kind == CommandKind::startup_button_down ||
+            command.kind == CommandKind::wake_button_down ||
             command.kind == CommandKind::wake_from_poweroff ||
             (command.kind == CommandKind::button_down &&
              interaction_.state() == InteractionState::sleep_pending)) {
             ESP_LOGI(kTag, "Action button requested display wake");
-            wake_for_button(command.at_ms);
+            const bool display_already_ready =
+                command.kind == CommandKind::startup_button_down;
+            wake_for_button(command.at_ms, display_already_ready);
             return;
         }
         if (command.kind == CommandKind::button_down) {
             ESP_LOGI(kTag, "Action button started a voice hold");
+            display_recovery_requested_for_press_ = false;
             interaction_.button_down(command.at_ms);
-            // A brightness command alone does not recover every CO5300 black
-            // panel state. Redraw the active view and reassert brightness on
-            // each deliberate voice hold. The display lock is bounded so
-            // microphone capture still starts promptly.
-            request_display_wake(command.at_ms);
         } else if (command.kind == CommandKind::button_up) {
             ESP_LOGI(kTag, "Action button was released");
             timing_.reset(command.at_ms);
@@ -1888,7 +1889,8 @@ private:
         }
     }
 
-    void wake_for_button(std::uint32_t now_ms) {
+    void wake_for_button(
+        std::uint32_t now_ms, bool display_already_ready = false) {
         low_battery_poweroff_pending_ = false;
         // The display wake runs while PWR and voice work have priority, so its
         // forced footer refresh cannot read the PMIC. Keep one request until
@@ -1901,7 +1903,10 @@ private:
         interaction_.ready(now_ms);
         interaction_.wake_button_down(now_ms);
         previous_state_ = interaction_.state();
-        request_display_wake(now_ms);
+        display_recovery_requested_for_press_ = true;
+        if (!display_already_ready) {
+            request_display_wake(now_ms);
+        }
         crash_diagnostics::mark(
             runtime::CrashEvent::phone_proxy_wake_start);
         if (!ensure_ble_started()) {
@@ -1995,6 +2000,13 @@ private:
         if (capture_.start() != ESP_OK) {
             fail("MICROPHONE COULD NOT START");
             return;
+        }
+        // Do not reinitialize the active panel for a short sleep press. If the
+        // press becomes a voice hold, start audio first and then request the
+        // bounded display recovery. A wake press requested recovery earlier.
+        if (!display_recovery_requested_for_press_) {
+            display_recovery_requested_for_press_ = true;
+            request_display_wake(now_ms);
         }
         // The button-wake path starts BLE before the recording threshold.
         // Do not start more radio work between microphone start and reads.
@@ -2797,6 +2809,7 @@ private:
     bool sntp_start_attempted_ = false;
     bool display_wake_pending_ = false;
     bool display_sleep_pending_ = false;
+    bool display_recovery_requested_for_press_ = true;
     bool battery_checked_ = false;
     bool battery_wake_refresh_pending_ = false;
     bool low_battery_poweroff_pending_ = false;

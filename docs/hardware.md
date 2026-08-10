@@ -31,6 +31,10 @@ An in-session display wake does not reset either controller. Firmware replays
 the bounded CO5300 initialization table while LVGL is locked, restores the
 selected brightness, and sends one complete frame. A brightness or display-on
 command acknowledgement alone is not wake proof.
+Cold start draws and shows the reliable splash before it probes and registers
+the CST820. A held cold start uses this active panel state. It does not replay
+the initialization table before listening. A failed touch start disables touch
+controls but does not block voice operation.
 
 The LVGL draw and software-rotation buffers are DMA-capable and use internal
 memory. The board allocates them during display start. Do not use a normal
@@ -113,14 +117,22 @@ after sleep starts. Production system-off also stops the processor, so no
 firmware polling occurs in that state.
 
 The production profile does not run the optional full-PSRAM start test. It uses
-a speed-optimized bootloader. Development keeps the PSRAM start test so normal
-firmware work still checks the fixed memory part. The UI sends the reliable
-two-frame splash before it builds hidden Clock, plot, and control views. Saved
-memory loading also occurs after the splash is visible. It defers the rounded
-Clock path buffer and calculation until the first Clock entry. Thus, Clock
-geometry does not delay voice-runtime readiness. These start changes do not
-change system-off current or steady active settings. Measure PWR-to-pixels time
-and complete interaction energy on the board.
+a speed-optimized bootloader that reports only warnings and failures.
+Development keeps the PSRAM start test and normal boot reports so firmware work
+still checks the fixed memory part. The UI sends the reliable two-frame splash
+before it probes touch, builds hidden Clock, plot, and control views, or loads
+saved memories. It defers the rounded Clock path buffer and calculation until
+the first Clock entry. Thus, touch and Clock work do not delay the first visible
+feedback. These start changes do not change system-off current or steady active
+settings. Measure PWR-to-pixels time and complete interaction energy on the
+board.
+
+An active PWR press does not replay the panel initialization table before the
+firmware knows its action. A short press draws the black sleep frame without an
+intermediate panel restart. If the press reaches the recording threshold,
+microphone capture starts first and the bounded panel recovery follows. A wake
+from development soft sleep or USB-held production system-off still requests
+panel recovery at once.
 
 The 128 ms PWR-on setting is a reversible PMIC register change. It stays set
 through normal AXP2101 system-off and does not enable a processor timer, poll,
@@ -201,6 +213,8 @@ The connected V2 board must pass these checks for this control change:
 - with USB disconnected, a held PWR press starts recording and its release
   submits without a USB reconnection;
 - a short PWR press from idle turns the screen off and requests system-off;
+- a short PWR press from idle does not turn the panel on again between the
+  first black frame and the completed sleep state;
 - 30 seconds without input in ChatESP turns the screen off and requests the
   selected development or production sleep path;
 - a stalled BLE shutdown does not block a PWR-button wake from development
@@ -213,7 +227,8 @@ The connected V2 board must pass these checks for this control change:
 - after Wi-Fi and BLE start, repeated full-screen refreshes do not report a
   private transmit-buffer allocation failure or block the LVGL task;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
-  normal hold threshold;
+  normal hold threshold without a second panel initialization;
+- the reliable cold-start splash appears before the touch-controller probe;
 - from production system-off, each PWR press starts the power rails after the
   128 ms recognition interval, without a short-versus-hold result;
 - after the fast PWR-on setting is applied, production system-off current is

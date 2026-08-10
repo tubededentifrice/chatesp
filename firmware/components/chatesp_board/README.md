@@ -6,6 +6,8 @@ This directory contains the Waveshare board package at commit
 ChatESP keeps this local copy for its display start and recovery changes. The
 CO5300 starts at zero brightness. The app draws its first black frame before it
 sets the normal brightness. This change prevents a white frame during startup.
+The app starts touch after the reliable splash is visible, so the I2C probe
+does not delay the first user feedback.
 An in-session wake replays the panel initialization table without resetting
 the panel or touch controller. This repairs a controller that accepts wake
 commands but keeps its pixels black.

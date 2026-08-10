@@ -98,6 +98,7 @@ lv_chart_series_t *plot_series = nullptr;
 lv_obj_t *passkey_overlay = nullptr;
 lv_obj_t *passkey_label = nullptr;
 lv_obj_t *sleep_overlay = nullptr;
+bool touch_available = false;
 lv_obj_t *controls_edge_target = nullptr;
 lv_obj_t *controls_edge_handle = nullptr;
 lv_obj_t *controls_backdrop = nullptr;
@@ -1417,6 +1418,11 @@ bool start(std::uint8_t brightness_percent) {
         return false;
     }
 
+    // Touch is not needed for the startup view. Probe it only after the first
+    // reliable pixels are visible so its I2C transactions do not delay the
+    // user's first feedback from a cold start.
+    touch_available = bsp_display_start_touch(display) == ESP_OK;
+
     if (!bsp_display_lock(1000)) {
         (void)bsp_display_backlight_off();
         return false;
@@ -1517,7 +1523,7 @@ bool enable_quick_controls(
     void *context) {
     const runtime::DevicePreferences preferences{
         brightness_percent, volume_percent};
-    if (!preferences.valid() || callback == nullptr ||
+    if (!touch_available || !preferences.valid() || callback == nullptr ||
         controls_panel == nullptr || controls_edge_target == nullptr ||
         controls_timer == nullptr) {
         return false;

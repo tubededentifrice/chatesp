@@ -17,11 +17,15 @@ transfer. It loads saved memories after the splash is visible. The rounded
 Clock path uses double-precision geometry and a dedicated point buffer.
 Firmware allocates and builds them only on the first Clock entry, so this
 unrelated work does not delay voice-runtime readiness.
+The startup path also probes and registers the touch controller after the
+reliable splash is visible. Touch is not needed for this first view. A touch
+start failure disables the optional control panel but does not block voice.
 Production also skips the optional full-PSRAM start test and uses a
-speed-optimized bootloader. These changes do not change system-off or steady
-active power policy. The runtime replaces the splash as soon as its task and
-button queue can accept input. It does not use a minimum splash timer. An
-in-session display wake shows the current interaction state instead.
+speed-optimized bootloader. Its bootloader reports only warnings and failures.
+These changes do not change system-off or steady active power policy. The
+runtime replaces the splash as soon as its task and button queue can accept
+input. It does not use a minimum splash timer. An in-session display wake shows
+the current interaction state instead.
 Development soft sleep keeps the CO5300 initialized at its current brightness
 and covers the screen with one full black frame. Wake removes this frame and
 does not depend on a zero-to-nonzero brightness transition. Each deliberate
@@ -29,6 +33,12 @@ in-session wake also replays the bounded CO5300 initialization table, restores
 the selected brightness, and sends one complete frame. It does not reset the
 panel or CST820 touch controller. This recovers a panel that accepts commands
 but keeps its output stage black.
+An active short PWR press does not run this recovery before its action is
+known. Release can therefore draw the sleep frame without an intermediate
+panel restart. If the press becomes a voice hold, audio starts at the normal
+threshold and the runtime then requests display recovery. A held cold start
+uses the reliable splash that is already active and does not start the panel a
+second time.
 
 Each state has a visible black-screen presentation and a timeout. An error
 returns to idle with a short message that identifies the failed operation. The
@@ -228,13 +238,13 @@ complete settings record off the smaller main startup stack. The 500-millisecond
 idle check applies later BLE settings changes.
 
 The production image uses 80 MHz QIO flash, a 240 MHz CPU, a
-speed-optimized bootloader, and no optional full-PSRAM start test. It keeps
-application-image validation and the startup low-battery gate. These checks
-protect recovery and the battery. The firmware reads the AXP2101 PWR-on setting
-on each start. If necessary, it programs and reads back the 128-millisecond
-value. The setting stays through normal system-off. A complete PMIC power loss
-can restore its factory PWR-on time for the first start after power returns.
-That start applies the fast value again.
+speed-optimized warning-level bootloader, and no optional full-PSRAM start
+test. It keeps application-image validation and the startup low-battery gate.
+These checks protect recovery and the battery. The firmware reads the AXP2101
+PWR-on setting on each start. If necessary, it programs and reads back the
+128-millisecond value. The setting stays through normal system-off. A complete
+PMIC power loss can restore its factory PWR-on time for the first start after
+power returns. That start applies the fast value again.
 
 The station scans all 2.4 GHz channels and selects the strongest matching
 access point. It rejects access points below -75 dBm and retries the strongest

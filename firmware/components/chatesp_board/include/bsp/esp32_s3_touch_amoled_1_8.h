@@ -308,9 +308,21 @@ lv_display_t *bsp_display_start(void);
 lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg);
 
 /**
+ * @brief Initialize touch after the first display frame is visible
+ *
+ * @param disp Pointer to the initialized LVGL display
+ *
+ * @return
+ *      - ESP_OK                On success
+ *      - ESP_ERR_INVALID_ARG   Display is not initialized
+ *      - Else                  Touch initialization failure
+ */
+esp_err_t bsp_display_start_touch(lv_display_t *disp);
+
+/**
  * @brief Get pointer to input device (touch, buttons, ...)
  *
- * @note The LVGL input device is initialized in bsp_display_start() function.
+ * @note The LVGL input device is initialized by bsp_display_start_touch().
  *
  * @return Pointer to LVGL input device or NULL when not initialized
  */

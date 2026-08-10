@@ -790,11 +790,19 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
 
     BSP_NULL_CHECK(disp = bsp_display_lcd_init(cfg), NULL);
 
-    BSP_NULL_CHECK(disp_indev = bsp_display_indev_init(disp), NULL);
-
     BSP_ERROR_CHECK_RETURN_NULL(bsp_display_brightness_init());
 
     return disp;
+}
+
+esp_err_t bsp_display_start_touch(lv_display_t *disp)
+{
+    ESP_RETURN_ON_FALSE(disp != NULL, ESP_ERR_INVALID_ARG, TAG, "No display for touch");
+    if (disp_indev != NULL) {
+        return ESP_OK;
+    }
+    disp_indev = bsp_display_indev_init(disp);
+    return disp_indev != NULL ? ESP_OK : ESP_FAIL;
 }
 
 lv_indev_t *bsp_display_get_input_dev(void)

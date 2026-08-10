@@ -19,6 +19,11 @@ top mode button does not wake it and has no effect while it sleeps. The ChatESP
 footer shows a small centered `DEV` marker. Production firmware does not create
 this marker.
 
+When the display is active, firmware waits until the PWR press becomes a voice
+hold before it requests panel recovery. A short sleep press therefore draws
+one black frame and stays black. It does not restart the panel between the
+press and the completed soft-sleep state.
+
 Build and upload development mode with one command:
 
 ```sh
@@ -144,11 +149,13 @@ the battery-powered EXIO4 level at start. Thus, one short PWR press wakes to
 `READY`; it does not start `LISTENING`. A continued hold still starts recording
 at the normal threshold.
 
-The production profile skips the optional full-PSRAM start test and optimizes
-the bootloader for speed. Development keeps the memory test. Both profiles use
+The production profile skips the optional full-PSRAM start test, optimizes the
+bootloader for speed, and keeps only bootloader warnings and failures.
+Development keeps the memory test and normal boot reports. Both profiles use
 the same PSRAM at run time. Production also shows the reliable two-frame splash
-before it builds hidden runtime views or loads saved memories. These changes do
-not change the system-off or steady active power policy.
+before touch setup, hidden runtime views, or saved-memory loading. A held cold
+start uses this active panel state without a second panel initialization. These
+changes do not change the system-off or steady active power policy.
 
 A model `power_off` request gives a short confirmation and then uses this same
 system-off path. One bottom PWR-button press starts the board again. A held wake

@@ -20,7 +20,9 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertIn(
             "CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_PERF=y", production
         )
+        self.assertIn("CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y", production)
         self.assertNotIn("CONFIG_SPIRAM_MEMTEST=n", development)
+        self.assertNotIn("CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y", development)
 
     def test_reliable_splash_precedes_hidden_runtime_views(self) -> None:
         ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
@@ -40,6 +42,41 @@ class StartupLifecycleTests(unittest.TestCase):
             start.index("bsp_display_brightness_set(brightness_percent)"),
             start.index("create_runtime_screen();"),
         )
+        self.assertLess(
+            start.index("bsp_display_brightness_set(brightness_percent)"),
+            start.index("bsp_display_start_touch(display)"),
+        )
+        self.assertLess(
+            start.index("bsp_display_start_touch(display)"),
+            start.index("create_runtime_screen();"),
+        )
+        self.assertIn(
+            "touch_available = bsp_display_start_touch(display) == ESP_OK",
+            start,
+        )
+        self.assertNotIn(
+            "if (bsp_display_start_touch(display) != ESP_OK)", start
+        )
+
+    def test_touch_probe_does_not_delay_the_first_splash_frame(self) -> None:
+        board = (
+            ROOT
+            / "firmware"
+            / "components"
+            / "chatesp_board"
+            / "esp32_s3_touch_amoled_1_8.c"
+        ).read_text(encoding="utf-8")
+        display_start = board[
+            board.index("lv_display_t *bsp_display_start_with_config(") :
+            board.index("esp_err_t bsp_display_start_touch(")
+        ]
+        touch_start = board[
+            board.index("esp_err_t bsp_display_start_touch(") :
+            board.index("lv_indev_t *bsp_display_get_input_dev(")
+        ]
+
+        self.assertNotIn("bsp_display_indev_init", display_start)
+        self.assertIn("bsp_display_indev_init", touch_start)
 
     def test_saved_memories_load_after_the_splash_is_visible(self) -> None:
         app = (ROOT / "firmware" / "main" / "app_main.cpp").read_text(

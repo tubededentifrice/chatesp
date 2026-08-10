@@ -219,6 +219,48 @@ class PlatformioWrapperTests(unittest.TestCase):
         self.assertIn("sleep_overlay", ui)
         self.assertIn("keep_panel_ready\n        ? ESP_OK", ui)
 
+    def test_short_sleep_press_does_not_reinitialize_the_panel(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        runtime = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        command_start = runtime.index("void process_command(")
+        command_end = runtime.index(
+            "void apply_device_context(", command_start
+        )
+        command_source = runtime[command_start:command_end]
+        normal_press = command_source[
+            command_source.index(
+                "if (command.kind == CommandKind::button_down)"
+            ) : command_source.index(
+                "else if (command.kind == CommandKind::button_up)"
+            )
+        ]
+        recording_start = runtime.index("void begin_recording(")
+        recording_end = runtime.index("void capture_audio(", recording_start)
+        recording_source = runtime[recording_start:recording_end]
+
+        self.assertNotIn("request_display_wake", normal_press)
+        self.assertIn(
+            "display_recovery_requested_for_press_ = false", normal_press
+        )
+        self.assertIn("request_display_wake(now_ms)", recording_source)
+
+    def test_held_cold_start_reuses_the_visible_splash(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        runtime = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("CommandKind::startup_button_down", runtime)
+        self.assertIn(
+            "wake_for_button(command.at_ms, display_already_ready)", runtime
+        )
+        wake_start = runtime.index("void wake_for_button(")
+        wake_end = runtime.index("void request_display_wake(", wake_start)
+        wake_source = runtime[wake_start:wake_end]
+        self.assertIn("if (!display_already_ready)", wake_source)
+
     def test_button_wake_defers_the_blocked_battery_refresh(self) -> None:
         root = Path(__file__).resolve().parents[1]
         source = (
