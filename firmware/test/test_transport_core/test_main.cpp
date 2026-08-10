@@ -126,6 +126,31 @@ void test_elapsed_timer_handles_millisecond_wrap() {
     TEST_ASSERT_TRUE(timer.expired(0x00000004U, 20));
 }
 
+void test_response_body_timeout_does_not_treat_headers_as_audio() {
+    const chatesp::agent::RequestPolicy policy{1, 40, 25, 100, 1};
+    ResponseBodyProgress progress{100};
+    TEST_ASSERT_FALSE(progress.expired(139, policy));
+    TEST_ASSERT_TRUE(progress.expired(140, policy));
+    assert_error(Error::first_byte_timeout, progress.timeout_error());
+    TEST_ASSERT_EQUAL_UINT32(1, progress.remaining_timeout_ms(140, policy));
+
+    progress.observe_body_bytes(150);
+    TEST_ASSERT_TRUE(progress.received_body_bytes());
+    TEST_ASSERT_FALSE(progress.expired(174, policy));
+    TEST_ASSERT_TRUE(progress.expired(175, policy));
+    assert_error(Error::idle_timeout, progress.timeout_error());
+}
+
+void test_response_body_timeout_handles_millisecond_wrap() {
+    const chatesp::agent::RequestPolicy policy{1, 40, 25, 100, 1};
+    ResponseBodyProgress progress{0xfffffff0U};
+    TEST_ASSERT_FALSE(progress.expired(0x00000017U, policy));
+    TEST_ASSERT_TRUE(progress.expired(0x00000018U, policy));
+    progress.observe_body_bytes(0xfffffff8U);
+    TEST_ASSERT_FALSE(progress.expired(0x00000010U, policy));
+    TEST_ASSERT_TRUE(progress.expired(0x00000011U, policy));
+}
+
 void test_status_and_redirect_policy_is_narrow() {
     TEST_ASSERT_TRUE(is_redirect_status(308));
     TEST_ASSERT_FALSE(is_redirect_status(304));
@@ -145,6 +170,8 @@ int main(int, char **) {
     RUN_TEST(test_response_budget_stops_chunked_overflow);
     RUN_TEST(test_response_completion_rejects_truncated_bodies);
     RUN_TEST(test_elapsed_timer_handles_millisecond_wrap);
+    RUN_TEST(test_response_body_timeout_does_not_treat_headers_as_audio);
+    RUN_TEST(test_response_body_timeout_handles_millisecond_wrap);
     RUN_TEST(test_status_and_redirect_policy_is_narrow);
     return UNITY_END();
 }

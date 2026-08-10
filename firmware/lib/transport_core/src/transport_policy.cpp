@@ -288,5 +288,30 @@ bool ResponseBudget::accept(std::size_t bytes) {
     return true;
 }
 
+std::uint32_t ResponseBodyProgress::limit_ms(
+    const agent::RequestPolicy &policy) const {
+    return received_body_bytes_ ? policy.idle_timeout_ms
+                                : policy.first_byte_timeout_ms;
+}
+
+bool ResponseBodyProgress::expired(
+    std::uint32_t now_ms, const agent::RequestPolicy &policy) const {
+    return static_cast<std::uint32_t>(now_ms - activity_started_ms_) >=
+        limit_ms(policy);
+}
+
+std::uint32_t ResponseBodyProgress::remaining_timeout_ms(
+    std::uint32_t now_ms, const agent::RequestPolicy &policy) const {
+    const std::uint32_t elapsed =
+        static_cast<std::uint32_t>(now_ms - activity_started_ms_);
+    const std::uint32_t limit = limit_ms(policy);
+    return elapsed >= limit ? 1 : limit - elapsed;
+}
+
+agent::Error ResponseBodyProgress::timeout_error() const {
+    return received_body_bytes_ ? agent::Error::idle_timeout
+                                : agent::Error::first_byte_timeout;
+}
+
 }  // namespace transport
 }  // namespace chatesp

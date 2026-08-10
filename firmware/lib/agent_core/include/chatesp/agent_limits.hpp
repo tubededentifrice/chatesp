@@ -87,7 +87,7 @@ constexpr RequestPolicy transcription_policy() {
     return {20'000, 30'000, 15'000, 75'000, 2};
 }
 constexpr RequestPolicy speech_policy() {
-    return {20'000, 40'000, 25'000, 90'000, 2};
+    return {20'000, 60'000, 30'000, 180'000, 2};
 }
 constexpr RequestPolicy search_policy() {
     return {10'000, 12'000, 8'000, 20'000, 2};

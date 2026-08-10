@@ -396,7 +396,7 @@ agent::Error execute_ble_proxy(
     std::size_t response_bytes = 0;
     std::int64_t content_length = -1;
     ResponseBudget budget{request.response.max_response_bytes};
-    std::uint32_t phase_started_ms = monotonic_ms();
+    ResponseBodyProgress body_progress{monotonic_ms()};
     std::array<std::uint8_t,
         ble_provisioning::kMaximumHttpProxyFrameSize> frame{};
     while (result == agent::Error::none) {
@@ -412,13 +412,9 @@ agent::Error execute_ble_proxy(
         link_result = ble_provisioning::receive_http_proxy_frame(
             frame.data(), frame.size(), &frame_size, 250);
         if (link_result == ESP_ERR_TIMEOUT) {
-            const std::uint32_t phase_limit = head_received
-                ? request.timeouts.idle_timeout_ms
-                : request.timeouts.first_byte_timeout_ms;
-            if (static_cast<std::uint32_t>(
-                    monotonic_ms() - phase_started_ms) >= phase_limit) {
-                result = head_received ? agent::Error::idle_timeout
-                                       : agent::Error::first_byte_timeout;
+            if (body_progress.expired(
+                    monotonic_ms(), request.timeouts)) {
+                result = body_progress.timeout_error();
             }
             continue;
         }
@@ -427,7 +423,6 @@ agent::Error execute_ble_proxy(
             result = agent::Error::disconnected;
             break;
         }
-        phase_started_ms = monotonic_ms();
         const std::uint8_t type = frame[5];
         if (type == kProxyResponseHead) {
             if (head_received || frame_size < 22) {
@@ -483,6 +478,9 @@ agent::Error execute_ble_proxy(
             }
             result = sink.write(
                 frame.data() + kProxyDataHeaderBytes, chunk);
+            if (result == agent::Error::none) {
+                body_progress.observe_body_bytes(monotonic_ms());
+            }
             response_bytes += chunk;
         } else if (type == kProxyResponseEnd) {
             if (!head_received || frame_size != 14 ||
@@ -749,12 +747,14 @@ agent::Error HttpTransport::execute(
             }
         }
 
+        ResponseBodyProgress body_progress{monotonic_ms()};
         if (result == agent::Error::none) {
             esp_http_client_set_timeout_ms(
                 client_,
                 phase_timeout(
                     total_timer, request.timeouts.total_timeout_ms,
-                    request.timeouts.first_byte_timeout_ms));
+                    body_progress.remaining_timeout_ms(
+                        monotonic_ms(), request.timeouts)));
             const std::int64_t fetched = esp_http_client_fetch_headers(client_);
             if (fetched < 0) {
                 result = fetched == -ESP_ERR_HTTP_EAGAIN
@@ -789,17 +789,23 @@ agent::Error HttpTransport::execute(
                 status, response_headers_.content_type.c_str(), content_length);
             output_started = result == agent::Error::none;
             ResponseBudget budget{request.response.max_response_bytes};
-            esp_http_client_set_timeout_ms(
-                client_,
-                phase_timeout(
-                    total_timer, request.timeouts.total_timeout_ms,
-                    request.timeouts.idle_timeout_ms));
             while (result == agent::Error::none) {
                 result = check_cancel_or_total(
                     cancellation, total_timer, request.timeouts);
                 if (result != agent::Error::none) {
                     break;
                 }
+                const std::uint32_t now_ms = monotonic_ms();
+                if (body_progress.expired(now_ms, request.timeouts)) {
+                    result = body_progress.timeout_error();
+                    break;
+                }
+                esp_http_client_set_timeout_ms(
+                    client_,
+                    phase_timeout(
+                        total_timer, request.timeouts.total_timeout_ms,
+                        body_progress.remaining_timeout_ms(
+                            now_ms, request.timeouts)));
                 const int read = esp_http_client_read(
                     client_, reinterpret_cast<char *>(buffer.data()),
                     static_cast<int>(buffer.size()));
@@ -811,7 +817,7 @@ agent::Error HttpTransport::execute(
                 }
                 if (read < 0) {
                     result = read == -ESP_ERR_HTTP_EAGAIN
-                                 ? agent::Error::idle_timeout
+                                 ? body_progress.timeout_error()
                                  : agent::Error::disconnected;
                     break;
                 }
@@ -821,6 +827,9 @@ agent::Error HttpTransport::execute(
                 }
                 result = sink.write(
                     buffer.data(), static_cast<std::size_t>(read));
+                if (result == agent::Error::none) {
+                    body_progress.observe_body_bytes(monotonic_ms());
+                }
             }
             if (result == agent::Error::none) {
                 result = sink.finish();

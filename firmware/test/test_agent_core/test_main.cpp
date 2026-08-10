@@ -2119,7 +2119,9 @@ void test_cloud_timeouts_allow_weak_wifi_without_unbounded_waits() {
     TEST_ASSERT_LESS_OR_EQUAL_UINT32(75'000, chat.total_timeout_ms);
     TEST_ASSERT_LESS_OR_EQUAL_UINT32(
         75'000, transcription.total_timeout_ms);
-    TEST_ASSERT_LESS_OR_EQUAL_UINT32(90'000, speech.total_timeout_ms);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(60'000, speech.first_byte_timeout_ms);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(30'000, speech.idle_timeout_ms);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(180'000, speech.total_timeout_ms);
     TEST_ASSERT_EQUAL_UINT8(2, chat.max_attempts);
     TEST_ASSERT_EQUAL_UINT8(2, transcription.max_attempts);
     TEST_ASSERT_EQUAL_UINT8(2, speech.max_attempts);

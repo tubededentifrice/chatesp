@@ -160,6 +160,19 @@ The iPhone must also report `settings_acknowledged` for the same connection. A
 Wi-Fi connection does not prove that the current settings transfer completed.
 It can use settings from an earlier transfer.
 
+### Speech stops after a longer answer
+
+`THE SPEECH SERVICE STOPPED SENDING AUDIO` means that no PCM block arrived
+within the current audio wait limit. An HTTP response header does not start the
+idle-audio timer. The first-audio timer continues until the first PCM byte
+arrives. Later PCM blocks restart the idle-audio timer.
+
+Use the `TTS request`, `first PCM byte`, PCM ingress mode, transport byte-count,
+and final speech error events. Do not log the answer or audio. A missing first
+PCM event identifies model or service preparation. A partial byte count
+identifies a stopped network or phone-proxy transfer. A complete transport byte
+count followed by a playback error identifies the device audio path.
+
 ## Physical regression procedure
 
 Keep the iPhone unlocked, keep the app in front, and keep both traces active.

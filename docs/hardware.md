@@ -301,6 +301,9 @@ The connected V2 board must pass these checks for this control change:
 - speech starts from the first complete sentence. One second TTS request has
   the complete remaining spoken answer. Request order is correct and the codec
   stays active;
+- an early HTTP response header does not start the idle-audio timer. A long
+  second speech request can use the complete first-audio limit. Its bounded raw
+  PCM response completes through Wi-Fi and through the iPhone proxy;
 - an image request reserves speech playback resources before JPEG work starts,
   and a JPEG allocation failure does not stop speech;
 - a speech failure shows a clear operation and reason. It does not show an

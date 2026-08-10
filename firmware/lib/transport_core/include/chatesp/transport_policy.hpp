@@ -74,5 +74,32 @@ private:
     std::uint32_t start_ms_ = 0;
 };
 
+class ResponseBodyProgress {
+public:
+    explicit ResponseBodyProgress(std::uint32_t started_ms)
+        : activity_started_ms_(started_ms) {}
+
+    void observe_body_bytes(std::uint32_t now_ms) {
+        activity_started_ms_ = now_ms;
+        received_body_bytes_ = true;
+    }
+
+    [[nodiscard]] bool expired(
+        std::uint32_t now_ms, const agent::RequestPolicy &policy) const;
+    [[nodiscard]] std::uint32_t remaining_timeout_ms(
+        std::uint32_t now_ms, const agent::RequestPolicy &policy) const;
+    [[nodiscard]] agent::Error timeout_error() const;
+    [[nodiscard]] bool received_body_bytes() const {
+        return received_body_bytes_;
+    }
+
+private:
+    [[nodiscard]] std::uint32_t limit_ms(
+        const agent::RequestPolicy &policy) const;
+
+    std::uint32_t activity_started_ms_ = 0;
+    bool received_body_bytes_ = false;
+};
+
 }  // namespace transport
 }  // namespace chatesp

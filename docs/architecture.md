@@ -360,6 +360,13 @@ while prior PCM plays. A request can retry while none of its own PCM has
 reached playback. A button press cancels model, search, image, TTS, and
 playback work and erases transient buffers.
 
+An HTTP response header is not audio progress. The first-audio timer stays
+active until the first PCM byte arrives. The idle-audio timer starts only after
+that byte and restarts after each later PCM block. Speech has a 60-second
+first-audio limit, a 30-second idle-audio limit, and a 180-second complete
+network limit. These limits include the raw PCM transfer through the phone
+proxy. The button cancellation path stays active during each wait.
+
 HTTPS uses four bounded lanes: OpenRouter control, OpenRouter audio, Brave
 search, and optional image download. Each lane keeps one client handle for one
 HTTPS origin. Settings changes, Wi-Fi disconnect, sleep, cancellation, or a
