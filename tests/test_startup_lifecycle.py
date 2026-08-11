@@ -194,6 +194,25 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertNotIn("heap_caps_calloc(", startup)
         self.assertIn("heap_caps_calloc(", layout)
 
+    def test_clock_path_draws_last_and_invalidates_only_its_change(self) -> None:
+        ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
+            encoding="utf-8"
+        )
+        timer_start = ui.index("void clock_path_timer_callback(")
+        timer = ui[timer_start : ui.index("void draw_clock(", timer_start)]
+        draw_start = ui.index("void draw_clock(")
+        draw = ui[draw_start : ui.index("void apply_clock_style(", draw_start)]
+        create_clock = ui[
+            ui.index("void create_clock_face(") : ui.index(
+                "void bring_clock_overlays_forward("
+            )
+        ]
+
+        self.assertIn("invalidate_clock_path_change(previous, next);", timer)
+        self.assertNotIn("lv_obj_invalidate(clock_root);", timer)
+        self.assertIn("LV_EVENT_DRAW_POST", draw)
+        self.assertIn("LV_EVENT_DRAW_POST", create_clock)
+
     def test_development_marker_is_centered_and_build_guarded(self) -> None:
         ui = (ROOT / "firmware" / "main" / "ui.cpp").read_text(
             encoding="utf-8"

@@ -700,6 +700,66 @@ bool same_clock_path(ClockPathSpan left, ClockPathSpan right) {
     return left.first == right.first && left.count == right.count;
 }
 
+void invalidate_clock_path_points(
+    std::uint16_t first, std::uint16_t count) {
+    if (clock_root == nullptr || clock_path_points == nullptr || count == 0 ||
+        first >= clock_path_point_count) {
+        return;
+    }
+    const std::uint16_t end = static_cast<std::uint16_t>(std::min<std::size_t>(
+        static_cast<std::size_t>(first) + count, clock_path_point_count));
+    lv_area_t root;
+    lv_obj_get_coords(clock_root, &root);
+    lv_area_t dirty{
+        root.x1 + static_cast<std::int32_t>(clock_path_points[first].x),
+        root.y1 + static_cast<std::int32_t>(clock_path_points[first].y),
+        root.x1 + static_cast<std::int32_t>(clock_path_points[first].x),
+        root.y1 + static_cast<std::int32_t>(clock_path_points[first].y),
+    };
+    for (std::uint16_t index = static_cast<std::uint16_t>(first + 1U);
+         index < end; ++index) {
+        const std::int32_t x =
+            root.x1 + static_cast<std::int32_t>(clock_path_points[index].x);
+        const std::int32_t y =
+            root.y1 + static_cast<std::int32_t>(clock_path_points[index].y);
+        dirty.x1 = std::min(dirty.x1, x);
+        dirty.x2 = std::max(dirty.x2, x);
+        dirty.y1 = std::min(dirty.y1, y);
+        dirty.y2 = std::max(dirty.y2, y);
+    }
+    lv_area_increase(&dirty, 1, 1);
+    (void)lv_obj_invalidate_area(clock_root, &dirty);
+}
+
+void invalidate_clock_path_change(
+    ClockPathSpan previous, ClockPathSpan next) {
+    if (same_clock_path(previous, next)) {
+        return;
+    }
+    if (previous.first == next.first) {
+        const std::uint16_t unchanged =
+            std::min(previous.count, next.count);
+        invalidate_clock_path_points(
+            static_cast<std::uint16_t>(previous.first + unchanged),
+            static_cast<std::uint16_t>(
+                std::max(previous.count, next.count) - unchanged));
+        return;
+    }
+    const std::uint32_t previous_end =
+        static_cast<std::uint32_t>(previous.first) + previous.count;
+    const std::uint32_t next_end =
+        static_cast<std::uint32_t>(next.first) + next.count;
+    if (previous_end == next_end) {
+        invalidate_clock_path_points(
+            std::min(previous.first, next.first),
+            static_cast<std::uint16_t>(
+                std::max(previous.first, next.first) -
+                std::min(previous.first, next.first)));
+        return;
+    }
+    lv_obj_invalidate(clock_root);
+}
+
 void clock_path_timer_callback(lv_timer_t *) {
     if (!clock_mode || clock_root == nullptr || !shown_clock_available) {
         return;
@@ -708,12 +768,13 @@ void clock_path_timer_callback(lv_timer_t *) {
     if (same_clock_path(next, shown_clock_path)) {
         return;
     }
+    const ClockPathSpan previous = shown_clock_path;
     shown_clock_path = next;
-    lv_obj_invalidate(clock_root);
+    invalidate_clock_path_change(previous, next);
 }
 
 void draw_clock(lv_event_t *event) {
-    if (lv_event_get_code(event) != LV_EVENT_DRAW_MAIN) {
+    if (lv_event_get_code(event) != LV_EVENT_DRAW_POST) {
         return;
     }
     lv_layer_t *layer = lv_event_get_layer(event);
@@ -786,7 +847,9 @@ void create_clock_face(lv_obj_t *screen) {
     lv_obj_set_style_bg_opa(clock_root, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_clear_flag(clock_root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(clock_root, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(clock_root, draw_clock, LV_EVENT_DRAW_MAIN, nullptr);
+    // Draw the seconds path after the time label. This keeps the one-pixel
+    // border visible above every child object.
+    lv_obj_add_event_cb(clock_root, draw_clock, LV_EVENT_DRAW_POST, nullptr);
 
     clock_time_label = lv_label_create(clock_root);
     lv_obj_remove_style_all(clock_time_label);
@@ -1886,9 +1949,7 @@ void show_clock_time(bool available, ClockTime time) {
     }
 
     shown_clock_path = current_clock_path_span();
-    if (text_changed || !same_clock_path(previous_path, shown_clock_path)) {
-        lv_obj_invalidate(clock_root);
-    }
+    invalidate_clock_path_change(previous_path, shown_clock_path);
 }
 
 bool enable_quick_controls(

@@ -114,6 +114,11 @@ creates the Clock view, it stops BLE and reserves the BLE restart block. If
 this optional time-sync path cannot reserve the block, it skips the sync,
 requests BLE recovery, and keeps Clock active. The board adapter owns the
 GPIO0 pin value.
+If Clock starts before saved settings are ready, time acquisition starts after
+the settings are applied. Without usable Wi-Fi credentials, firmware starts
+BLE so the authenticated phone can supply time. A short BOOT press cancels
+optional Clock network work before it requests the mode change. Thus, that
+work cannot make the mode button wait for its full network limit.
 
 Clock uses LVGL software rotation to turn the UI 90 degrees counterclockwise.
 The 448-by-368 layout puts the USB port at the bottom. A large, anti-aliased
@@ -122,7 +127,9 @@ uses the outermost valid pixels on all four display edges. The path is a plain,
 one-pixel line. Its endpoint advances by one distinct display pixel at a time
 on even minutes. It removes one pixel at a time in the same direction on odd
 minutes. A 16 ms timer keeps each pixel change independent from the one-second
-time update. The path starts at 12 o'clock. The clock style is one validated
+time update. It invalidates only the changed part of the path and draws the
+path after the Clock label. It does not refresh the complete screen for each
+new path pixel. The path starts at 12 o'clock. The clock style is one validated
 value with background, time, seconds, and radius fields. This keeps later phone
 customization separate from the drawing code. The same quick-control panel
 stays available in the rotated layout.

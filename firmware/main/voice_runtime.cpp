@@ -695,14 +695,15 @@ public:
             !display_available_.load(std::memory_order_acquire)) {
             return;
         }
-        if (app_mode_.load(std::memory_order_acquire) == AppMode::chat) {
-            cancellation_.cancel();
-            context_cancellation_.cancel();
-            speech_channel_.cancel();
-            capture_.cancel();
-            pcm_sink_.cancel();
-            cancel_transports();
-        }
+        // A mode change has priority over optional Clock time work as well as
+        // active ChatESP work. Cancel it before the runtime task reads the
+        // command so a bounded network wait cannot delay the visible change.
+        cancellation_.cancel();
+        context_cancellation_.cancel();
+        speech_channel_.cancel();
+        capture_.cancel();
+        pcm_sink_.cancel();
+        cancel_transports();
         queue_command({CommandKind::toggle_mode, at_ms});
     }
 
@@ -2003,6 +2004,7 @@ private:
                 network_warm_task_ != nullptr, local_time_ready,
                 wifi_configured);
         clock_network_attempted_ = false;
+        clock_ble_time_sync_requested_ = false;
         clock_network_stop_pending_ = false;
         clock_network_stop_started_at_ms_ = now_ms;
         clock_unpowered_since_ms_ = now_ms;
@@ -2054,9 +2056,17 @@ private:
         if (app_mode_.load(std::memory_order_acquire) != AppMode::clock ||
             utc_clock_.has_local_time() || clock_network_attempted_ ||
             clock_network_stop_pending_ ||
-            !settings_.has_wifi_credentials() ||
             voice_priority_.load(std::memory_order_acquire) ||
             button_pressed_.load(std::memory_order_acquire)) {
+            return;
+        }
+        if (!settings_.has_wifi_credentials()) {
+            // An immediate Clock entry can happen before saved settings are
+            // ready. In this case the earlier BLE start request is absent.
+            // Start BLE now so the authenticated phone can supply time.
+            if (!clock_ble_time_sync_requested_) {
+                clock_ble_time_sync_requested_ = ensure_ble_started();
+            }
             return;
         }
         clock_network_attempted_ = true;
@@ -2079,6 +2089,7 @@ private:
         }
         app_mode_.store(AppMode::chat, std::memory_order_release);
         clock_network_attempted_ = false;
+        clock_ble_time_sync_requested_ = false;
         clock_network_stop_pending_ = false;
         interaction_.ready(now_ms);
         previous_state_ = interaction_.state();
@@ -3386,6 +3397,7 @@ private:
         app_mode_.store(AppMode::chat, std::memory_order_release);
         mode_button_pressed_.store(false, std::memory_order_release);
         clock_network_attempted_ = false;
+        clock_ble_time_sync_requested_ = false;
         clock_network_stop_pending_ = false;
         clock_unpowered_since_ms_ = 0;
         clock_unpowered_timer_running_ = false;
@@ -3798,6 +3810,7 @@ private:
     bool deferred_ui_task_create_failed_ = false;
     bool clock_time_available_ = false;
     bool clock_network_attempted_ = false;
+    bool clock_ble_time_sync_requested_ = false;
     bool clock_network_stop_pending_ = false;
     std::uint32_t clock_network_stop_started_at_ms_ = 0;
     std::uint32_t clock_unpowered_since_ms_ = 0;

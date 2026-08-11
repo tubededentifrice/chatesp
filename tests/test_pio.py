@@ -448,6 +448,40 @@ class PlatformioWrapperTests(unittest.TestCase):
             reserve_source.index("ble_memory_recovery_restart"),
         )
 
+    def test_clock_started_before_settings_can_get_phone_time(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        start = source.index("void start_clock_network_after_settings(")
+        end = source.index("void enter_chat_mode(", start)
+        acquisition = source[start:end]
+
+        self.assertIn("if (!settings_.has_wifi_credentials())", acquisition)
+        self.assertIn("clock_ble_time_sync_requested_", acquisition)
+        self.assertIn("ensure_ble_started()", acquisition)
+        self.assertLess(
+            acquisition.index("ensure_ble_started()"),
+            acquisition.index("clock_network_attempted_ = true"),
+        )
+
+    def test_mode_change_cancels_clock_network_work(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        start = source.index("void mode_button_short_press(")
+        end = source.index("void mode_button_edge(", start)
+        mode_press = source[start:end]
+
+        self.assertIn("context_cancellation_.cancel();", mode_press)
+        self.assertIn("cancel_transports();", mode_press)
+        self.assertNotIn("== AppMode::chat", mode_press)
+        self.assertLess(
+            mode_press.index("cancel_transports();"),
+            mode_press.index("CommandKind::toggle_mode"),
+        )
+
     def test_phone_proxy_is_secure_fast_and_preferred(self) -> None:
         root = Path(__file__).resolve().parents[1]
         ble_source = (

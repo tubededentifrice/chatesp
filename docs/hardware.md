@@ -189,6 +189,10 @@ seconds. It stops Wi-Fi when local time becomes available or the limit expires.
 It reserves BLE restart memory before it creates the Clock view. If that
 optional reservation fails, it skips the time-sync attempt without a software
 restart and keeps Clock active.
+If Clock starts before saved settings are ready, it starts time acquisition
+after the settings load. If usable Wi-Fi credentials are absent, it starts BLE
+so the authenticated phone can supply time. A short BOOT press cancels active
+optional Clock network work before it changes mode.
 Without external power, Clock requests sleep after five minutes. The timeout
 starts only after a valid PMU sample confirms battery-only operation. Firmware
 keeps an accepted VBUS-insert event until a VBUS-remove event. An unavailable
@@ -305,9 +309,13 @@ The connected V2 board must pass these checks for this control change:
 - Clock gets time from authenticated phone context or NTP, gets the UTC offset
   from the phone or the bounded IP fallback, and continues from monotonic time
   while the ChatESP device stays powered;
+- Clock entered before saved settings are ready starts BLE after the settings
+  load when Wi-Fi is not configured, and accepts time from the phone;
 - Clock keeps Wi-Fi on for no more than 15 seconds when local time is not ready,
   and stops it as soon as local time becomes available. If BLE restart memory
   is not available, Clock skips this optional network attempt and stays active;
+- a short BOOT press in Clock cancels optional time work and changes to ChatESP
+  without waiting for the Clock network limit;
 - Clock stays on while USB is connected. After USB is removed, it requests
   sleep at five minutes. On battery, it stays on before this limit and requests
   sleep at the limit. A short bottom PWR press still requests sleep;
