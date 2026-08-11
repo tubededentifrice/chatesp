@@ -182,8 +182,15 @@ app reconnect without a new pairing code.
 Clock keeps the AMOLED and BLE on while external power is connected. If local
 time is not ready, it keeps the startup Wi-Fi connection for at most 15
 seconds. It stops Wi-Fi when local time becomes available or the limit expires.
+It reserves BLE restart memory before it creates the Clock view. If that
+optional reservation fails, it skips the time-sync attempt without a software
+restart and keeps Clock active.
 Without external power, Clock requests sleep after five minutes. The timeout
-starts again when external power is removed. The bottom PWR button keeps its
+starts only after a valid PMU sample confirms battery-only operation. Firmware
+keeps an accepted VBUS-insert event until a VBUS-remove event. An unavailable
+PMU sample cannot start or complete the timeout. The timeout starts again when
+external power is removed. The ChatESP 30-second idle gate is disabled at the
+state-machine boundary while Clock is active. The bottom PWR button keeps its
 short-press sleep action. A bottom-button press first restores the portrait
 ChatESP layout, and a held press then starts recording at the normal threshold.
 ChatESP requests sleep after 30 seconds without input. Only a short top
@@ -295,7 +302,8 @@ The connected V2 board must pass these checks for this control change:
   from the phone or the bounded IP fallback, and continues from monotonic time
   while the ChatESP device stays powered;
 - Clock keeps Wi-Fi on for no more than 15 seconds when local time is not ready,
-  and stops it as soon as local time becomes available;
+  and stops it as soon as local time becomes available. If BLE restart memory
+  is not available, Clock skips this optional network attempt and stays active;
 - Clock stays on while USB is connected. After USB is removed, it requests
   sleep at five minutes. On battery, it stays on before this limit and requests
   sleep at the limit. A short bottom PWR press still requests sleep;

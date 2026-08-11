@@ -35,6 +35,16 @@ constexpr bool axp2101_status_has_external_power(std::uint8_t status1) {
     return (status1 & vbus_good) != 0;
 }
 
+// VBUS event bits are write-one-to-clear. Keep the prior state when one poll
+// contains both events because their order is not available.
+constexpr bool external_power_after_events(
+    bool prior_connected, bool inserted, bool removed) {
+    if (inserted == removed) {
+        return prior_connected;
+    }
+    return inserted;
+}
+
 // VBUS good is the primary cable indication. Active battery charge current is
 // also sufficient evidence when the PMU VBUS indication is late or transient.
 constexpr bool connected_to_external_power(const BatteryStatus &status) {

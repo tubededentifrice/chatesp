@@ -32,7 +32,7 @@ public:
     void wake_button_down(std::uint32_t now_ms);
     void button_up(
         std::uint32_t now_ms, bool short_press_confirmed = true);
-    void tick(std::uint32_t now_ms);
+    void tick(std::uint32_t now_ms, bool allow_idle_sleep = true);
     void transcription_ready(std::uint32_t now_ms);
     void tool_started(std::uint32_t now_ms);
     void speech_started(std::uint32_t now_ms);

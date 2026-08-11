@@ -105,8 +105,11 @@ poll still runs.
 A switch to Clock cancels active voice work and clears the
 in-memory thread. If local time is not ready, Clock keeps the startup Wi-Fi
 connection for at most 15 seconds while NTP and the timezone lookup finish. It
-stops Wi-Fi when local time becomes available or the limit expires. The board
-adapter owns the GPIO0 pin value.
+stops Wi-Fi when local time becomes available or the limit expires. Before it
+creates the Clock view, it stops BLE and reserves the BLE restart block. If
+this optional time-sync path cannot reserve the block, it skips the sync,
+requests BLE recovery, and keeps Clock active. The board adapter owns the
+GPIO0 pin value.
 
 Clock uses LVGL software rotation to turn the UI 90 degrees counterclockwise.
 The 448-by-368 layout puts the USB port at the bottom. A large, anti-aliased
@@ -227,6 +230,8 @@ If the runtime cannot reserve the BLE restart block before a cloud request, it
 records a diagnostic event and performs a controlled software restart. The
 restart keeps settings and the BLE bond. This recovery prevents a live device
 from remaining awake without BLE or entering the controller with unsafe memory.
+The optional Clock time sync does not use this restart recovery. It reports the
+allocation error, skips the network attempt, and keeps Clock active.
 If the Bluetooth host does not stop, the runtime keeps its state intact and
 does not start TLS work. The BLE controller does not overlap start and stop.
 The NimBLE completion wait has a one-second limit. A timed-out stop remains in
@@ -284,10 +289,13 @@ uses modem power saving. Voice work uses the active Wi-Fi power mode. It stays
 connected only during the active session. The footer shows the active secure
 BLE link instead of Wi-Fi off. Connected Wi-Fi uses three RSSI bands. The exact
 RSSI does not enter a log path.
-ChatESP mode uses a 30-second idle timer in development and production. Clock
-uses a separate five-minute timer while external power is absent. Clock resets
-this timer and stays on while AXP2101 reports good VBUS or battery charge
-current. A short PWR-button press can still request sleep in either mode. Sleep
+ChatESP mode uses a 30-second idle timer in development and production. The
+state machine disables this timer while Clock is active. Clock uses a separate
+five-minute timer after AXP2101 confirms that external power is absent.
+Firmware keeps an accepted VBUS-insert event until a VBUS-remove event.
+An unavailable PMU sample cannot start or complete this timer. Clock stays on
+while AXP2101 reports good VBUS or battery charge current. A short PWR-button
+press can still request sleep in either mode. Sleep
 stops BLE and Wi-Fi. The app reports the device as asleep or unavailable while
 it runs bounded reconnect attempts.
 Battery-powered production normally stops when the AXP2101 accepts system-off.

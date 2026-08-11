@@ -802,6 +802,11 @@ public:
     }
 
 private:
+    enum class BleRestartFailurePolicy : std::uint8_t {
+        restart_device,
+        return_error,
+    };
+
     void cancel_transports() {
         openrouter_control_transport_.cancel_active();
         openrouter_audio_transport_.cancel_active();
@@ -1990,9 +1995,6 @@ private:
         footer_shown_ = false;
         clock_refreshed_second_ = 0xff;
         clock_time_available_ = false;
-        mode_display_attempted_at_ms_ = now_ms;
-        (void)apply_mode_display(AppMode::clock, interaction_.state());
-        refresh_clock(now_ms, true);
 
         const bool local_time_ready = utc_clock_.has_local_time();
         const bool wifi_configured = settings_.has_wifi_credentials();
@@ -2000,10 +2002,14 @@ private:
             runtime::clock_network_transition(
                 network_warm_task_ != nullptr, local_time_ready,
                 wifi_configured);
-        clock_network_stop_pending_ =
-            !local_time_ready && wifi_configured;
+        clock_network_attempted_ = false;
+        clock_network_stop_pending_ = false;
         clock_network_stop_started_at_ms_ = now_ms;
         clock_unpowered_since_ms_ = now_ms;
+        clock_unpowered_timer_running_ = false;
+        // Reserve the Bluetooth restart block before LVGL creates its Clock
+        // objects. Small internal LVGL allocations can otherwise fragment the
+        // block that the controller released.
         for (std::size_t index = 0;
              index < network_transition.size; ++index) {
             switch (network_transition.steps[index]) {
@@ -2017,8 +2023,18 @@ private:
                     // connection has supplied UTC and a timezone. Keep that
                     // bounded acquisition alive, then stop Wi-Fi from the
                     // runtime loop.
-                    if (stop_ble_for_request()) {
+                    clock_network_attempted_ = true;
+                    clock_network_stop_pending_ = true;
+                    clock_network_stop_started_at_ms_ = now_ms;
+                    if (stop_ble_for_request(
+                            BleRestartFailurePolicy::return_error)) {
                         start_network_early(true);
+                    } else {
+                        ESP_LOGW(
+                            kTag,
+                            "Clock time sync skipped because radio memory "
+                            "is unavailable");
+                        stop_clock_network();
                     }
                     break;
                 case runtime::ClockNetworkTransitionStep::
@@ -2027,21 +2043,33 @@ private:
                     break;
             }
         }
+        mode_display_attempted_at_ms_ = now_ms;
+        (void)apply_mode_display(AppMode::clock, interaction_.state());
+        refresh_clock(now_ms, true);
+        refresh_battery(now_ms, true);
         ESP_LOGI(kTag, "Clock mode is active");
     }
 
     void start_clock_network_after_settings(std::uint32_t now_ms) {
         if (app_mode_.load(std::memory_order_acquire) != AppMode::clock ||
-            utc_clock_.has_local_time() || clock_network_stop_pending_ ||
+            utc_clock_.has_local_time() || clock_network_attempted_ ||
+            clock_network_stop_pending_ ||
             !settings_.has_wifi_credentials() ||
             voice_priority_.load(std::memory_order_acquire) ||
             button_pressed_.load(std::memory_order_acquire)) {
             return;
         }
+        clock_network_attempted_ = true;
         clock_network_stop_pending_ = true;
         clock_network_stop_started_at_ms_ = now_ms;
-        if (stop_ble_for_request()) {
+        if (stop_ble_for_request(BleRestartFailurePolicy::return_error)) {
             start_network_early(true);
+        } else {
+            ESP_LOGW(
+                kTag,
+                "Clock time sync skipped because radio memory is "
+                "unavailable");
+            stop_clock_network();
         }
     }
 
@@ -2050,6 +2078,7 @@ private:
             return;
         }
         app_mode_.store(AppMode::chat, std::memory_order_release);
+        clock_network_attempted_ = false;
         clock_network_stop_pending_ = false;
         interaction_.ready(now_ms);
         previous_state_ = interaction_.state();
@@ -2119,9 +2148,9 @@ private:
         footer_shown_ = true;
     }
 
-    void refresh_battery(std::uint32_t now_ms, bool force) {
+    bool refresh_battery(std::uint32_t now_ms, bool force) {
         if (!display_available_.load(std::memory_order_acquire)) {
-            return;
+            return false;
         }
         const std::uint32_t source_revision =
             power::power_source_revision();
@@ -2132,19 +2161,25 @@ private:
         if (battery_due &&
             !button_pressed_.load(std::memory_order_acquire) &&
             !voice_priority_.load(std::memory_order_acquire)) {
-            battery_status_ = power::battery_status();
+            const std::optional<power::BatteryStatus> sample =
+                power::battery_status();
             battery_checked_ = true;
             battery_checked_at_ms_ = now_ms;
             battery_power_source_revision_ = source_revision;
             battery_wake_refresh_pending_ = false;
-            if (battery_status_.has_value() &&
-                power::low_battery_requires_shutdown(*battery_status_) &&
+            battery_status_sample_valid_ = sample.has_value();
+            if (sample.has_value()) {
+                battery_status_ = sample;
+            }
+            if (sample.has_value() &&
+                power::low_battery_requires_shutdown(*sample) &&
                 !low_battery_poweroff_pending_) {
                 low_battery_poweroff_pending_ = true;
                 ESP_LOGW(kTag, "Low battery system-off requested");
                 interaction_.cancel_for_sleep();
             }
         }
+        return battery_status_sample_valid_;
     }
 
     void refresh_footer(std::uint32_t now_ms, bool force) {
@@ -2413,24 +2448,25 @@ private:
                 // Apply a pending VBUS event before the timeout decision. A
                 // cable inserted at the five-minute boundary must keep Clock
                 // active instead of using the prior battery-only sample.
-                refresh_battery(now_ms, false);
+                const bool power_status_available =
+                    refresh_battery(now_ms, false);
                 const bool external_power_connected =
-                    battery_status_.has_value() &&
+                    power_status_available && battery_status_.has_value() &&
                     power::connected_to_external_power(*battery_status_);
-                if (external_power_connected) {
+                if (!power_status_available || external_power_connected) {
                     clock_unpowered_since_ms_ = now_ms;
-                    interaction_.note_idle_activity(now_ms);
+                    clock_unpowered_timer_running_ = false;
+                } else if (!clock_unpowered_timer_running_) {
+                    clock_unpowered_since_ms_ = now_ms;
+                    clock_unpowered_timer_running_ = true;
                 } else if (power::clock_unpowered_sleep_due(
+                               true,
                                false,
                                now_ms - clock_unpowered_since_ms_)) {
                     ESP_LOGI(
                         kTag,
                         "Clock battery timeout requested sleep");
                     interaction_.cancel_for_sleep();
-                } else {
-                    // Suppress the 30-second ChatESP gate until the separate
-                    // five-minute Clock battery limit ends.
-                    interaction_.note_idle_activity(now_ms);
                 }
                 refresh_clock(now_ms);
                 if (clock_network_shutdown_due(
@@ -2441,7 +2477,9 @@ private:
                     stop_clock_network();
                 }
             }
-            interaction_.tick(now_ms);
+            // Clock has its own five-minute battery-only policy. Disable the
+            // ChatESP 30-second idle gate at the state-machine boundary.
+            interaction_.tick(now_ms, app_mode != AppMode::clock);
             process_state_change(now_ms);
             const bool recording =
                 interaction_.state() == InteractionState::recording;
@@ -3347,8 +3385,10 @@ private:
         display_available_.store(false, std::memory_order_release);
         app_mode_.store(AppMode::chat, std::memory_order_release);
         mode_button_pressed_.store(false, std::memory_order_release);
+        clock_network_attempted_ = false;
         clock_network_stop_pending_ = false;
         clock_unpowered_since_ms_ = 0;
+        clock_unpowered_timer_running_ = false;
         mode_display_pending_ = false;
         display_wake_pending_ = false;
         footer_shown_ = false;
@@ -3454,10 +3494,16 @@ private:
     }
 
     bool stop_ble_for_request() {
+        return stop_ble_for_request(
+            BleRestartFailurePolicy::restart_device);
+    }
+
+    bool stop_ble_for_request(
+        BleRestartFailurePolicy failure_policy) {
         if (!stop_ble()) {
             return false;
         }
-        return reserve_ble_restart_memory();
+        return reserve_ble_restart_memory(failure_policy);
     }
 
     void stop_clock_network() {
@@ -3516,6 +3562,12 @@ private:
     }
 
     bool reserve_ble_restart_memory() {
+        return reserve_ble_restart_memory(
+            BleRestartFailurePolicy::restart_device);
+    }
+
+    bool reserve_ble_restart_memory(
+        BleRestartFailurePolicy failure_policy) {
         if (ble_restart_reservation_ != nullptr) {
             return true;
         }
@@ -3539,6 +3591,10 @@ private:
         }
         if (ble_restart_reservation_ == nullptr) {
             ESP_LOGE(kTag, "BLE restart memory could not be reserved");
+            if (failure_policy ==
+                BleRestartFailurePolicy::return_error) {
+                return false;
+            }
             crash_diagnostics::mark(
                 runtime::CrashEvent::ble_memory_recovery_restart);
             vTaskDelay(pdMS_TO_TICKS(50));
@@ -3731,6 +3787,7 @@ private:
     bool recording_prepared_for_press_ = false;
     bool recording_ble_stop_pending_ = false;
     bool battery_checked_ = false;
+    bool battery_status_sample_valid_ = false;
     bool battery_wake_refresh_pending_ = false;
     bool low_battery_poweroff_pending_ = false;
     bool footer_shown_ = false;
@@ -3740,9 +3797,11 @@ private:
     bool quick_controls_attempted_ = false;
     bool deferred_ui_task_create_failed_ = false;
     bool clock_time_available_ = false;
+    bool clock_network_attempted_ = false;
     bool clock_network_stop_pending_ = false;
     std::uint32_t clock_network_stop_started_at_ms_ = 0;
     std::uint32_t clock_unpowered_since_ms_ = 0;
+    bool clock_unpowered_timer_running_ = false;
     bool mode_display_pending_ = false;
     bool settings_display_pending_ = false;
     esp_err_t capture_prepare_result_ = ESP_ERR_INVALID_STATE;

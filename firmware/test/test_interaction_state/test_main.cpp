@@ -125,6 +125,19 @@ void test_inactivity_sleeps_only_from_idle() {
         static_cast<int>(machine.state()));
 }
 
+void test_clock_disables_the_chat_idle_timeout() {
+    InteractionStateMachine machine;
+    machine.ready(100);
+    machine.tick(30'100, false);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::idle),
+        static_cast<int>(machine.state()));
+    machine.tick(30'100, true);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(InteractionState::sleep_pending),
+        static_cast<int>(machine.state()));
+}
+
 void test_inactivity_handles_millisecond_wrap() {
     InteractionStateMachine machine;
     const std::uint32_t start = std::numeric_limits<std::uint32_t>::max() - 99;
@@ -572,19 +585,29 @@ void test_external_power_uses_vbus_or_charge_current() {
         BatteryStatus{0, false, true, false}));
 }
 
+void test_external_power_latches_insert_until_remove() {
+    using chatesp::power::external_power_after_events;
+    TEST_ASSERT_TRUE(external_power_after_events(false, true, false));
+    TEST_ASSERT_TRUE(external_power_after_events(true, false, false));
+    TEST_ASSERT_FALSE(external_power_after_events(true, false, true));
+    TEST_ASSERT_FALSE(external_power_after_events(false, true, true));
+}
+
 void test_clock_unpowered_timeout_is_five_minutes_and_handles_wrap() {
     using chatesp::power::clock_unpowered_sleep_due;
     TEST_ASSERT_FALSE(clock_unpowered_sleep_due(
-        true, chatesp::power::kClockUnpoweredSleepMs));
+        true, true, chatesp::power::kClockUnpoweredSleepMs));
     TEST_ASSERT_FALSE(clock_unpowered_sleep_due(
-        false, chatesp::power::kClockUnpoweredSleepMs - 1));
+        true, false, chatesp::power::kClockUnpoweredSleepMs - 1));
     TEST_ASSERT_TRUE(clock_unpowered_sleep_due(
-        false, chatesp::power::kClockUnpoweredSleepMs));
+        true, false, chatesp::power::kClockUnpoweredSleepMs));
+    TEST_ASSERT_FALSE(clock_unpowered_sleep_due(
+        false, false, chatesp::power::kClockUnpoweredSleepMs));
     constexpr std::uint32_t started = 0xfffffff0U;
     constexpr std::uint32_t finished =
         started + chatesp::power::kClockUnpoweredSleepMs;
     TEST_ASSERT_TRUE(clock_unpowered_sleep_due(
-        false, finished - started));
+        true, false, finished - started));
 }
 
 void test_radio_signal_uses_three_privacy_safe_bands() {
@@ -884,6 +907,7 @@ int main(int, char **) {
     RUN_TEST(test_hold_records_until_release);
     RUN_TEST(test_release_at_hold_threshold_without_tick_requests_sleep);
     RUN_TEST(test_inactivity_sleeps_only_from_idle);
+    RUN_TEST(test_clock_disables_the_chat_idle_timeout);
     RUN_TEST(test_inactivity_handles_millisecond_wrap);
     RUN_TEST(test_idle_activity_extends_the_sleep_timer);
     RUN_TEST(test_idle_timer_starts_after_playback_completion);
@@ -911,6 +935,7 @@ int main(int, char **) {
     RUN_TEST(test_axp2101_charge_state_uses_current_direction);
     RUN_TEST(test_battery_limit_requires_low_battery_without_vbus_or_charging);
     RUN_TEST(test_external_power_uses_vbus_or_charge_current);
+    RUN_TEST(test_external_power_latches_insert_until_remove);
     RUN_TEST(test_clock_unpowered_timeout_is_five_minutes_and_handles_wrap);
     RUN_TEST(test_radio_signal_uses_three_privacy_safe_bands);
     RUN_TEST(test_short_wake_press_returns_to_idle);

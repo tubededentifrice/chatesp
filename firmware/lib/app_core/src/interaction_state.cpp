@@ -57,13 +57,14 @@ void InteractionStateMachine::button_up(
     }
 }
 
-void InteractionStateMachine::tick(std::uint32_t now_ms) {
+void InteractionStateMachine::tick(
+    std::uint32_t now_ms, bool allow_idle_sleep) {
     if (state_ == InteractionState::idle && button_down_ &&
         elapsed(now_ms, button_down_at_ms_) >= config_.talk_hold_ms) {
         set_state(InteractionState::recording, now_ms);
         return;
     }
-    if (state_ == InteractionState::idle && !button_down_ &&
+    if (allow_idle_sleep && state_ == InteractionState::idle && !button_down_ &&
         elapsed(now_ms, last_activity_at_ms_) >= config_.idle_sleep_ms) {
         set_state(InteractionState::sleep_pending, now_ms);
         return;

@@ -279,16 +279,33 @@ class PlatformioWrapperTests(unittest.TestCase):
             root / "firmware" / "main" / "voice_runtime.cpp"
         ).read_text(encoding="utf-8")
 
-        refresh_start = source.index("void refresh_battery(")
+        refresh_start = source.index("bool refresh_battery(")
         refresh_end = source.index("void refresh_footer(", refresh_start)
         refresh_source = source[refresh_start:refresh_end]
         self.assertIn(
             "force || battery_wake_refresh_pending_", refresh_source
         )
         self.assertLess(
-            refresh_source.index("battery_status_ = power::battery_status()"),
+            refresh_source.index("power::battery_status()"),
             refresh_source.index("battery_wake_refresh_pending_ = false"),
         )
+        self.assertIn("battery_status_sample_valid_", refresh_source)
+
+        clock_start = source.index("if (app_mode == AppMode::clock)")
+        clock_end = source.index(
+            "interaction_.tick(now_ms, app_mode != AppMode::clock)",
+            clock_start,
+        )
+        clock_source = source[clock_start:clock_end]
+        self.assertIn(
+            "if (!power_status_available || external_power_connected)",
+            clock_source,
+        )
+        self.assertLess(
+            clock_source.index("!power_status_available"),
+            clock_source.index("clock_unpowered_timer_running_ = true"),
+        )
+        self.assertNotIn("note_idle_activity", clock_source)
 
         wake_start = source.index("void wake_for_button(")
         wake_end = source.index("void request_display_wake(", wake_start)
@@ -404,6 +421,32 @@ class PlatformioWrapperTests(unittest.TestCase):
         shutdown_source = network_source[shutdown_start:shutdown_end]
         self.assertIn("clean_failed_initialize();", shutdown_source)
         self.assertIn("initialized_ = false;", shutdown_source)
+
+    def test_clock_time_sync_cannot_restart_the_device(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        clock_start = source.index("void enter_clock_mode(")
+        clock_end = source.index("void enter_chat_mode(", clock_start)
+        clock_source = source[clock_start:clock_end]
+        self.assertIn("BleRestartFailurePolicy::return_error", clock_source)
+        self.assertIn("clock_network_attempted_", clock_source)
+        self.assertIn("stop_clock_network();", clock_source)
+        self.assertLess(
+            clock_source.index("stop_ble_for_request("),
+            clock_source.index("apply_mode_display(AppMode::clock"),
+        )
+
+        reserve_start = source.index("bool reserve_ble_restart_memory(")
+        reserve_end = source.index(
+            "void release_ble_restart_memory(", reserve_start
+        )
+        reserve_source = source[reserve_start:reserve_end]
+        self.assertLess(
+            reserve_source.index("BleRestartFailurePolicy::return_error"),
+            reserve_source.index("ble_memory_recovery_restart"),
+        )
 
     def test_phone_proxy_is_secure_fast_and_preferred(self) -> None:
         root = Path(__file__).resolve().parents[1]

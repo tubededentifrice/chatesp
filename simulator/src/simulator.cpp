@@ -153,12 +153,10 @@ void Simulator::process_time() {
     if (mode_ == AppMode::clock && screen_on_) {
         if (external_power_connected_) {
             clock_unpowered_since_ms_ = now_ms_;
-            interaction_.note_idle_activity(now_ms_);
         } else if (power::clock_unpowered_sleep_due(
-                       false, now_ms_ - clock_unpowered_since_ms_)) {
+                       true, false,
+                       now_ms_ - clock_unpowered_since_ms_)) {
             interaction_.cancel_for_sleep();
-        } else {
-            interaction_.note_idle_activity(now_ms_);
         }
     }
 

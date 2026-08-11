@@ -192,6 +192,19 @@ PCM event identifies model or service preparation. A partial byte count
 identifies a stopped network or phone-proxy transfer. A complete transport byte
 count followed by a playback error identifies the device audio path.
 
+### Clock restarts when it opens
+
+An immediate production restart after a BOOT-button press can have the retained
+event `ble_memory_recovery_restart`. Clock tried to stop BLE for optional time
+sync after LVGL allocations could split the controller restart block. This was
+not a Clock sleep request.
+
+The runtime now reserves the BLE restart block before it creates the Clock
+view. If the reservation is not available, it skips that one optional time-sync
+attempt, requests BLE recovery, and keeps Clock active. A required voice cloud
+request keeps the controlled-restart policy because it must restore a usable
+radio state.
+
 ## Physical regression procedure
 
 Keep the iPhone unlocked, keep the app in front, and keep both traces active.
