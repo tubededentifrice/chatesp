@@ -84,15 +84,14 @@ esp_err_t bsp_display_brightness_set(int brightness_percent);
  * @brief Restore the initialized panel state after an in-session wake
  *
  * This replays the panel initialization commands without resetting the panel
- * or touch controller. It then restores the requested brightness.
+ * or touch controller. It leaves the panel at zero brightness so the caller
+ * can send a complete frame before it restores the selected brightness.
  *
- * @param[in] brightness_percent Brightness in [%]
  * @return
  *      - ESP_OK                On success
- *      - ESP_ERR_INVALID_ARG   Parameter error
  *      - ESP_ERR_INVALID_STATE Display is not initialized
  */
-esp_err_t bsp_display_recover(int brightness_percent);
+esp_err_t bsp_display_recover(void);
 
 /**
  * @brief Turn on display backlight

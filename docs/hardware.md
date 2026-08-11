@@ -18,9 +18,12 @@ The target is the Waveshare ESP32-S3-Touch-AMOLED-1.8.
 
 The local `chatesp_board` component is based on the official
 `waveshare/esp32_s3_touch_amoled_1_8` component at a reviewed source commit. It
-starts the CO5300 at zero brightness. The app draws a black frame before it
-raises the brightness. After panel-on, it sends a second complete frame and the
-same brightness command. This bounded retry recovers a controller that accepts
+starts the CO5300 at zero brightness and applies its 16-pixel column offset
+before the first splash transfer. The app draws two black frames before it
+raises the brightness. It then sends the same brightness command again. The
+offset covers all 368 active columns from the first frame. This bounded retry
+prevents an incomplete panel frame from becoming visible and recovers a
+controller that accepts
 the first commands but keeps the first frame black. The current package always
 creates a CO5300 panel. It probes both touch types, but it does not select an
 SH8601 display. The ChatESP board adapter must add the original-board SH8601
@@ -28,8 +31,9 @@ path before original-board support is complete.
 
 The V2 adapter configures the LCD and CST820 reset GPIO values as not connected.
 An in-session display wake does not reset either controller. Firmware replays
-the bounded CO5300 initialization table while LVGL is locked, restores the
-selected brightness, and sends one complete frame. A brightness or display-on
+the bounded CO5300 initialization table at zero brightness while LVGL is
+locked, sends one complete frame, and then restores the selected brightness. A
+brightness or display-on
 command acknowledgement alone is not wake proof.
 Cold start draws and shows the reliable splash before it probes and registers
 the CST820. A held cold start uses this active panel state. It does not replay

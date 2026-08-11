@@ -565,11 +565,42 @@ class PlatformioWrapperTests(unittest.TestCase):
         wake_end = ui_source.index("esp_err_t set_brightness", wake_start)
         wake_source = ui_source[wake_start:wake_end]
         self.assertLess(
-            wake_source.index("bsp_display_recover(brightness_percent)"),
+            wake_source.index("bsp_display_recover()"),
             wake_source.index("lv_refr_now(display_handle)"),
         )
-        self.assertIn(
-            "bsp_display_brightness_set(brightness_percent)", wake_source
+        self.assertLess(
+            wake_source.index("lv_refr_now(display_handle)"),
+            wake_source.index(
+                "bsp_display_brightness_set(brightness_percent)"
+            ),
+        )
+
+        startup_start = ui_source.index("bool publish_startup(")
+        startup_end = ui_source.index("bool prepare_capture_views(")
+        startup_source = ui_source[startup_start:startup_end]
+        self.assertLess(
+            startup_source.index("lv_refr_now(display_handle)"),
+            startup_source.index(
+                "bsp_display_brightness_set(brightness_percent)"
+            ),
+        )
+
+    def test_v2_panel_gap_is_active_before_the_startup_frame(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        board_source = (
+            root
+            / "firmware"
+            / "components"
+            / "chatesp_board"
+            / "esp32_s3_touch_amoled_1_8.c"
+        ).read_text(encoding="utf-8")
+        gap_initialization = (
+            "static uint16_t panel_x_gap = BSP_LCD_CST816S_X_GAP;"
+        )
+        self.assertIn(gap_initialization, board_source)
+        self.assertLess(
+            board_source.index(gap_initialization),
+            board_source.index("esp_err_t bsp_display_new("),
         )
 
     def test_device_policy_rejects_an_unsafe_profile(self) -> None:

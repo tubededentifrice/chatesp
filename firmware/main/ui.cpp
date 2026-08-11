@@ -1686,19 +1686,24 @@ bool publish_startup(std::uint8_t brightness_percent) {
     if (display_handle == nullptr ||
         !runtime::DevicePreferences{
             brightness_percent,
-            runtime::DevicePreferences::default_volume_percent}.valid() ||
-        bsp_display_brightness_set(brightness_percent) != ESP_OK) {
+            runtime::DevicePreferences::default_volume_percent}.valid()) {
         return false;
     }
-    // Send one more complete startup frame after panel-on. Do this before the
-    // hidden runtime views are built so the user sees the splash at the first
-    // reliable CO5300 pixel transfer.
+    // Send the second complete startup frame while brightness is still zero.
+    // The CO5300 can expose incomplete panel memory if brightness rises before
+    // this reliable transfer finishes.
     if (!bsp_display_lock(1000)) {
         return false;
     }
     lv_obj_invalidate(active_screen());
     lv_refr_now(display_handle);
     bsp_display_unlock();
+    // Repeat the selected command after panel-on. The second command is
+    // bounded and repairs a controller that accepts but does not apply the
+    // first nonzero brightness command.
+    if (bsp_display_brightness_set(brightness_percent) != ESP_OK) {
+        return false;
+    }
     if (bsp_display_brightness_set(brightness_percent) != ESP_OK) {
         return false;
     }
@@ -2284,17 +2289,20 @@ esp_err_t wake(
     // is active. Replay its bounded initialization table on each deliberate
     // wake. Keep the LVGL lock so its task cannot start a transfer while the
     // command table changes the panel state.
-    const esp_err_t wake_error = bsp_display_recover(brightness_percent);
+    const esp_err_t wake_error = bsp_display_recover();
     if (wake_error != ESP_OK) {
         bsp_display_unlock();
         return wake_error;
     }
-    // Send one complete frame after panel-on. The sleep overlay left a black
-    // frame in panel memory, so the recovery does not expose stale content.
+    // Send one complete frame while brightness is zero. Do not expose panel
+    // memory between controller initialization and this transfer.
     lv_obj_invalidate(active_screen());
     lv_refr_now(display_handle);
-    const esp_err_t brightness_error =
+    esp_err_t brightness_error =
         bsp_display_brightness_set(brightness_percent);
+    if (brightness_error == ESP_OK) {
+        brightness_error = bsp_display_brightness_set(brightness_percent);
+    }
     bsp_display_unlock();
     return brightness_error;
 }

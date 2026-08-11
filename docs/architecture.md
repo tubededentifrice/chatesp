@@ -8,9 +8,12 @@ The firmware uses one bounded state machine:
 
 Each `app_main` start shows a full-boot splash with `CHAT ESP` and `STARTING`.
 Power-button setup and the initial button sample occur first. The display then
-flushes the splash while the AMOLED is off and raises the brightness only after
-the complete black frame is ready. It sends a second complete frame and repeats
-the selected brightness command after panel-on. This recovers a CO5300 that
+applies the V2 CO5300 16-pixel column offset before the first splash transfer.
+It flushes the splash while the AMOLED is off and raises the brightness only
+after two complete black frames are ready. It then repeats the selected
+brightness command. The early offset covers all active columns. The transfer
+order prevents incomplete panel memory from becoming visible and recovers a
+CO5300 that
 accepts the first commands but does not show the first pixel transfer. The
 startup path completes panel start and then loads the small display-preference
 record before it raises the brightness. This order keeps NVS work from letting
@@ -41,8 +44,9 @@ the current interaction state instead.
 Development soft sleep keeps the CO5300 initialized at its current brightness
 and covers the screen with one full black frame. Wake removes this frame and
 does not depend on a zero-to-nonzero brightness transition. Each deliberate
-in-session wake also replays the bounded CO5300 initialization table, restores
-the selected brightness, and sends one complete frame. It does not reset the
+in-session wake also replays the bounded CO5300 initialization table at zero
+brightness, sends one complete frame, and then restores the selected
+brightness. It does not reset the
 panel or CST820 touch controller. This recovers a panel that accepts commands
 but keeps its output stage black.
 An active short PWR press does not run this recovery before its action is

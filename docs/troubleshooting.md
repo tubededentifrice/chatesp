@@ -42,8 +42,9 @@ A successful brightness or display-on command does not prove that CO5300 pixels
 became visible after a sleep interval. Repeating only the same commands is not
 a valid recovery check. Development soft sleep must keep the initialized panel
 at its current brightness and draw one full black frame. Each in-session wake
-replays the bounded CO5300 initialization table, restores brightness, and
-forces one complete redraw. It does not reset the panel or CST820 touch
+replays the bounded CO5300 initialization table at zero brightness, forces one
+complete redraw, and then restores brightness. It does not reset the panel or
+CST820 touch
 controller. Production uses brightness zero only after the sleep cancel window,
 immediately before AXP2101 system-off.
 

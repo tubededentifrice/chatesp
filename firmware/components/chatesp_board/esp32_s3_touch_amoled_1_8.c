@@ -36,7 +36,11 @@ static esp_lcd_panel_handle_t panel_handle = NULL; // LCD panel handle
 static esp_lcd_panel_io_handle_t io_handle = NULL;
 static bool panel_display_on = false;
 static bool panel_brightness_is_zero = true;
-static uint16_t panel_x_gap = 0;
+// The local display path creates the V2 CO5300 panel. Its 368 active columns
+// start at controller column 16. Apply this offset before the first splash
+// transfer. The later CST820 touch probe must not be the event that fixes the
+// display address window.
+static uint16_t panel_x_gap = BSP_LCD_CST816S_X_GAP;
 
 static i2s_chan_handle_t i2s_tx_chan = NULL;
 static i2s_chan_handle_t i2s_rx_chan = NULL;
@@ -465,7 +469,7 @@ esp_err_t bsp_display_brightness_set(int brightness_percent)
     return ESP_OK;
 }
 
-esp_err_t bsp_display_recover(int brightness_percent)
+esp_err_t bsp_display_recover(void)
 {
     if (panel_handle == NULL)
     {
@@ -473,24 +477,17 @@ esp_err_t bsp_display_recover(int brightness_percent)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (brightness_percent < 0 || brightness_percent > 100)
-    {
-        ESP_LOGE(TAG, "Invalid brightness percentage. Should be between 0 and 100.");
-        return ESP_ERR_INVALID_ARG;
-    }
-
     // The V2 adapter does not drive an LCD or touch reset input. Do not add a
     // controller reset to an in-session wake. Replay the bounded CO5300
-    // initialization table instead. It restores sleep-out, display-on,
-    // address windows, and brightness without invalidating the touch handle.
+    // initialization table instead. It restores sleep-out, display-on, and
+    // address windows at zero brightness without invalidating the touch
+    // handle. The caller must send one complete frame before it raises the
+    // brightness.
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_init(panel_handle), TAG,
         "Panel wake initialization failed");
     panel_display_on = true;
     panel_brightness_is_zero = true;
-    ESP_RETURN_ON_ERROR(
-        bsp_display_brightness_set(brightness_percent), TAG,
-        "Panel wake brightness failed");
     ESP_LOGI(TAG, "Panel wake initialization complete");
     return ESP_OK;
 }

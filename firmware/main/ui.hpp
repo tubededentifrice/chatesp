@@ -38,8 +38,8 @@ using DeferredWorkCancelled = bool (*)(void *context);
 // wake.
 bool start_hidden();
 
-// Make the hidden startup splash visible with the selected brightness and
-// send the required second complete frame.
+// Send the required second complete startup frame, then make the hidden
+// splash visible with the selected brightness.
 bool publish_startup(std::uint8_t brightness_percent);
 
 // Build the small set of views that voice capture, BLE pairing, and sleep can
