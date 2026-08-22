@@ -3,3 +3,7 @@
 	url = https://github.com/micropython/micropython.git
 	commit = e0e9fbb17ed6fd06bb76e266ae554784c9c80804
 	shallow = true
+[submodule "shared/opendle-esp32"]
+	path = shared/opendle-esp32
+	url = https://github.com/opendle/opendle-esp32.git
+	commit = 51fc3d906dc4f389fae828b369cce0c1ee593fb2

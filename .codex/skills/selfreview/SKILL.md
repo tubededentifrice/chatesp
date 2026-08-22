@@ -112,10 +112,10 @@ only when it is safe and tightly scoped. Recheck each affected path.
 Discover narrower checks, then run the applicable gates:
 
 ```sh
-python3 tools/check_dependency_age.py
 uv sync --locked
+uv run --locked opendle-deps check
 uv run --locked python -m unittest discover -s tests -p 'test_*.py'
-uv run --locked python tools/check_secrets.py
+uv run --locked opendle-secrets check
 uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run
 ```

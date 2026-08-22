@@ -1,0 +1,7 @@
+[platformio]
+project_dir = "firmware"
+
+[platformio.espidf]
+version = "5.5.3"
+requirements = "tools/espidf-python-requirements.txt"
+environments = ["watch_dev", "watch_prod"]

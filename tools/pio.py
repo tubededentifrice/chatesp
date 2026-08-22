@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import time
-import venv
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from configparser import ConfigParser
@@ -197,7 +196,7 @@ def verify_dependency_age(root: Path, core_dir: Path) -> None:
         print("Dependency age check reused a recent verified result.")
         return
     subprocess.run(
-        [sys.executable, str(root / "tools" / "check_dependency_age.py")],
+        ["opendle-deps", "check"],
         check=True,
         cwd=root,
     )
@@ -432,7 +431,11 @@ def prepare_idf_python(root: Path, core_dir: Path) -> None:
         return
 
     environment.parent.mkdir(parents=True, exist_ok=True)
-    venv.EnvBuilder(with_pip=True, clear=True).create(environment)
+    subprocess.run(
+        ["uv", "venv", "--clear", "--python", sys.executable, str(environment)],
+        check=True,
+        cwd=root,
+    )
     subprocess.run(
         [
             "uv",

@@ -179,22 +179,22 @@ interfaces stay replaceable.
 
 Requirements:
 
-- `uv` 0.11.32 or newer;
+- `uv` 0.12.0 or newer;
 - Xcode 26 or newer for the optional iOS app; and
 - a connected Waveshare V2 board for physical acceptance tests.
 
 Set up the locked tools:
 
 ```sh
-python3 tools/check_dependency_age.py
 uv sync --locked
+uv run --locked opendle-deps check
 ```
 
 Run the repository checks:
 
 ```sh
 uv run --locked python -m unittest discover -s tests -p 'test_*.py'
-uv run --locked python tools/check_secrets.py
+uv run --locked opendle-secrets check
 uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run -e watch_dev
 ```

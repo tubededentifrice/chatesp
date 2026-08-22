@@ -1,6 +1,7 @@
 # PlatformIO and ESP-IDF
 .pio/
 .platformio/
+.opendle/
 managed_components/
 sdkconfig
 sdkconfig.old
@@ -48,3 +49,5 @@ secrets/
 *Secrets.swift
 firmware/main/local_config.h
 ios/Local.xcconfig
+*.pem
+*.key

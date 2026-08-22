@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <opendle/time.hpp>
+
 #include "chatesp/agent_types.hpp"
 
 namespace chatesp {
@@ -64,10 +66,10 @@ public:
 
     [[nodiscard]] bool expired(
         std::uint32_t now_ms, std::uint32_t limit_ms) const {
-        return elapsed_ms(now_ms) >= limit_ms;
+        return opendle::elapsed(now_ms, start_ms_, limit_ms);
     }
     [[nodiscard]] std::uint32_t elapsed_ms(std::uint32_t now_ms) const {
-        return static_cast<std::uint32_t>(now_ms - start_ms_);
+        return opendle::elapsed_time(now_ms, start_ms_);
     }
 
 private:

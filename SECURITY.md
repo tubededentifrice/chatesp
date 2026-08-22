@@ -15,7 +15,7 @@ maintainer response before you send technical details.
 - Store iOS secrets in Keychain, not `UserDefaults`.
 - Provision secrets only over authenticated, encrypted BLE.
 - Keep device secrets in encrypted NVS. Do not print them.
-- Run `uv run --locked python tools/check_secrets.py` before each commit.
+- Run `uv run --locked opendle-secrets check` before each commit.
 
 If a secret enters Git history, revoke it first. Removing the text in a later
 commit is not sufficient.

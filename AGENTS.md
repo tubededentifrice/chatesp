@@ -82,8 +82,12 @@ Some files can be absent during initial setup. Read them when they exist.
 
 - Use `uv` for each Python environment, dependency, and command. Do not use
   bare `pip`, a manual virtual environment, Poetry, or Conda.
-- The standard-library command `python3 tools/check_dependency_age.py` is the
-  only pre-`uv` exception.
+- The pinned embedded library is in `shared/opendle-esp32`. Common host tools
+  come from the locked `opendle-electronics` package. The dependency cooldown
+  does not apply to these reviewed first-party repositories, but full commit
+  pins are mandatory. Keep ChatESP product and irreversible-write policy here.
+- Run `uv sync --locked`, then run `uv run --locked opendle-deps check` before
+  a dependency update or firmware build.
 - Use `uv sync --locked`. Run PlatformIO only through
   `uv run --locked python tools/pio.py`.
 - Keep CI uv, direct Python, and PlatformIO dependencies exactly pinned. Pin Git

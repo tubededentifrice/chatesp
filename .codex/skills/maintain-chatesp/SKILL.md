@@ -74,13 +74,13 @@ exception and for repeatable tool or workflow problems.
 Use the repository tools:
 
 ```sh
-python3 tools/check_dependency_age.py
 uv sync --locked
+uv run --locked opendle-deps check
 uv run --locked python -m unittest discover -s tests -p 'test_*.py'
 uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run
 uv run --locked python simulator/tools/build.py --test --sanitize
-uv run --locked python tools/check_secrets.py
+uv run --locked opendle-secrets check
 ```
 
 Run only applicable firmware commands while firmware profiles are not yet

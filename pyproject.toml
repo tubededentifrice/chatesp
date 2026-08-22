@@ -4,11 +4,19 @@ version = "0.1.0"
 description = "Pinned host tools for ChatESP firmware development"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-  "pip==25.2",
-  "platformio==6.1.19",
+  "opendle-electronics[platformio]",
 ]
+
+[tool.uv.sources]
+opendle-electronics = { git = "https://github.com/opendle/opendle-electronics.git", rev = "e5243582f44655d0e6f8a344f8691e461db3f905" }
 
 [tool.uv]
 package = false
 exclude-newer = "2 weeks"
-required-version = ">=0.11.32"
+required-version = ">=0.12.0"
+
+[tool.opendle.dependencies]
+trusted-github = [
+  "opendle/opendle-electronics",
+  "opendle/opendle-esp32",
+]
