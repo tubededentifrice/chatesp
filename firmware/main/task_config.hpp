@@ -102,7 +102,11 @@ inline lvgl_port_cfg_t lvgl_port_config() {
     return {
         .task_priority = static_cast<int>(lvgl.priority),
         .task_stack = static_cast<int>(lvgl.stack_bytes),
-        .task_affinity = static_cast<int>(lvgl.core),
+        // esp_lvgl_port uses -1 for no affinity. FreeRTOS uses
+        // tskNO_AFFINITY, which is not negative on this ESP-IDF version.
+        .task_affinity = lvgl.core == tskNO_AFFINITY
+                             ? -1
+                             : static_cast<int>(lvgl.core),
         .task_max_sleep_ms = 500,
         .task_stack_caps = lvgl.stack_caps,
         .timer_period_ms = 5,

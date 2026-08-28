@@ -207,6 +207,12 @@ class StartupLifecycleTests(unittest.TestCase):
             board.index("static void bsp_touchpad_read(") :
             board.index("static lv_indev_t *bsp_display_indev_init(")
         ]
+        indev_start = board.index(
+            "static lv_indev_t *bsp_display_indev_init("
+        )
+        indev_init = board[
+            indev_start : board.index("/*****", indev_start)
+        ]
 
         self.assertNotIn("lvgl_port_add_touch", board)
         self.assertIn("data->state = LV_INDEV_STATE_RELEASED", callback)
@@ -215,6 +221,8 @@ class StartupLifecycleTests(unittest.TestCase):
         self.assertIn("touch, &point, &point_count, 1", callback)
         self.assertNotIn("ESP_ERROR_CHECK", callback)
         self.assertNotIn("point.x", callback.split("ESP_LOG", 1)[0])
+        self.assertNotIn("BSP_ERROR_CHECK_RETURN_NULL", indev_init)
+        self.assertIn("touch_result != ESP_OK", indev_init)
 
     def test_cold_reset_and_power_input_use_disjoint_expander_masks(
         self,

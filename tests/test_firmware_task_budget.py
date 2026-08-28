@@ -29,6 +29,12 @@ class FirmwareTaskBudgetTests(unittest.TestCase):
         self.assertEqual(expected, declared)
         self.assertIn("lvgl_port_config()", header)
         self.assertNotIn("ESP_LVGL_PORT_INIT_CONFIG", header)
+        self.assertIn("lvgl.core == tskNO_AFFINITY", header)
+        self.assertRegex(
+            header,
+            r"\.task_affinity\s*=\s*lvgl\.core == tskNO_AFFINITY\s*"
+            r"\?\s*-1\s*:\s*static_cast<int>\(lvgl\.core\)",
+        )
 
     def test_task_creation_uses_the_reviewed_contract(self) -> None:
         sources = "\n".join(

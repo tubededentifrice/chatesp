@@ -1056,8 +1056,10 @@ static void bsp_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
 
 static lv_indev_t *bsp_display_indev_init(lv_display_t *disp)
 {
-    BSP_ERROR_CHECK_RETURN_NULL(bsp_touch_new(NULL, &tp));
-    BSP_NULL_CHECK(tp, NULL);
+    const esp_err_t touch_result = bsp_touch_new(NULL, &tp);
+    if (touch_result != ESP_OK || tp == NULL) {
+        return NULL;
+    }
 
     if (!lvgl_port_lock(1000)) {
         board_diag_increment(&board_diagnostics.display_lock_timeout);
