@@ -1,0 +1,31 @@
+version: 2
+
+multi-ecosystem-groups:
+  all-dependencies:
+    schedule:
+      interval: weekly
+
+updates:
+  - package-ecosystem: uv
+    directory: /
+    patterns:
+      - "*"
+    cooldown:
+      default-days: 14
+    multi-ecosystem-group: all-dependencies
+
+  - package-ecosystem: github-actions
+    directory: /
+    patterns:
+      - "*"
+    cooldown:
+      default-days: 14
+    multi-ecosystem-group: all-dependencies
+
+  - package-ecosystem: gitsubmodule
+    directory: /
+    patterns:
+      - "*"
+    cooldown:
+      default-days: 14
+    multi-ecosystem-group: all-dependencies
