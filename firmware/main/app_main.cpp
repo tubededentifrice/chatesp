@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "power_control.hpp"
+#include "task_config.hpp"
 #include "ui.hpp"
 #include "voice_runtime.hpp"
 
@@ -126,7 +127,8 @@ extern "C" void app_main() {
     // Complete panel polling transactions before NVS work can let LVGL run.
     // The startup frame stays at zero brightness until the selected value is
     // available.
-    if (!chatesp::ui::start_hidden()) {
+    if (!chatesp::ui::start_hidden(
+            chatesp::task_config::lvgl_port_config())) {
         ESP_LOGE(kTag, "Display hidden start failed");
         return;
     }

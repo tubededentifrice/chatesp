@@ -19,6 +19,8 @@ bool mode_button_is_pressed();
     std::uint32_t observed_at_ms);
 [[nodiscard]] std::optional<BatteryStatus> battery_status();
 [[nodiscard]] std::optional<std::uint8_t> battery_percent();
+[[nodiscard]] std::uint16_t battery_sample_failure_count();
+[[nodiscard]] std::uint32_t i2c_error_count();
 [[nodiscard]] std::uint32_t power_source_revision();
 esp_err_t power_off();
 

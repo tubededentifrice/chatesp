@@ -9,3 +9,8 @@ transcript What is two plus two?
 answer Four.
 finish
 status
+expect state READY
+expect transcript_bytes 21
+expect answer_bytes 5
+expect wifi online
+expect now_ms 350

@@ -5,3 +5,5 @@ action up
 fail
 advance 2200
 status
+expect state READY
+expect transcript_bytes 0

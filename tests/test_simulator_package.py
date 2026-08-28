@@ -101,6 +101,57 @@ class SimulatorPackageTests(unittest.TestCase):
         self.assertIn("-fsanitize=address,undefined", build_tool)
         self.assertIn("kMaximumBleFuzzCases = 100'000", interface)
 
+    def test_scenarios_assert_state_and_event_fuzz_is_bounded(self) -> None:
+        scenarios = list((SIMULATOR_ROOT / "scenarios").glob("*.sim"))
+        self.assertGreater(len(scenarios), 0)
+        for scenario in scenarios:
+            self.assertIn("expect ", scenario.read_text(), scenario)
+
+        simulator_header = (
+            SIMULATOR_ROOT
+            / "include"
+            / "chatesp"
+            / "simulator"
+            / "simulator.hpp"
+        ).read_text()
+        simulator_tests = (
+            SIMULATOR_ROOT / "tests" / "test_simulator.cpp"
+        ).read_text()
+        self.assertIn("kMaximumEventFuzzCases = 100'000", simulator_header)
+        self.assertIn("event_fuzz(50'000, 0x5eed1234U)", simulator_tests)
+        build_tool = (
+            SIMULATOR_ROOT / "tools" / "build.py"
+        ).read_text()
+        self.assertIn('input="fuzz 50000 1592594996\\n"', build_tool)
+        self.assertIn('get("event_fuzz_cases") != 50_000', build_tool)
+
+        scenario_text = "\n".join(
+            scenario.read_text() for scenario in scenarios
+        )
+        for field in (
+            "mode",
+            "state",
+            "screen_on",
+            "orientation",
+            "controls_open",
+            "wifi",
+            "ble.outcome",
+            "transcript_bytes",
+            "answer_bytes",
+            "now_ms",
+        ):
+            self.assertIn(f"expect {field} ", scenario_text)
+
+    def test_ci_runs_documented_and_sanitized_simulator_paths(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github" / "workflows" / "quality.yml"
+        ).read_text()
+        self.assertIn("cmake -S simulator -B simulator/.build/cmake", workflow)
+        self.assertIn("ctest --test-dir simulator/.build/cmake", workflow)
+        self.assertIn(
+            "simulator/tools/build.py --test --sanitize", workflow
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,11 +13,25 @@ the initialized panel at its current brightness avoids this false-success wake
 state. Black AMOLED pixels emit no visible light. USB stays available, so the
 next upload can reset and flash the board without a manual button sequence. A
 PWR-button press removes the black frame and redraws the display. The wake path
-also replays the bounded CO5300 initialization table, restores brightness, and
+also replays the bounded selected-panel initialization table, restores brightness, and
 sends one complete frame. It does not reset the panel or touch controller. The
 top mode button does not wake it and has no effect while it sleeps. The ChatESP
 footer shows a small centered `DEV` marker. Production firmware does not create
 this marker.
+
+After optional touch starts, tap the `DEV` marker to open the calibration view.
+Touch the top, center, and bottom ring in portrait and then in landscape. The
+view shows the current logical coordinates only on the display. It does not log
+or store them. The view closes after the sixth release. Use measured results
+before a revision-specific correction. Do not copy a generic touch offset.
+
+Development soft sleep keeps the processor active. It samples the battery once
+every 30 seconds so the battery cannot discharge below the five-percent product
+limit without a later check. It defers the sample while PWR or voice work has
+priority. A valid value at or below five percent, without good VBUS or active
+charging, enters the normal AXP2101 system-off retry path. The sample also reads
+raw battery millivolts for bounded diagnostics. This value does not enter the
+UI or normal logs.
 
 When the display is active, firmware waits until the PWR press becomes a voice
 hold before it requests panel recovery. A short sleep press therefore draws
@@ -27,7 +41,8 @@ press and the completed soft-sleep state.
 Build and upload development mode with one command:
 
 ```sh
-uv run --locked python tools/pio.py run -e watch_dev -t upload
+uv run --locked python tools/device_upload.py \
+  --environment watch_dev --port LOCAL_PORT
 ```
 
 `watch_dev` is the default PlatformIO environment. A command without `-e` also
@@ -36,6 +51,12 @@ records.
 
 Each ChatESP device upload ends with an ESP32 watchdog reset. This reset starts the app
 without a button action and does not leave the chip in the ROM loader.
+The upload tool first builds the explicit profile. It then checks the resolved
+SDK settings, the 16 MiB partition layout, and the image size against one 6 MiB
+OTA slot. It stages the exact checked artifacts and does not rebuild them during
+the device write. It does not write the device when a check fails. After a
+successful upload, it erases only the validated OTA-selection range. It never
+erases NVS.
 
 Use the repository monitor for device logs. It sets DTR and RTS to inactive
 values before it opens the port. On the ESP32-S3 native USB serial interface,
@@ -60,9 +81,13 @@ uv run --locked python tools/device_doctor.py --port LOCAL_PORT
 ```
 
 It uploads `watch_dev`, clears only the OTA-selection partition so the uploaded
-slot 0 app starts, checks that the image matches the current Git commit, and
-reads one bounded boot window. It does not clear NVS, settings, memories, or BLE
-bonds. It requires a V2 probe, two equal nonzero brightness commands, a
+slot 0 app starts, checks that the image matches the current Git commit, waits
+up to five seconds for the same serial port to return, and reads one bounded
+boot window. Each open attempt sets DTR and RTS inactive before it opens the
+port. The retry stops at once for an unexpected error. It does not clear NVS,
+settings, memories, or BLE
+bonds. It requires a valid board-revision record, two equal nonzero brightness
+commands, a
 completed display wake sequence, and voice runtime readiness. The board logs
 `Panel on` only when its tracked panel state changes, so that optional record is
 not a separate pass condition.
@@ -86,7 +111,7 @@ device if the worker stays blocked for five seconds. The watchdog also restarts
 the device if a task prevents the scheduler from running for five seconds.
 
 The firmware keeps a small crash trace in RTC memory. The trace contains the
-three most recent boot records and the 16 most recent event codes in each boot.
+three most recent boot records and the 32 most recent event codes in each boot.
 It records reset reasons and bounded firmware stages, such as BLE stop and BLE
 start. It does not record credentials, network addresses, chat text, audio,
 locations, or device identifiers. It does not write to flash. The trace stays
@@ -185,7 +210,8 @@ encrypted, and the iOS app keeps its copy of secrets in Keychain.
 Upload production with the normal command:
 
 ```sh
-uv run --locked python tools/pio.py run -e watch_prod -t upload
+uv run --locked python tools/device_upload.py \
+  --environment watch_prod --port LOCAL_PORT
 ```
 
 Use production mode for final sleep, wake, and battery-current tests. Do not use

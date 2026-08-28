@@ -26,9 +26,10 @@ Use address and undefined-behavior sanitizers for protocol and crash work:
 uv run --locked python simulator/tools/build.py --test --sanitize
 ```
 
-This command runs all BLE scenarios and 30,000 deterministic malformed-frame
-cases. The `ble fuzz CASES SEED` command accepts up to 100,000 cases for a
-focused repeatable run.
+This command runs all scenarios, 30,000 deterministic malformed-frame cases,
+and 50,000 deterministic product events. It checks the product state
+invariants after each event. The `ble fuzz CASES SEED` and `fuzz CASES SEED`
+commands each accept up to 100,000 cases for a focused repeatable run.
 
 Run one scenario and write the final display artifact:
 
@@ -62,6 +63,9 @@ ctest --test-dir simulator/.build/cmake --output-on-failure
 The simulator owns its command protocol, desktop runtime, SVG renderer,
 scenarios, tests, build wrapper, documentation, and license. It does not
 include an ESP-IDF header or a board pin.
+The SVG renderer currently duplicates the firmware screen layout. It does not
+compile or share the LVGL presentation code. An SVG test can check state and
+the desktop layout, but it cannot prove the physical pixel layout.
 
 ## Commands
 
@@ -92,6 +96,8 @@ ble radio on|off|restart
 ble reboot
 ble provision REVISION [FAULT]
 ble fuzz CASES SEED
+fuzz CASES SEED
+expect FIELD VALUE
 touch down X Y
 touch up X Y
 controls brightness PERCENT

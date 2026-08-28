@@ -5,12 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import serial
+
 from tools.device_doctor import (
     collect_boot_log,
     diagnose_boot,
     main,
     otadata_region,
     redact_doctor_text,
+    run_redacted_command,
     upload_development_firmware,
 )
 
@@ -22,7 +25,7 @@ class DeviceDoctorTests(unittest.TestCase):
         connection.read.return_value = b""
 
         with patch(
-            "tools.device_doctor.open_safe_serial", return_value=connection
+            "tools.device_doctor.reopen_safe_serial", return_value=connection
         ), patch("tools.device_doctor.close_safe_serial") as safe_close, patch(
             "tools.device_doctor.time.monotonic", side_effect=(0.0, 1.0)
         ):
@@ -34,7 +37,8 @@ class DeviceDoctorTests(unittest.TestCase):
         log = """
 I app_init: App version:      abc1234-dirty
 I chatesp: Starting application in development mode
-I board: V2 CST820-compatible touch 0x15 found
+I board: Board revision: V2
+I board: Touch controller: CST820-compatible
 I co5300: set brightness to 65% (hardware value: 165)
 I co5300: set brightness to 65% (hardware value: 165)
 I chatesp: Display ready at 65 percent
@@ -51,7 +55,8 @@ I chatesp: Voice runtime ready
         log = """
 I app_init: App version:      old1234
 I chatesp: Starting application in development mode
-I board: V2 CST820-compatible touch 0x15 found
+I board: Board revision: V2
+I board: Touch controller: CST820-compatible
 I co5300: set brightness to 65% (hardware value: 165)
 I chatesp: Display ready at 65 percent
 I chatesp: Voice runtime ready
@@ -113,23 +118,31 @@ I chatesp: Voice runtime ready
         root = Path("/repo")
         port = "LOCAL_PORT"
         with patch(
-            "tools.device_doctor.otadata_region", return_value=(0xF000, 0x2000)
-        ), patch(
-            "tools.device_doctor.run_redacted_command", side_effect=(0, 0)
-        ) as run:
+            "tools.device_doctor.upload_firmware", return_value=0
+        ) as upload:
             self.assertEqual(0, upload_development_firmware(root, port))
 
-        upload_command = run.call_args_list[0].args[0]
-        selection_command = run.call_args_list[1].args[0]
-        self.assertEqual("watch_dev", upload_command[upload_command.index("-e") + 1])
-        self.assertEqual(
-            "tool-esptoolpy",
-            selection_command[selection_command.index("--package") + 1],
+        upload.assert_called_once_with(
+            root,
+            "watch_dev",
+            port,
+            runner=run_redacted_command,
         )
-        self.assertEqual(
-            ["erase_region", "0xf000", "0x2000"], selection_command[-3:]
-        )
-        self.assertIn(port, selection_command)
+
+    def test_serial_reopen_error_has_one_safe_result(self) -> None:
+        with patch(
+            "tools.device_doctor.upload_development_firmware",
+            return_value=0,
+        ), patch(
+            "tools.device_doctor.reopen_safe_serial",
+            side_effect=serial.SerialException(
+                "could not open /dev/cu.private: No such file"
+            ),
+        ):
+            self.assertEqual(
+                1,
+                main(["--port", "/dev/cu.private", "--duration", "1"]),
+            )
 
     def test_otadata_region_is_narrow_and_validated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -140,13 +153,20 @@ I chatesp: Voice runtime ready
             partitions.write_text(
                 "# Name, Type, SubType, Offset, Size\n"
                 "nvs,data,nvs,0x9000,0x6000\n"
-                "otadata,data,ota,0xf000,0x2000\n",
+                "otadata,data,ota,0xf000,0x2000\n"
+                "phy_init,data,phy,0x11000,0x1000\n"
+                "ota_0,app,ota_0,0x20000,0x600000\n"
+                "ota_1,app,ota_1,0x620000,0x600000\n"
+                "storage,data,spiffs,0xc20000,0x3e0000\n",
                 encoding="utf-8",
             )
             self.assertEqual((0xF000, 0x2000), otadata_region(root))
 
             partitions.write_text(
-                "otadata,data,ota,0xf000,0x3000\n", encoding="utf-8"
+                "otadata,data,ota,0xf000,0x3000\n"
+                "ota_0,app,ota_0,0x20000,0x600000\n"
+                "ota_1,app,ota_1,0x620000,0x600000\n",
+                encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "not safe"):
                 otadata_region(root)

@@ -111,6 +111,21 @@ def compile_target(
 
 def run_tests(simulator_binary: Path, test_binary: Path) -> None:
     subprocess.run([str(test_binary)], check=True, cwd=REPOSITORY_ROOT)
+    fuzz = subprocess.run(
+        [str(simulator_binary)],
+        input="fuzz 50000 1592594996\n",
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    fuzz_records = [json.loads(line) for line in fuzz.stdout.splitlines()]
+    if (
+        len(fuzz_records) != 1
+        or fuzz_records[0].get("ok") is not True
+        or fuzz_records[0].get("event_fuzz_cases") != 50_000
+    ):
+        raise RuntimeError("Simulator did not complete 50,000 event-fuzz cases")
     rejected_touch = subprocess.run(
         [str(simulator_binary)],
         input="ready\ntouch down 999 999\n",

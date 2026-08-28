@@ -38,6 +38,9 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
+        tasks = (ROOT / "firmware" / "main" / "task_config.hpp").read_text(
+            encoding="utf-8"
+        )
         startup = runtime.index("start_startup_services();")
         release = runtime.index("release_startup_services_stack()", startup)
         passkey = runtime.index("const BaseType_t passkey_task_result", release)
@@ -46,28 +49,32 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
         self.assertLess(startup, release)
         self.assertLess(release, passkey)
         self.assertLess(passkey, voice)
-        self.assertIn("kStartupServicesStackBytes = 12 * 1024", runtime)
-        self.assertIn("kRuntimeStackBytes = 28 * 1024", runtime)
+        self.assertIn('"startup_services", 12 * 1024', tasks)
+        self.assertIn('"voice_runtime", 28 * 1024', tasks)
+        self.assertIn("task_config::startup_services", runtime)
+        self.assertIn("task_config::voice_runtime", runtime)
         self.assertIn("pdMS_TO_TICKS(kControllerWaitMs)", runtime)
 
     def test_passkey_ui_has_stack_for_a_synchronous_display_refresh(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
+        tasks = (ROOT / "firmware" / "main" / "task_config.hpp").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn("kPasskeyStackBytes = 8 * 1024", runtime)
+        self.assertIn('"ble_passkey_ui", 8 * 1024', tasks)
         passkey_task = runtime[
             runtime.index("const BaseType_t passkey_task_result") : runtime.index(
                 "if (passkey_task_result != pdPASS)"
             )
         ]
-        self.assertIn("kPasskeyStackBytes", passkey_task)
+        self.assertIn("task_config::ble_passkey_ui", passkey_task)
 
     def test_ble_memory_is_released_before_transcription(self) -> None:
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
-
         self.assertLess(
             runtime.index("stop_ble_for_request()"),
             runtime.index("transcription_provider_.transcribe("),
@@ -77,14 +84,21 @@ class FirmwareMemoryBudgetTests(unittest.TestCase):
         runtime = (ROOT / "firmware" / "main" / "voice_runtime.cpp").read_text(
             encoding="utf-8"
         )
+        tasks = (ROOT / "firmware" / "main" / "task_config.hpp").read_text(
+            encoding="utf-8"
+        )
         lookup = runtime[
             runtime.index("void start_network_context_lookup()") :
             runtime.index("void run_network_context_worker()")
         ]
 
         self.assertIn("network_context_task_entry", lookup)
-        self.assertIn("kNetworkContextStackBytes", lookup)
-        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", lookup)
+        self.assertIn("task_config::network_context", lookup)
+        self.assertIn(
+            '"network_context", 20 * 1024, 3, 0,\n'
+            "    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT",
+            tasks,
+        )
         self.assertIn("vTaskDeleteWithCaps(completed_task)", runtime)
 
     def test_board_audio_allocation_has_no_fatal_check(self) -> None:

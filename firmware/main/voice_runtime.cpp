@@ -22,6 +22,7 @@
 #include "chatesp/audio_spectrum.hpp"
 #include "chatesp/ble_controller.hpp"
 #include "chatesp/ble_settings.hpp"
+#include "chatesp/brightness_coordinator.hpp"
 #include "chatesp/clock_network_transition.hpp"
 #include "chatesp/clock_power_policy.hpp"
 #include "chatesp/interaction_state.hpp"
@@ -52,8 +53,10 @@
 #include "network_context_provider.hpp"
 #include "pcm_playback_sink.hpp"
 #include "power_control.hpp"
+#include "resource_telemetry.hpp"
 #include "settings_store.hpp"
 #include "speech_segment_channel.hpp"
+#include "task_config.hpp"
 #include "ui.hpp"
 
 #ifndef CHATESP_DEVELOPMENT_MODE
@@ -72,6 +75,7 @@ constexpr std::uint32_t kDisplayWakeRetryMs = 100;
 constexpr std::uint32_t kDisplaySleepRetryMs = 100;
 constexpr std::uint32_t kFooterRefreshMs = 100;
 constexpr std::uint32_t kRuntimeHeartbeatMs = 5'000;
+constexpr std::uint32_t kResourceSummaryIntervalMs = 15 * 60 * 1'000;
 constexpr std::uint32_t kBatteryRefreshMs = 30'000;
 constexpr std::uint32_t kSignalRefreshMs = 2'000;
 constexpr std::uint32_t kAnswerStreamRefreshMs = 60;
@@ -82,6 +86,7 @@ constexpr std::uint32_t kModeDisplayRetryMs = 100;
 constexpr std::uint32_t kBleRestartAfterWorkerMs = 250;
 constexpr std::uint32_t kBleStopTimeoutMs = 1'000;
 constexpr std::uint32_t kControllerWaitMs = 5'000;
+constexpr std::uint32_t kBrightnessCommandWaitMs = kControllerWaitMs;
 constexpr std::uint32_t kStartupServicesSleepWaitMs = 5'000;
 constexpr std::uint32_t kPhoneProxyConnectGraceMs = 2'000;
 constexpr std::size_t kBleControllerMinimumLargestBlockBytes = 30 * 1024;
@@ -91,34 +96,14 @@ constexpr std::size_t kMinimumRecordingSamples =
 static_assert(
     AudioCapture::kSampleRateHz == kAudioSpectrumSampleRateHz,
     "The spectrum bin frequencies must match the capture sample rate");
-constexpr UBaseType_t kRuntimePriority = 5;
-constexpr std::uint32_t kRuntimeStackBytes = 28 * 1024;
-constexpr UBaseType_t kDisplayControllerPriority = 4;
-constexpr std::uint32_t kDisplayControllerStackBytes = 8 * 1024;
-constexpr UBaseType_t kBleControllerPriority = 4;
-constexpr std::uint32_t kBleControllerStackBytes = 16 * 1024;
-constexpr UBaseType_t kStartupServicesPriority = 2;
-constexpr std::uint32_t kStartupServicesStackBytes = 12 * 1024;
-constexpr UBaseType_t kDeferredUiPriority = 1;
-constexpr std::uint32_t kDeferredUiStackBytes = 10 * 1024;
-constexpr UBaseType_t kPasskeyPriority = 6;
-constexpr std::uint32_t kPasskeyStackBytes = 8 * 1024;
-constexpr UBaseType_t kSpeechPriority = 5;
-constexpr std::uint32_t kSpeechStackBytes = 16 * 1024;
 constexpr EventBits_t kSpeechDoneBit = BIT0;
 constexpr EventBits_t kNetworkWarmDoneBit = BIT1;
 constexpr EventBits_t kImageDoneBit = BIT2;
 constexpr EventBits_t kNetworkContextDoneBit = BIT3;
 constexpr EventBits_t kStartupServicesDoneBit = BIT4;
 constexpr EventBits_t kDeferredUiDoneBit = BIT5;
-constexpr UBaseType_t kNetworkWarmPriority = 3;
-constexpr std::uint32_t kNetworkWarmStackBytes = 6 * 1024;
-constexpr UBaseType_t kImagePriority = 3;
-constexpr std::uint32_t kImageStackBytes = 20 * 1024;
 constexpr std::size_t kMaximumImageCandidateAttempts = 3;
 constexpr std::uint32_t kImageCandidateBudgetMs = 20'000;
-constexpr UBaseType_t kNetworkContextPriority = 3;
-constexpr std::uint32_t kNetworkContextStackBytes = 20 * 1024;
 constexpr std::uint64_t kMinimumValidEpochSeconds = 1'577'836'800ULL;
 constexpr char kNtpServer[] = "time.cloudflare.com";
 
@@ -427,6 +412,11 @@ struct DeviceContextEvent {
     std::array<char, provisioning::kMaximumApproximateLocationSize + 1> approximate_location{};
 };
 
+struct BrightnessReconciliation {
+    std::uint32_t generation = 0;
+    std::uint8_t percent = 0;
+};
+
 }  // namespace
 
 class VoiceRuntime::Impl final : public agent::AgentProgressObserver,
@@ -467,6 +457,8 @@ public:
           speech_provider_(
               openrouter_audio_transport_, network_, openrouter_connection_),
           pcm_sink_(playback_, device_control_) {
+        device_control_.set_brightness_request(
+            brightness_request_entry, this);
         tools_ready_ = tools_.add(web_tool_) == agent::Error::none &&
             tools_.add(image_tool_) == agent::Error::none &&
             (!python_executor_.available() ||
@@ -545,6 +537,8 @@ public:
         if (!tools_ready_) {
             return ESP_FAIL;
         }
+        resource_telemetry::record_point(
+            resource_telemetry::Point::display_ready);
         if (!python_executor_.available()) {
             ESP_LOGW(kTag, "The optional Python tool is not available");
         }
@@ -556,6 +550,8 @@ public:
                      esp_err_to_name(audio_result));
             return audio_result;
         }
+        resource_telemetry::record_point(
+            resource_telemetry::Point::audio_ready);
         command_queue_ = xQueueCreate(16, sizeof(Command));
         passkey_queue_ = xQueueCreate(1, sizeof(PasskeyEvent));
         device_context_queue_ = xQueueCreate(1, sizeof(DeviceContextEvent));
@@ -580,7 +576,17 @@ public:
             }
             return ESP_ERR_NO_MEM;
         }
-        start_control_tasks();
+        if (!start_control_tasks()) {
+            vQueueDelete(command_queue_);
+            vQueueDelete(passkey_queue_);
+            vQueueDelete(device_context_queue_);
+            vEventGroupDelete(speech_events_);
+            command_queue_ = nullptr;
+            passkey_queue_ = nullptr;
+            device_context_queue_ = nullptr;
+            speech_events_ = nullptr;
+            return ESP_ERR_NO_MEM;
+        }
         start_startup_services();
         // Reclaim the completed internal stack before the two persistent
         // runtime tasks need contiguous internal memory. The result stays in
@@ -596,14 +602,9 @@ public:
             device_context_queue_ = nullptr;
             return ESP_ERR_TIMEOUT;
         }
-        const BaseType_t passkey_task_result = xTaskCreatePinnedToCore(
-            passkey_task_entry,
-            "ble_passkey_ui",
-            kPasskeyStackBytes,
-            this,
-            kPasskeyPriority,
-            &passkey_task_,
-            1);
+        const BaseType_t passkey_task_result = task_config::create(
+            passkey_task_entry, task_config::ble_passkey_ui, this,
+            &passkey_task_);
         if (passkey_task_result != pdPASS) {
             stop_startup_services();
             stop_control_tasks();
@@ -626,14 +627,8 @@ public:
                 CommandKind::startup_button_down, startup_at_ms};
             queue_command(command);
         }
-        const BaseType_t task_result = xTaskCreatePinnedToCore(
-            task_entry,
-            "voice_runtime",
-            kRuntimeStackBytes,
-            this,
-            kRuntimePriority,
-            &task_,
-            1);
+        const BaseType_t task_result = task_config::create(
+            task_entry, task_config::voice_runtime, this, &task_);
         if (task_result != pdPASS) {
             vTaskDelete(passkey_task_);
             passkey_task_ = nullptr;
@@ -852,6 +847,11 @@ private:
         static_cast<Impl *>(context)->run_display_controller();
     }
 
+    static agent::Error brightness_request_entry(
+        void *context, std::uint8_t percent, bool wait) {
+        return static_cast<Impl *>(context)->request_brightness(percent, wait);
+    }
+
     static void ble_controller_task_entry(void *context) {
         static_cast<Impl *>(context)->run_ble_controller();
     }
@@ -870,28 +870,23 @@ private:
             self->button_pressed_.load(std::memory_order_acquire);
     }
 
-    void start_control_tasks() {
-        const BaseType_t display_created = xTaskCreatePinnedToCoreWithCaps(
-            display_controller_task_entry, "display_control",
-            kDisplayControllerStackBytes, this,
-            kDisplayControllerPriority, &display_controller_task_, 0,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bool start_control_tasks() {
+        const BaseType_t display_created = task_config::create(
+            display_controller_task_entry, task_config::display_control,
+            this, &display_controller_task_);
         if (display_created != pdPASS) {
             display_controller_task_ = nullptr;
-            ESP_LOGW(
-                kTag,
-                "Display controller task could not start; using the "
-                "synchronous recovery path");
+            ESP_LOGE(kTag, "Display controller task could not start");
+            return false;
         }
 
         // BLE start restores the NimBLE bond store from NVS. Keep this task
         // stack in internal RAM because flash work can disable the PSRAM
         // cache. The task exists before the controller headroom check, so its
         // fixed cost is included in that decision.
-        const BaseType_t ble_created = xTaskCreatePinnedToCore(
-            ble_controller_task_entry, "ble_control",
-            kBleControllerStackBytes, this, kBleControllerPriority,
-            &ble_controller_task_, 0);
+        const BaseType_t ble_created = task_config::create(
+            ble_controller_task_entry, task_config::ble_control, this,
+            &ble_controller_task_);
         if (ble_created != pdPASS) {
             ble_controller_task_ = nullptr;
             ESP_LOGW(
@@ -899,6 +894,7 @@ private:
                 "BLE controller task could not start; using the "
                 "synchronous recovery path");
         }
+        return true;
     }
 
     void stop_control_tasks() {
@@ -918,10 +914,9 @@ private:
         startup_memory_result_.store(
             ESP_ERR_INVALID_STATE, std::memory_order_release);
         xEventGroupClearBits(speech_events_, kStartupServicesDoneBit);
-        const BaseType_t created = xTaskCreatePinnedToCore(
-            startup_services_task_entry, "startup_services",
-            kStartupServicesStackBytes, this, kStartupServicesPriority,
-            &startup_services_task_, 0);
+        const BaseType_t created = task_config::create(
+            startup_services_task_entry, task_config::startup_services,
+            this, &startup_services_task_);
         if (created == pdPASS) {
             return;
         }
@@ -945,6 +940,8 @@ private:
 
     void run_startup_services() {
         run_startup_services_inline();
+        resource_telemetry::record_task_watermark(
+            task_config::TaskId::startup_services);
         // The start path reclaims this short-lived internal stack before it
         // creates the input tasks.
         vTaskSuspend(nullptr);
@@ -1017,11 +1014,138 @@ private:
     [[nodiscard]] bool startup_services_ready() const {
         return startup_services_applied_ &&
             startup_settings_result_.load(std::memory_order_acquire) ==
-                ESP_OK;
+            ESP_OK;
+    }
+
+    runtime::BrightnessSubmission submit_brightness(std::uint8_t percent) {
+        resource_telemetry::record_display_event(
+            resource_telemetry::DisplayEvent::submission);
+        taskENTER_CRITICAL(&brightness_lock_);
+        const runtime::BrightnessSubmission submission =
+            brightness_coordinator_.submit(percent);
+        taskEXIT_CRITICAL(&brightness_lock_);
+        if (submission.coalesced) {
+            resource_telemetry::record_display_event(
+                resource_telemetry::DisplayEvent::queue_coalesced);
+        }
+        if (display_controller_task_ != nullptr) {
+            xTaskNotifyGive(display_controller_task_);
+        }
+        return submission;
+    }
+
+    runtime::BrightnessOutcome brightness_outcome(
+        std::uint32_t generation) {
+        taskENTER_CRITICAL(&brightness_lock_);
+        const runtime::BrightnessOutcome outcome =
+            brightness_coordinator_.outcome(generation);
+        taskEXIT_CRITICAL(&brightness_lock_);
+        return outcome;
+    }
+
+    runtime::BrightnessCancelResult cancel_brightness(
+        std::uint32_t generation) {
+        taskENTER_CRITICAL(&brightness_lock_);
+        const runtime::BrightnessCancelResult result =
+            brightness_coordinator_.cancel(generation);
+        taskEXIT_CRITICAL(&brightness_lock_);
+        return result;
+    }
+
+    runtime::BrightnessRequest cancel_pending_brightness() {
+        taskENTER_CRITICAL(&brightness_lock_);
+        const runtime::BrightnessRequest cancelled =
+            brightness_coordinator_.cancel_pending();
+        taskEXIT_CRITICAL(&brightness_lock_);
+        return cancelled;
+    }
+
+    void remember_brightness_reconciliation(
+        std::uint32_t generation, std::uint8_t percent) {
+        if (generation == 0) {
+            return;
+        }
+        for (BrightnessReconciliation &reconciliation :
+             brightness_reconciliations_) {
+            if (reconciliation.generation == generation) {
+                reconciliation = {generation, percent};
+                return;
+            }
+        }
+        for (BrightnessReconciliation &reconciliation :
+             brightness_reconciliations_) {
+            if (reconciliation.generation == 0) {
+                reconciliation = {generation, percent};
+                return;
+            }
+        }
+        brightness_reconciliations_[brightness_reconciliation_index_] = {
+            generation, percent};
+        brightness_reconciliation_index_ =
+            (brightness_reconciliation_index_ + 1) %
+            brightness_reconciliations_.size();
+    }
+
+    agent::Error request_brightness(std::uint8_t percent, bool wait) {
+        const runtime::BrightnessSubmission submission =
+            submit_brightness(percent);
+
+        if (!wait) {
+            return agent::Error::none;
+        }
+
+        const std::uint32_t started_ms = monotonic_ms();
+        while (true) {
+            const runtime::BrightnessOutcome outcome =
+                brightness_outcome(submission.request.generation);
+            if (outcome == runtime::BrightnessOutcome::succeeded) {
+                return agent::Error::none;
+            }
+            if (outcome == runtime::BrightnessOutcome::failed ||
+                outcome == runtime::BrightnessOutcome::cancelled ||
+                outcome == runtime::BrightnessOutcome::superseded ||
+                outcome == runtime::BrightnessOutcome::unknown) {
+                return agent::Error::tool_failed;
+            }
+            if (monotonic_ms() - started_ms >= kBrightnessCommandWaitMs) {
+                const runtime::BrightnessCancelResult cancel_result =
+                    cancel_brightness(submission.request.generation);
+                const runtime::BrightnessOutcome final_outcome =
+                    brightness_outcome(submission.request.generation);
+                if (final_outcome == runtime::BrightnessOutcome::succeeded) {
+                    return agent::Error::none;
+                }
+                if (cancel_result ==
+                    runtime::BrightnessCancelResult::already_executing) {
+                    remember_brightness_reconciliation(
+                        submission.request.generation, percent);
+                }
+                return agent::Error::tool_failed;
+            }
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+    }
+
+    void perform_brightness_request(runtime::BrightnessRequest request) {
+        const esp_err_t result = ui::set_brightness(request.percent);
+        resource_telemetry::record_display_event(
+            result == ESP_OK
+                ? resource_telemetry::DisplayEvent::completion
+                : resource_telemetry::DisplayEvent::transfer_error);
+        taskENTER_CRITICAL(&brightness_lock_);
+        (void)brightness_coordinator_.complete(request, result == ESP_OK);
+        taskEXIT_CRITICAL(&brightness_lock_);
     }
 
     std::uint32_t request_display(
         bool on, bool keep_panel_ready, std::uint32_t now_ms) {
+        resource_telemetry::record_display_event(
+            resource_telemetry::DisplayEvent::submission);
+        if (display_completed_generation_.load(std::memory_order_acquire) !=
+            display_requested_generation_.load(std::memory_order_acquire)) {
+            resource_telemetry::record_display_event(
+                resource_telemetry::DisplayEvent::queue_coalesced);
+        }
         display_requested_on_.store(on, std::memory_order_relaxed);
         display_requested_keep_ready_.store(
             keep_panel_ready, std::memory_order_relaxed);
@@ -1040,15 +1164,11 @@ private:
             1;
         if (display_controller_task_ != nullptr) {
             xTaskNotifyGive(display_controller_task_);
-        } else if (button_pressed_.load(std::memory_order_acquire)) {
-            // Do not move panel recovery onto the PWR hold path when the
-            // optional controller task could not start. Retry after release.
+        } else {
             display_result_.store(
                 ESP_ERR_INVALID_STATE, std::memory_order_release);
             display_completed_generation_.store(
                 generation, std::memory_order_release);
-        } else {
-            perform_display_request(generation);
         }
         return generation;
     }
@@ -1079,6 +1199,10 @@ private:
                     runtime::CrashEvent::display_sleep_complete);
             }
         }
+        resource_telemetry::record_display_event(
+            result == ESP_OK
+                ? resource_telemetry::DisplayEvent::completion
+                : resource_telemetry::DisplayEvent::transfer_error);
         if (generation != display_requested_generation_.load(
                               std::memory_order_acquire)) {
             return;
@@ -1093,15 +1217,28 @@ private:
     void run_display_controller() {
         while (true) {
             (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            while (display_completed_generation_.load(
-                       std::memory_order_acquire) !=
-                   display_requested_generation_.load(
-                       std::memory_order_acquire)) {
-                const std::uint32_t generation =
+            while (true) {
+                const std::uint32_t display_generation =
                     display_requested_generation_.load(
                         std::memory_order_acquire);
-                perform_display_request(generation);
+                const bool display_pending =
+                    display_completed_generation_.load(
+                        std::memory_order_acquire) != display_generation;
+                if (display_pending) {
+                    perform_display_request(display_generation);
+                    continue;
+                }
+                taskENTER_CRITICAL(&brightness_lock_);
+                const runtime::BrightnessRequest brightness_work =
+                    brightness_coordinator_.begin_next();
+                taskEXIT_CRITICAL(&brightness_lock_);
+                if (!brightness_work.valid()) {
+                    break;
+                }
+                perform_brightness_request(brightness_work);
             }
+            resource_telemetry::record_task_watermark(
+                task_config::TaskId::display_control);
         }
     }
 
@@ -1234,6 +1371,12 @@ private:
             result = ble_provisioning::stop(kBleStopTimeoutMs);
         }
         const bool actual_running = ble_provisioning::running();
+        if (actual_running != actual_before) {
+            resource_telemetry::record_point(
+                actual_running
+                    ? resource_telemetry::Point::ble_start
+                    : resource_telemetry::Point::ble_stop);
+        }
         if (work.valid()) {
             (void)ble_controller_planner_.complete(
                 work,
@@ -1265,6 +1408,8 @@ private:
                         std::memory_order_acquire);
                 perform_ble_request(generation);
             }
+            resource_telemetry::record_task_watermark(
+                task_config::TaskId::ble_control);
         }
     }
 
@@ -1322,6 +1467,8 @@ private:
             ui::prepare_deferred_views(deferred_ui_cancelled, this),
             std::memory_order_release);
         xEventGroupSetBits(speech_events_, kDeferredUiDoneBit);
+        resource_telemetry::record_task_watermark(
+            task_config::TaskId::deferred_ui);
         // The runtime reclaims this WithCaps task and its PSRAM stack.
         vTaskSuspend(nullptr);
     }
@@ -1335,9 +1482,9 @@ private:
         image_cancellation_ = &cancellation;
         image_error_.store(agent::Error::none, std::memory_order_release);
         xEventGroupClearBits(speech_events_, kImageDoneBit);
-        const BaseType_t created = xTaskCreatePinnedToCore(
-            image_task_entry, "image_download", kImageStackBytes, this,
-            kImagePriority, &image_task_, 0);
+        const BaseType_t created = task_config::create(
+            image_task_entry, task_config::image_download, this,
+            &image_task_);
         if (created != pdPASS) {
             image_task_ = nullptr;
             image_cancellation_ = nullptr;
@@ -1375,6 +1522,8 @@ private:
     }
 
     void run_image_worker() {
+        resource_telemetry::record_point(
+            resource_telemetry::Point::image_start);
         agent::Error error = agent::Error::model_failed;
         if (image_cancellation_ != nullptr) {
             const std::uint32_t started_ms = monotonic_ms();
@@ -1440,6 +1589,10 @@ private:
         image_candidates_.clear();
         image_error_.store(error, std::memory_order_release);
         xEventGroupSetBits(speech_events_, kImageDoneBit);
+        resource_telemetry::record_point(
+            resource_telemetry::Point::image_stop);
+        resource_telemetry::record_task_watermark(
+            task_config::TaskId::image_download);
         vTaskDelete(nullptr);
     }
 
@@ -1509,10 +1662,9 @@ private:
         }
         xEventGroupClearBits(speech_events_, kNetworkWarmDoneBit);
         network_warm_initialized_.store(false, std::memory_order_release);
-        const BaseType_t created = xTaskCreatePinnedToCore(
-            network_warm_task_entry, "wifi_recording",
-            kNetworkWarmStackBytes, this, kNetworkWarmPriority,
-            &network_warm_task_, 0);
+        const BaseType_t created = task_config::create(
+            network_warm_task_entry, task_config::wifi_recording, this,
+            &network_warm_task_);
         if (created != pdPASS) {
             network_warm_task_ = nullptr;
         }
@@ -1532,6 +1684,8 @@ private:
             }
         }
         xEventGroupSetBits(speech_events_, kNetworkWarmDoneBit);
+        resource_telemetry::record_task_watermark(
+            task_config::TaskId::wifi_recording);
         vTaskDelete(nullptr);
     }
 
@@ -1618,11 +1772,9 @@ private:
         // This optional HTTPS worker does not use DMA from its stack. Keep its
         // fixed stack in PSRAM so Wi-Fi, I2S, and task control data keep enough
         // internal RAM for the worker to start after Bluetooth stops.
-        const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-            network_context_task_entry, "network_context",
-            kNetworkContextStackBytes, this, kNetworkContextPriority,
-            &network_context_task_, 0,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        const BaseType_t created = task_config::create(
+            network_context_task_entry, task_config::network_context, this,
+            &network_context_task_);
         if (created != pdPASS) {
             network_context_task_ = nullptr;
             network_context_finished_at_ms_ = monotonic_ms();
@@ -1640,6 +1792,8 @@ private:
             network_context_, network_context_date_, context_cancellation_);
         network_context_result_.store(result, std::memory_order_release);
         xEventGroupSetBits(speech_events_, kNetworkContextDoneBit);
+        resource_telemetry::record_task_watermark(
+            task_config::TaskId::network_context);
         // The runtime task owns this WithCaps task and reclaims its PSRAM
         // stack after it observes the completion bit.
         vTaskSuspend(nullptr);
@@ -1717,9 +1871,9 @@ private:
         speech_cancellation_ = &cancellation;
         speech_result_.store(
             agent::Error::model_failed, std::memory_order_release);
-        const BaseType_t created = xTaskCreatePinnedToCore(
-            speech_task_entry, "tts_requests", kSpeechStackBytes, this,
-            kSpeechPriority, &speech_task_, 1);
+        const BaseType_t created = task_config::create(
+            speech_task_entry, task_config::tts_requests, this,
+            &speech_task_);
         if (created != pdPASS) {
             speech_task_ = nullptr;
             speech_cancellation_ = nullptr;
@@ -1730,6 +1884,8 @@ private:
     }
 
     void run_speech_worker() {
+        resource_telemetry::record_point(
+            resource_telemetry::Point::speech_start);
         agent::Error result = agent::Error::model_failed;
         if (speech_cancellation_ != nullptr) {
             SpeechStartSink speech_sink(pcm_sink_, *agent_loop_);
@@ -1738,6 +1894,10 @@ private:
         }
         speech_result_.store(result, std::memory_order_release);
         xEventGroupSetBits(speech_events_, kSpeechDoneBit);
+        resource_telemetry::record_point(
+            resource_telemetry::Point::speech_stop);
+        resource_telemetry::record_task_watermark(
+            task_config::TaskId::tts_requests);
         vTaskDelete(nullptr);
     }
 
@@ -1770,6 +1930,9 @@ private:
         if (self == nullptr || !preferences.valid()) {
             return;
         }
+        std::uint32_t input_revision =
+            self->quick_controls_input_revision_.load(
+                std::memory_order_acquire);
         if (update.brightness_changed) {
             self->pending_brightness_percent_.store(
                 update.brightness_percent, std::memory_order_release);
@@ -1788,7 +1951,21 @@ private:
             self->quick_controls_volume_pending_.store(
                 true, std::memory_order_release);
         }
+        if (update.brightness_changed || update.volume_changed) {
+            input_revision =
+                self->quick_controls_input_revision_.fetch_add(
+                    1, std::memory_order_acq_rel) +
+                1;
+        }
         if (update.commit) {
+            taskENTER_CRITICAL(&self->quick_controls_snapshot_lock_);
+            self->quick_controls_commit_brightness_percent_.store(
+                update.brightness_percent, std::memory_order_relaxed);
+            self->quick_controls_commit_volume_percent_.store(
+                update.volume_percent, std::memory_order_relaxed);
+            self->quick_controls_commit_revision_.store(
+                input_revision, std::memory_order_relaxed);
+            taskEXIT_CRITICAL(&self->quick_controls_snapshot_lock_);
             self->quick_controls_commit_pending_.store(
                 true, std::memory_order_release);
         }
@@ -1915,10 +2092,9 @@ private:
         }
         xEventGroupClearBits(speech_events_, kDeferredUiDoneBit);
         deferred_ui_result_.store(false, std::memory_order_release);
-        const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-            deferred_ui_task_entry, "deferred_ui", kDeferredUiStackBytes,
-            this, kDeferredUiPriority, &deferred_ui_task_, 0,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        const BaseType_t created = task_config::create(
+            deferred_ui_task_entry, task_config::deferred_ui, this,
+            &deferred_ui_task_);
         if (created != pdPASS) {
             deferred_ui_task_ = nullptr;
             deferred_ui_task_create_failed_ = true;
@@ -2193,6 +2369,33 @@ private:
         return battery_status_sample_valid_;
     }
 
+    void sample_development_sleep_battery(std::uint32_t now_ms) {
+        const bool input_has_priority =
+            button_pressed_.load(std::memory_order_acquire) ||
+            voice_priority_.load(std::memory_order_acquire);
+        if (!power::development_sleep_battery_sample_due(
+                development_soft_sleep_active_, input_has_priority,
+                development_sleep_battery_checked_at_ms_, now_ms,
+                kBatteryRefreshMs)) {
+            return;
+        }
+        development_sleep_battery_checked_at_ms_ = now_ms;
+        const std::optional<power::BatteryStatus> sample =
+            power::battery_status();
+        if (!sample.has_value() ||
+            !power::low_battery_requires_shutdown(*sample)) {
+            return;
+        }
+        if (poweroff_gate_.promote_soft_sleep_to_poweroff_ready()) {
+            low_battery_poweroff_pending_ = true;
+            development_soft_sleep_active_ = false;
+            crash_diagnostics::mark(runtime::CrashEvent::poweroff_begin);
+            ESP_LOGW(
+                kTag,
+                "Low battery system-off requested during development sleep");
+        }
+    }
+
     void refresh_footer(std::uint32_t now_ms, bool force) {
         refresh_battery(now_ms, force);
         const ui::RadioIndicator radio = radio_indicator(
@@ -2209,9 +2412,14 @@ private:
                 signal_band_ = 0;
             }
         }
+        const bool battery_presentation_changed =
+            battery_status_.has_value() != shown_battery_status_.has_value() ||
+            (battery_status_.has_value() && shown_battery_status_.has_value() &&
+             !power::same_battery_presentation(
+                 *battery_status_, *shown_battery_status_));
         if (force || !footer_shown_ || radio != shown_radio_ ||
             signal_band_ != shown_signal_band_ ||
-            battery_status_ != shown_battery_status_) {
+            battery_presentation_changed) {
             draw_footer(radio, signal_band_);
         }
     }
@@ -2258,11 +2466,169 @@ private:
                     kTag, "BLE passkey stack minimum free bytes: %u",
                     static_cast<unsigned>(
                         uxTaskGetStackHighWaterMark(nullptr)));
+                resource_telemetry::record_task_watermark(
+                    task_config::TaskId::ble_passkey_ui);
             }
         }
     }
 
+    void sync_quick_controls_to_confirmed_state() {
+        with_display([this]() {
+            ui::sync_quick_controls(
+                device_control_.brightness_percent(),
+                device_control_.volume_percent());
+        });
+    }
+
+    void poll_brightness_reconciliation() {
+        bool completed = false;
+        for (BrightnessReconciliation &reconciliation :
+             brightness_reconciliations_) {
+            if (reconciliation.generation == 0) {
+                continue;
+            }
+            const runtime::BrightnessOutcome outcome =
+                brightness_outcome(reconciliation.generation);
+            if (outcome == runtime::BrightnessOutcome::pending) {
+                continue;
+            }
+            if (outcome == runtime::BrightnessOutcome::succeeded) {
+                device_control_.confirm_brightness(reconciliation.percent);
+            }
+            reconciliation = {};
+            completed = true;
+        }
+        if (completed) {
+            sync_quick_controls_to_confirmed_state();
+        }
+    }
+
+    void poll_quick_brightness_preview() {
+        if (quick_brightness_preview_generation_ == 0) {
+            return;
+        }
+        const runtime::BrightnessOutcome outcome =
+            brightness_outcome(quick_brightness_preview_generation_);
+        if (outcome == runtime::BrightnessOutcome::pending) {
+            return;
+        }
+        if (outcome == runtime::BrightnessOutcome::succeeded) {
+            device_control_.confirm_brightness(
+                quick_brightness_preview_percent_);
+        } else if (outcome != runtime::BrightnessOutcome::superseded) {
+            sync_quick_controls_to_confirmed_state();
+        }
+        quick_brightness_preview_generation_ = 0;
+    }
+
+    bool finish_quick_controls_commit(std::uint32_t now_ms) {
+        if (!quick_controls_commit_active_) {
+            return true;
+        }
+        runtime::BrightnessOutcome outcome =
+            brightness_outcome(quick_controls_commit_generation_active_);
+        if (outcome == runtime::BrightnessOutcome::pending &&
+            now_ms - quick_controls_commit_started_at_ms_ >=
+                kBrightnessCommandWaitMs) {
+            const runtime::BrightnessCancelResult cancel_result =
+                cancel_brightness(quick_controls_commit_generation_active_);
+            outcome = brightness_outcome(
+                quick_controls_commit_generation_active_);
+            if (cancel_result ==
+                runtime::BrightnessCancelResult::already_executing) {
+                remember_brightness_reconciliation(
+                    quick_controls_commit_generation_active_,
+                    quick_controls_commit_brightness_active_);
+                quick_controls_commit_active_ = false;
+                quick_controls_commit_generation_active_ = 0;
+                sync_quick_controls_to_confirmed_state();
+                return true;
+            }
+        }
+        if (outcome == runtime::BrightnessOutcome::pending) {
+            return false;
+        }
+        if (outcome == runtime::BrightnessOutcome::succeeded) {
+            device_control_.confirm_brightness(
+                quick_controls_commit_brightness_active_);
+            (void)device_control_.persist_preferences({
+                quick_controls_commit_brightness_active_,
+                quick_controls_commit_volume_active_});
+            quick_controls_persisted_revision_ =
+                quick_controls_commit_revision_active_;
+        } else {
+            sync_quick_controls_to_confirmed_state();
+        }
+        quick_controls_commit_active_ = false;
+        quick_controls_commit_generation_active_ = 0;
+        return true;
+    }
+
+    void start_quick_controls_commit(std::uint32_t now_ms) {
+        taskENTER_CRITICAL(&quick_controls_snapshot_lock_);
+        const std::uint8_t brightness =
+            quick_controls_commit_brightness_percent_.load(
+                std::memory_order_relaxed);
+        const std::uint8_t volume =
+            quick_controls_commit_volume_percent_.load(
+                std::memory_order_relaxed);
+        const std::uint32_t revision =
+            quick_controls_commit_revision_.load(std::memory_order_relaxed);
+        taskEXIT_CRITICAL(&quick_controls_snapshot_lock_);
+        const runtime::DevicePreferences requested{brightness, volume};
+        if (!requested.valid() ||
+            device_control_.preview_volume(volume) != agent::Error::none ||
+            playback_.set_volume(volume) != ESP_OK) {
+            sync_quick_controls_to_confirmed_state();
+            return;
+        }
+
+        if (quick_controls_input_revision_.load(std::memory_order_acquire) ==
+            revision) {
+            quick_controls_update_pending_.store(
+                false, std::memory_order_release);
+            quick_controls_brightness_pending_.store(
+                false, std::memory_order_release);
+            quick_controls_volume_pending_.store(
+                false, std::memory_order_release);
+        }
+        const runtime::BrightnessSubmission submission =
+            submit_brightness(brightness);
+        quick_brightness_preview_generation_ = 0;
+        quick_controls_commit_active_ = true;
+        quick_controls_commit_generation_active_ =
+            submission.request.generation;
+        quick_controls_commit_revision_active_ = revision;
+        quick_controls_commit_brightness_active_ = brightness;
+        quick_controls_commit_volume_active_ = volume;
+        quick_controls_commit_started_at_ms_ = now_ms;
+    }
+
     void process_quick_controls(std::uint32_t now_ms) {
+        poll_brightness_reconciliation();
+        poll_quick_brightness_preview();
+        if (!finish_quick_controls_commit(now_ms)) {
+            return;
+        }
+
+        const bool commit_requested =
+            quick_controls_commit_pending_.exchange(
+                false, std::memory_order_acq_rel);
+        if (commit_requested) {
+            const bool can_commit = quick_controls_can_persist(
+                voice_priority_.load(std::memory_order_acquire),
+                button_pressed_.load(std::memory_order_acquire),
+                interaction_.state() == InteractionState::sleep_pending);
+            if (!can_commit) {
+                quick_controls_commit_pending_.store(
+                    true, std::memory_order_release);
+                return;
+            }
+            start_quick_controls_commit(now_ms);
+            (void)finish_quick_controls_commit(now_ms);
+            return;
+        }
+
         const bool update = quick_controls_update_pending_.exchange(
             false, std::memory_order_acq_rel);
         const bool brightness_update =
@@ -2270,17 +2636,7 @@ private:
                 false, std::memory_order_acq_rel);
         const bool volume_update = quick_controls_volume_pending_.exchange(
             false, std::memory_order_acq_rel);
-        const bool commit_requested =
-            quick_controls_commit_pending_.load(std::memory_order_acquire);
-        if (!update && !brightness_update && !volume_update &&
-            !commit_requested) {
-            return;
-        }
-        const bool can_commit = quick_controls_can_persist(
-            voice_priority_.load(std::memory_order_acquire),
-            button_pressed_.load(std::memory_order_acquire),
-            interaction_.state() == InteractionState::sleep_pending);
-        if (!update && !brightness_update && !volume_update && !can_commit) {
+        if (!update && !brightness_update && !volume_update) {
             return;
         }
 
@@ -2288,28 +2644,14 @@ private:
             pending_brightness_percent_.load(std::memory_order_acquire);
         const std::uint8_t volume =
             pending_volume_percent_.load(std::memory_order_acquire);
-        bool values_match = true;
-        bool brightness_deferred = false;
-        const runtime::DevicePreferences requested{brightness, volume};
-        values_match = requested.valid();
+        bool values_match =
+            runtime::DevicePreferences{brightness, volume}.valid();
         if (values_match && brightness_update) {
-            bool brightness_applied = false;
-            if (bsp_display_lock(100)) {
-                brightness_applied =
-                    device_control_.preview_brightness(brightness) ==
-                    agent::Error::none;
-                bsp_display_unlock();
-            } else {
-                // A display refresh can own the lock during a drag. Keep the
-                // latest request and try it again. Do not move the control
-                // back to its old value for this temporary condition.
-                quick_controls_brightness_pending_.store(
-                    true, std::memory_order_release);
-                brightness_deferred = true;
-            }
-            if (!brightness_applied && !brightness_deferred) {
-                values_match = false;
-            }
+            const runtime::BrightnessSubmission submission =
+                submit_brightness(brightness);
+            quick_brightness_preview_generation_ =
+                submission.request.generation;
+            quick_brightness_preview_percent_ = brightness;
         }
         if (values_match && volume_update) {
             if (device_control_.preview_volume(volume) != agent::Error::none ||
@@ -2320,19 +2662,8 @@ private:
         if (update) {
             interaction_.note_idle_activity(now_ms);
         }
-
         if (!values_match) {
-            with_display([this]() {
-                ui::sync_quick_controls(
-                    device_control_.brightness_percent(),
-                    device_control_.volume_percent());
-            });
-        }
-        if (commit_requested && values_match && !brightness_deferred &&
-            can_commit &&
-            quick_controls_commit_pending_.exchange(
-                false, std::memory_order_acq_rel)) {
-            (void)device_control_.persist_preferences();
+            sync_quick_controls_to_confirmed_state();
         }
     }
 
@@ -2355,6 +2686,7 @@ private:
         }
 
         std::uint32_t heartbeat_at_ms = monotonic_ms();
+        resource_summary_at_ms_ = heartbeat_at_ms;
         crash_diagnostics::heartbeat();
         while (true) {
             if (queue_overflow_.exchange(false, std::memory_order_acq_rel)) {
@@ -2409,6 +2741,13 @@ private:
                 heartbeat_at_ms = now_ms;
                 crash_diagnostics::heartbeat();
             }
+            if (now_ms - resource_summary_at_ms_ >=
+                kResourceSummaryIntervalMs) {
+                resource_summary_at_ms_ = now_ms;
+                resource_telemetry::record_task_watermark(
+                    task_config::TaskId::voice_runtime);
+                resource_telemetry::log_summary("soak");
+            }
             if (ble_started_ &&
                 interaction_.state() == InteractionState::idle &&
                 !voice_priority_.load(std::memory_order_acquire) &&
@@ -2427,6 +2766,16 @@ private:
             retry_mode_display(now_ms);
             const network::NetworkState network_state = network_.state();
             if (network_state != last_network_state_) {
+                if (last_network_state_ == network::NetworkState::off &&
+                    network_state != network::NetworkState::off) {
+                    resource_telemetry::record_point(
+                        resource_telemetry::Point::wifi_start);
+                } else if (
+                    last_network_state_ != network::NetworkState::off &&
+                    network_state == network::NetworkState::off) {
+                    resource_telemetry::record_point(
+                        resource_telemetry::Point::wifi_stop);
+                }
                 if (network_state == network::NetworkState::connected) {
                     crash_diagnostics::mark(
                         runtime::CrashEvent::wifi_connected);
@@ -2492,6 +2841,7 @@ private:
             // ChatESP 30-second idle gate at the state-machine boundary.
             interaction_.tick(now_ms, app_mode != AppMode::clock);
             process_state_change(now_ms);
+            sample_development_sleep_battery(now_ms);
             const bool recording =
                 interaction_.state() == InteractionState::recording;
             if (recording) {
@@ -2550,6 +2900,7 @@ private:
         }
         if (command.kind == CommandKind::provisioning_activity) {
             if (!display_available_.load(std::memory_order_acquire)) {
+                development_soft_sleep_active_ = false;
                 display_available_.store(true, std::memory_order_release);
                 display_sleep_pending_ = false;
                 poweroff_gate_.recover();
@@ -2681,6 +3032,7 @@ private:
     void wake_for_button(
         std::uint32_t now_ms, bool display_already_ready = false) {
         low_battery_poweroff_pending_ = false;
+        development_soft_sleep_active_ = false;
         // The display wake runs while PWR and voice work have priority, so its
         // forced footer refresh cannot read the PMIC. Keep one request until
         // that priority ends. This also catches a charge-direction change that
@@ -2813,6 +3165,8 @@ private:
         audio_capture_read_marked_ = false;
         audio_first_chunk_marked_ = false;
         recording_ble_stop_pending_ = false;
+        resource_telemetry::record_point(
+            resource_telemetry::Point::recording_start);
     }
 
     void capture_audio(std::uint32_t now_ms) {
@@ -2855,7 +3209,10 @@ private:
 
     void finish_recording_and_request() {
         const std::uint32_t released_at_ms = monotonic_ms();
-        if (capture_.stop() != ESP_OK) {
+        const esp_err_t capture_stop_result = capture_.stop();
+        resource_telemetry::record_point(
+            resource_telemetry::Point::recording_stop);
+        if (capture_stop_result != ESP_OK) {
             capture_.discard();
             fail("MICROPHONE STOP FAILED");
             return;
@@ -3186,6 +3543,9 @@ private:
         if (timing_.format_summary(summary.data(), summary.size())) {
             ESP_LOGI(kTag, "%s", summary.data());
         }
+        resource_telemetry::record_task_watermark(
+            task_config::TaskId::voice_runtime);
+        resource_telemetry::log_summary("turn");
     }
 
     bool publish_selected_visual(
@@ -3392,6 +3752,32 @@ private:
     }
 
     void enter_sleep() {
+        resource_telemetry::record_point(
+            resource_telemetry::Point::sleep_entry);
+        poll_brightness_reconciliation();
+        poll_quick_brightness_preview();
+        (void)finish_quick_controls_commit(monotonic_ms());
+        if (quick_controls_commit_active_) {
+            const runtime::BrightnessCancelResult cancel_result =
+                cancel_brightness(quick_controls_commit_generation_active_);
+            if (cancel_result ==
+                runtime::BrightnessCancelResult::already_executing) {
+                remember_brightness_reconciliation(
+                    quick_controls_commit_generation_active_,
+                    quick_controls_commit_brightness_active_);
+            }
+            quick_controls_commit_active_ = false;
+            quick_controls_commit_generation_active_ = 0;
+        }
+        // The display controller handles a display request before waiting
+        // brightness work. Remove that work before display-off so it cannot
+        // send a panel command after the panel enters its sleep state. Active
+        // work already runs on the same controller and completes first.
+        (void)cancel_pending_brightness();
+        quick_brightness_preview_generation_ = 0;
+        quick_controls_brightness_pending_.store(
+            false, std::memory_order_release);
+        quick_controls_commit_pending_.store(false, std::memory_order_release);
         device_control_.cancel_pending_action();
         display_available_.store(false, std::memory_order_release);
         app_mode_.store(AppMode::chat, std::memory_order_release);
@@ -3414,10 +3800,6 @@ private:
         display_sleep_attempted_at_ms_ = monotonic_ms();
         if (!display_slept) {
             ESP_LOGE(kTag, "Display sleep failed");
-        }
-        if (quick_controls_commit_pending_.exchange(
-                false, std::memory_order_acq_rel)) {
-            (void)device_control_.persist_preferences();
         }
         cancellation_.cancel();
         context_cancellation_.cancel();
@@ -3484,6 +3866,9 @@ private:
                     runtime::CrashEvent::soft_sleep_begin);
                 if (!poweroff_gate_.mark_soft_sleep()) {
                     display_available_.store(true, std::memory_order_release);
+                } else {
+                    development_soft_sleep_active_ = true;
+                    development_sleep_battery_checked_at_ms_ = monotonic_ms();
                 }
                 return;
             }
@@ -3627,6 +4012,7 @@ private:
 
     void recover_poweroff(std::uint32_t now_ms) {
         low_battery_poweroff_pending_ = false;
+        development_soft_sleep_active_ = false;
         device_control_.cancel_pending_action();
         poweroff_gate_.recover();
         display_available_.store(true, std::memory_order_release);
@@ -3732,11 +4118,22 @@ private:
     std::atomic<bool> quick_controls_brightness_pending_{false};
     std::atomic<bool> quick_controls_volume_pending_{false};
     std::atomic<bool> quick_controls_commit_pending_{false};
+    std::atomic<std::uint32_t> quick_controls_input_revision_{0};
+    std::atomic<std::uint32_t> quick_controls_commit_revision_{0};
+    std::atomic<std::uint8_t> quick_controls_commit_brightness_percent_{
+        runtime::DevicePreferences::default_brightness_percent};
+    std::atomic<std::uint8_t> quick_controls_commit_volume_percent_{
+        runtime::DevicePreferences::default_volume_percent};
     std::atomic<esp_err_t> startup_settings_result_{
         ESP_ERR_INVALID_STATE};
     std::atomic<esp_err_t> startup_memory_result_{
         ESP_ERR_INVALID_STATE};
     std::atomic<bool> deferred_ui_result_{false};
+    portMUX_TYPE brightness_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    portMUX_TYPE quick_controls_snapshot_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    runtime::BrightnessCoordinator brightness_coordinator_{};
+    std::array<BrightnessReconciliation, 8> brightness_reconciliations_{};
+    std::size_t brightness_reconciliation_index_ = 0;
     std::atomic<std::uint32_t> display_requested_generation_{0};
     std::atomic<std::uint32_t> display_completed_generation_{0};
     std::atomic<bool> display_requested_on_{true};
@@ -3763,7 +4160,14 @@ private:
     std::uint32_t display_wake_attempted_at_ms_ = 0;
     std::uint32_t display_sleep_attempted_at_ms_ = 0;
     std::uint32_t footer_checked_at_ms_ = 0;
+    std::uint32_t resource_summary_at_ms_ = 0;
+    std::uint32_t quick_brightness_preview_generation_ = 0;
+    std::uint32_t quick_controls_commit_generation_active_ = 0;
+    std::uint32_t quick_controls_commit_revision_active_ = 0;
+    std::uint32_t quick_controls_persisted_revision_ = 0;
+    std::uint32_t quick_controls_commit_started_at_ms_ = 0;
     std::uint32_t battery_checked_at_ms_ = 0;
+    std::uint32_t development_sleep_battery_checked_at_ms_ = 0;
     std::uint32_t battery_power_source_revision_ = 0;
     std::uint32_t signal_checked_at_ms_ = 0;
     std::uint32_t stream_text_refreshed_at_ms_ = 0;
@@ -3777,6 +4181,12 @@ private:
     std::uint32_t ble_completion_seen_ = 0;
     std::uint32_t recording_ble_stop_generation_ = 0;
     std::uint8_t clock_refreshed_second_ = 0xff;
+    std::uint8_t quick_brightness_preview_percent_ =
+        runtime::DevicePreferences::default_brightness_percent;
+    std::uint8_t quick_controls_commit_brightness_active_ =
+        runtime::DevicePreferences::default_brightness_percent;
+    std::uint8_t quick_controls_commit_volume_active_ =
+        runtime::DevicePreferences::default_volume_percent;
     bool tools_ready_ = false;
     bool startup_services_applied_ = false;
     bool startup_services_failed_reported_ = false;
@@ -3802,6 +4212,8 @@ private:
     bool battery_status_sample_valid_ = false;
     bool battery_wake_refresh_pending_ = false;
     bool low_battery_poweroff_pending_ = false;
+    bool quick_controls_commit_active_ = false;
+    bool development_soft_sleep_active_ = false;
     bool footer_shown_ = false;
     bool stream_text_shown_ = false;
     bool request_active_ = false;

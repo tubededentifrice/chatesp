@@ -188,7 +188,7 @@ class WakeLatencyContractTests(unittest.TestCase):
         self.assertIn("display_sleep_keep_panel_ready_", retry)
         self.assertNotIn("request_display(false, true", retry)
 
-    def test_controller_fallback_never_blocks_a_button_hold(self) -> None:
+    def test_controller_failure_never_runs_display_commands_on_callers(self) -> None:
         display = self.section(
             "std::uint32_t request_display(", "void perform_display_request("
         )
@@ -196,7 +196,8 @@ class WakeLatencyContractTests(unittest.TestCase):
             "std::uint32_t request_ble(", "void perform_ble_request("
         )
 
-        self.assertIn("button_pressed_.load", display)
+        self.assertNotIn("perform_display_request", display)
+        self.assertIn("ESP_ERR_INVALID_STATE", display)
         self.assertIn("button_pressed_.load", ble)
         self.assertIn("InteractionState::recording", ble)
         self.assertIn("display_completed_generation_.store", display)

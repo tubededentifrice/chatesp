@@ -2,3 +2,8 @@ ready
 clock 16:45:30
 mode 100
 status
+expect mode clock
+expect screen_on true
+expect orientation clock
+expect wifi off
+expect now_ms 100

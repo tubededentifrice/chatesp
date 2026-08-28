@@ -7,3 +7,7 @@ action down
 advance 100
 action up
 status
+expect state READY
+expect screen_on true
+expect controls_open false
+expect now_ms 200

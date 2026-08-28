@@ -17,7 +17,6 @@ idf_component_register(
     REQUIRES
         ${REQ}
         esp_codec_dev
-        esp_io_expander_tca9554
         esp_lcd
         esp_lcd_touch
         esp_lvgl_port
@@ -25,6 +24,7 @@ idf_component_register(
     PRIV_REQUIRES
         ${PRIV_REQ}
         esp_lcd_co5300
+        esp_lcd_sh8601
         esp_lcd_panel_io_additions
         esp_lcd_touch_cst816s
         esp_lcd_touch_ft5x06

@@ -8,6 +8,7 @@
 #include "chatesp/audio_spectrum.hpp"
 #include "chatesp/interaction_state.hpp"
 #include "esp_err.h"
+#include "esp_lvgl_port.h"
 #include "image_frame.hpp"
 
 namespace chatesp::ui {
@@ -36,7 +37,7 @@ using DeferredWorkCancelled = bool (*)(void *context);
 // Start the display at zero brightness and flush the full-boot splash while
 // the panel is hidden. Do not use this function for an in-session display
 // wake.
-bool start_hidden();
+bool start_hidden(const lvgl_port_cfg_t &lvgl_config);
 
 // Send the required second complete startup frame, then make the hidden
 // splash visible with the selected brightness.

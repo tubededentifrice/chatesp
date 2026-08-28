@@ -21,6 +21,7 @@ idf_component_register(
         "network_context_provider.cpp"
         "power_control.cpp"
         "pcm_playback_sink.cpp"
+        "resource_telemetry.cpp"
         "settings_store.cpp"
         "speech_segment_channel.cpp"
         "streaming_pcm_response_sink.cpp"

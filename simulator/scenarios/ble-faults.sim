@@ -6,3 +6,4 @@ ble provision 2 corrupt-data
 ble provision 2 storage-failure
 ble provision 2 disconnect-after-control
 ble fuzz 10000 305419896
+expect ble.fuzz_cases 10000

@@ -14,6 +14,8 @@
 #include "esp_heap_caps.h"
 #include "lvgl.h"
 #include "recording_spectrum_view.hpp"
+#include "resource_telemetry.hpp"
+#include "task_config.hpp"
 
 LV_FONT_DECLARE(chatesp_font_18);
 LV_FONT_DECLARE(chatesp_clock_font_180);
@@ -96,6 +98,7 @@ struct ControlSlider {
 };
 constexpr std::size_t kMaximumClockPathPointCount = 1'632;
 constexpr std::uint32_t kClockPathRefreshMs = 16;
+constexpr std::uint32_t kResourceTelemetryRefreshMs = 5'000;
 constexpr std::int32_t kClockWidth = image::kDisplayHeight;
 constexpr std::int32_t kClockHeight = image::kDisplayWidth;
 constexpr std::int32_t kClockRight = kClockWidth - 1;
@@ -115,6 +118,13 @@ lv_obj_t *battery_icon_label = nullptr;
 lv_obj_t *battery_charge_label = nullptr;
 lv_obj_t *battery_status_label = nullptr;
 lv_obj_t *development_status_label = nullptr;
+#if CHATESP_DEVELOPMENT_MODE
+lv_obj_t *touch_calibration_overlay = nullptr;
+lv_obj_t *touch_calibration_target = nullptr;
+lv_obj_t *touch_calibration_label = nullptr;
+std::array<char, 64> touch_calibration_buffer{};
+std::uint8_t touch_calibration_step = 0;
+#endif
 lv_obj_t *image_overlay = nullptr;
 lv_obj_t *plot_overlay = nullptr;
 lv_obj_t *plot_chart = nullptr;
@@ -137,6 +147,7 @@ lv_obj_t *controls_edge_handle = nullptr;
 lv_obj_t *controls_backdrop = nullptr;
 lv_obj_t *controls_panel = nullptr;
 lv_timer_t *controls_timer = nullptr;
+lv_timer_t *resource_telemetry_timer = nullptr;
 ControlSlider brightness_control;
 ControlSlider volume_control;
 ControlSlider *active_control = nullptr;
@@ -568,6 +579,103 @@ void apply_display_orientation() {
 #endif
     layout_overlays(image::kDisplayWidth, image::kDisplayHeight);
 }
+
+#if CHATESP_DEVELOPMENT_MODE
+void layout_touch_calibration_target() {
+    if (touch_calibration_overlay == nullptr ||
+        touch_calibration_target == nullptr) {
+        return;
+    }
+    const bool landscape = touch_calibration_step >= 3;
+    const std::int32_t width = landscape ? kClockWidth : image::kDisplayWidth;
+    const std::int32_t height = landscape ? kClockHeight : image::kDisplayHeight;
+    const std::uint8_t vertical_index = touch_calibration_step % 3;
+    const std::int32_t y = vertical_index == 0
+        ? 32
+        : (vertical_index == 1 ? height / 2 : height - 32);
+    lv_obj_set_size(touch_calibration_overlay, width, height);
+    lv_obj_center(touch_calibration_overlay);
+    lv_obj_set_pos(touch_calibration_target, width / 2 - 10, y - 10);
+    const char *position = vertical_index == 0
+        ? "TOP"
+        : (vertical_index == 1 ? "CENTER" : "BOTTOM");
+    std::snprintf(
+        touch_calibration_buffer.data(), touch_calibration_buffer.size(),
+        "%s %s\nTOUCH THE RING",
+        landscape ? "LANDSCAPE" : "PORTRAIT", position);
+    set_static_text(
+        touch_calibration_label, touch_calibration_buffer.data());
+}
+
+void touch_calibration_event(lv_event_t *event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSING) {
+        lv_indev_t *input = lv_event_get_indev(event);
+        if (input == nullptr) {
+            return;
+        }
+        lv_point_t point{};
+        lv_indev_get_point(input, &point);
+        const bool landscape = touch_calibration_step >= 3;
+        const std::int32_t width = landscape
+            ? kClockWidth
+            : image::kDisplayWidth;
+        const std::int32_t height = landscape
+            ? kClockHeight
+            : image::kDisplayHeight;
+        const std::uint8_t vertical_index = touch_calibration_step % 3;
+        const std::int32_t target_y = vertical_index == 0
+            ? 32
+            : (vertical_index == 1 ? height / 2 : height - 32);
+        const char *position = vertical_index == 0
+            ? "TOP"
+            : (vertical_index == 1 ? "CENTER" : "BOTTOM");
+        std::snprintf(
+            touch_calibration_buffer.data(), touch_calibration_buffer.size(),
+            "%s %s\nDX %+ld  DY %+ld",
+            landscape ? "LANDSCAPE" : "PORTRAIT", position,
+            static_cast<long>(point.x - width / 2),
+            static_cast<long>(point.y - target_y));
+        set_static_text(
+            touch_calibration_label, touch_calibration_buffer.data());
+        return;
+    }
+    if (code != LV_EVENT_RELEASED) {
+        return;
+    }
+    if (touch_calibration_step >= 5) {
+        set_hidden(touch_calibration_overlay, true);
+        touch_calibration_step = 0;
+        apply_display_orientation();
+        return;
+    }
+    ++touch_calibration_step;
+    if (touch_calibration_step == 3) {
+#if LVGL_VERSION_MAJOR >= 9
+        bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_270);
+#else
+        bsp_display_rotate(display_handle, LV_DISP_ROT_270);
+#endif
+    }
+    layout_touch_calibration_target();
+}
+
+void open_touch_calibration(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED ||
+        touch_calibration_overlay == nullptr || !touch_available) {
+        return;
+    }
+    touch_calibration_step = 0;
+#if LVGL_VERSION_MAJOR >= 9
+    bsp_display_rotate(display_handle, LV_DISPLAY_ROTATION_0);
+#else
+    bsp_display_rotate(display_handle, LV_DISP_ROT_NONE);
+#endif
+    layout_touch_calibration_target();
+    set_hidden(touch_calibration_overlay, false);
+    lv_obj_move_foreground(touch_calibration_overlay);
+}
+#endif
 
 void rounded_clock_point(double distance, double &x, double &y) {
     constexpr double left = 0.0;
@@ -1199,6 +1307,10 @@ void controls_slider_event(lv_event_t *event) {
     }
 }
 
+void resource_telemetry_timer_callback(lv_timer_t *) {
+    resource_telemetry::record_task_watermark(task_config::TaskId::lvgl);
+}
+
 void controls_timer_callback(lv_timer_t *) {
     if (active_control == nullptr &&
         controls_gesture.automatic_close_due(lv_tick_get())) {
@@ -1588,6 +1700,48 @@ void create_runtime_screen() {
     lv_obj_set_style_text_align(
         development_status_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_align(development_status_label, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_add_flag(development_status_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(
+        development_status_label, open_touch_calibration,
+        LV_EVENT_CLICKED, nullptr);
+
+    touch_calibration_overlay = lv_obj_create(screen);
+    lv_obj_remove_style_all(touch_calibration_overlay);
+    lv_obj_set_size(
+        touch_calibration_overlay, image::kDisplayWidth,
+        image::kDisplayHeight);
+    lv_obj_set_style_bg_color(
+        touch_calibration_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        touch_calibration_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(touch_calibration_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(touch_calibration_overlay, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(touch_calibration_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(
+        touch_calibration_overlay, touch_calibration_event,
+        LV_EVENT_ALL, nullptr);
+
+    touch_calibration_target = lv_obj_create(touch_calibration_overlay);
+    lv_obj_remove_style_all(touch_calibration_target);
+    lv_obj_set_size(touch_calibration_target, 20, 20);
+    lv_obj_set_style_radius(
+        touch_calibration_target, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_border_width(
+        touch_calibration_target, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(
+        touch_calibration_target, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_clear_flag(touch_calibration_target, LV_OBJ_FLAG_CLICKABLE);
+
+    touch_calibration_label = lv_label_create(touch_calibration_overlay);
+    lv_obj_set_width(touch_calibration_label, 320);
+    lv_obj_set_style_text_color(
+        touch_calibration_label, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        touch_calibration_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        touch_calibration_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(touch_calibration_label, LV_ALIGN_CENTER, 0, 0);
+    set_hidden(touch_calibration_overlay, true);
 #endif
     show_footer(RadioIndicator::off, 0, false, 0, false);
 
@@ -1641,6 +1795,11 @@ void create_runtime_screen() {
     lv_obj_clear_flag(sleep_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_center(sleep_overlay);
     lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_HIDDEN);
+    if (resource_telemetry_timer == nullptr) {
+        resource_telemetry_timer = lv_timer_create(
+            resource_telemetry_timer_callback,
+            kResourceTelemetryRefreshMs, nullptr);
+    }
     apply_chat_font_scale();
 }
 
@@ -1726,11 +1885,21 @@ void create_visual_screen() {
 
 }  // namespace
 
-bool start_hidden() {
+bool start_hidden(const lvgl_port_cfg_t &lvgl_config) {
     if (display_handle != nullptr) {
         return true;
     }
-    lv_display_t *display = bsp_display_start();
+    const bsp_display_cfg_t display_config{
+        .lvgl_port_cfg = lvgl_config,
+        .buffer_size = BSP_LCD_H_RES * LVGL_BUFFER_HEIGHT,
+        .trans_size = 0,
+        .double_buffer = false,
+        .flags = {
+            .buff_dma = true,
+            .buff_spiram = false,
+        },
+    };
+    lv_display_t *display = bsp_display_start_with_config(&display_config);
     if (display == nullptr) {
         return false;
     }
@@ -1760,16 +1929,18 @@ bool publish_startup(std::uint8_t brightness_percent) {
     }
     lv_obj_invalidate(active_screen());
     lv_refr_now(display_handle);
-    bsp_display_unlock();
     // Repeat the selected command after panel-on. The second command is
     // bounded and repairs a controller that accepts but does not apply the
     // first nonzero brightness command.
     if (bsp_display_brightness_set(brightness_percent) != ESP_OK) {
+        bsp_display_unlock();
         return false;
     }
     if (bsp_display_brightness_set(brightness_percent) != ESP_OK) {
+        bsp_display_unlock();
         return false;
     }
+    bsp_display_unlock();
     return true;
 }
 
@@ -2346,6 +2517,9 @@ esp_err_t wake(
     hide_fullscreen_visual();
     set_content({}, kMaximumAnswerBytes, ContentKind::none);
     show_app_mode(mode, state);
+    // Drain color work that started before the controller request. Keep the
+    // safe point and recovery command under the same LVGL lock.
+    lv_refr_now(display_handle);
     // A command acknowledgement does not prove that the CO5300 output stage
     // is active. Replay its bounded initialization table on each deliberate
     // wake. Keep the LVGL lock so its task cannot start a transfer while the
@@ -2374,7 +2548,19 @@ esp_err_t set_brightness(std::uint8_t brightness_percent) {
         brightness_percent > runtime::DevicePreferences::maximum_percent) {
         return ESP_ERR_INVALID_ARG;
     }
-    return bsp_display_brightness_set(brightness_percent);
+    if (display_handle == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!bsp_display_lock(1000)) {
+        return ESP_ERR_TIMEOUT;
+    }
+    // lv_refr_now() waits for the active display transfer. Keep this safe
+    // point and the panel command under one LVGL lock.
+    lv_refr_now(display_handle);
+    const esp_err_t result =
+        bsp_display_brightness_set(brightness_percent);
+    bsp_display_unlock();
+    return result;
 }
 
 }  // namespace chatesp::ui

@@ -1,7 +1,6 @@
 #include "device_control.hpp"
 
 #include "power_control.hpp"
-#include "ui.hpp"
 
 namespace chatesp {
 
@@ -39,16 +38,32 @@ agent::Error DeviceControl::set_brightness(
     return agent::Error::none;
 }
 
-agent::Error DeviceControl::preview_brightness(std::uint8_t percent) {
+agent::Error DeviceControl::preview_brightness(
+    std::uint8_t percent, bool wait) {
     if (percent < runtime::DevicePreferences::minimum_brightness_percent ||
         percent > runtime::DevicePreferences::maximum_percent) {
         return agent::Error::invalid_argument;
     }
-    if (ui::set_brightness(percent) != ESP_OK) {
+    if (brightness_request_ == nullptr) {
         return agent::Error::tool_failed;
+    }
+    const agent::Error error = brightness_request_(
+        brightness_request_context_, percent, wait);
+    if (error != agent::Error::none) {
+        return error;
+    }
+    if (!wait) {
+        return agent::Error::none;
     }
     brightness_percent_.store(percent, std::memory_order_release);
     return agent::Error::none;
+}
+
+void DeviceControl::confirm_brightness(std::uint8_t percent) {
+    if (percent >= runtime::DevicePreferences::minimum_brightness_percent &&
+        percent <= runtime::DevicePreferences::maximum_percent) {
+        brightness_percent_.store(percent, std::memory_order_release);
+    }
 }
 
 agent::Error DeviceControl::set_volume(
@@ -70,7 +85,15 @@ agent::Error DeviceControl::preview_volume(std::uint8_t percent) {
 }
 
 bool DeviceControl::persist_preferences() {
-    const bool persisted = store_.store(current_preferences());
+    return persist_preferences(current_preferences());
+}
+
+bool DeviceControl::persist_preferences(
+    const runtime::DevicePreferences &preferences) {
+    if (!preferences.valid()) {
+        return false;
+    }
+    const bool persisted = store_.store(preferences);
     values_persisted_.store(persisted, std::memory_order_release);
     return persisted;
 }

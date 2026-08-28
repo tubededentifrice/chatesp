@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import math
 import re
 import sys
@@ -17,6 +18,8 @@ import serial
 _MAXIMUM_SERIAL_LINE_CHARS = 4_096
 _USB_RESET_ASSERT_SECONDS = 0.15
 _USB_RESET_RECOVERY_SECONDS = 0.50
+_SERIAL_REOPEN_TIMEOUT_SECONDS = 5.0
+_SERIAL_REOPEN_INTERVAL_SECONDS = 0.10
 _SYSTEM_OFF_LOG_MARKER = "Requesting AXP2101 system off"
 _MAC_ADDRESS = re.compile(
     r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])"
@@ -29,9 +32,9 @@ _IPV6_ADDRESS = re.compile(
     r"(?i)(?<![0-9a-f:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}"
     r"(?![0-9a-f:])"
 )
-_CONNECTED_NETWORK = re.compile(r"(?i)(connected with )([^,\r\n]+)")
+_CONNECTED_NETWORK = re.compile(r"(?im)(connected with )[^\r\n]*")
 _SSID_VALUE = re.compile(
-    r"(?i)((?<![a-z0-9_])ssid[ \t]*[:=][ \t]*)([^,\r\n]+)"
+    r"(?im)((?<![a-z0-9_])ssid[ \t]*[:=][ \t]*)[^\r\n]*"
 )
 _LATENCY_FIELD = re.compile(r"\b([a-z_]+_ms)=([0-9]+)\b")
 
@@ -128,6 +131,61 @@ def open_safe_serial(
         connection.close()
         raise
     return connection
+
+
+def _port_not_ready_error(error: BaseException) -> bool:
+    """Identify only temporary same-port failures after a device reset."""
+    retryable_numbers = {
+        errno.EAGAIN,
+        errno.EBUSY,
+        errno.EIO,
+        errno.ENOENT,
+        errno.ENXIO,
+    }
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, OSError) and current.errno in retryable_numbers:
+            return True
+        current = current.__cause__
+    if not isinstance(error, serial.SerialException):
+        return False
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "device not configured",
+            "input/output error",
+            "no such file",
+            "resource busy",
+        )
+    )
+
+
+def reopen_safe_serial(
+    port: str,
+    *,
+    timeout_seconds: float = _SERIAL_REOPEN_TIMEOUT_SECONDS,
+    interval_seconds: float = _SERIAL_REOPEN_INTERVAL_SECONDS,
+    opener: Callable[[str], serial.Serial] = open_safe_serial,
+    monotonic: Callable[[], float] = time.monotonic,
+    wait: Callable[[float], None] = time.sleep,
+) -> serial.Serial:
+    """Reopen one known port after flash or reset with a fixed time bound."""
+    if timeout_seconds < 0 or interval_seconds <= 0:
+        raise ValueError("The serial reopen timing is invalid.")
+    deadline = monotonic() + timeout_seconds
+    last_error: OSError | serial.SerialException | None = None
+    while True:
+        if last_error is not None and monotonic() >= deadline:
+            raise last_error
+        try:
+            return opener(port)
+        except (OSError, serial.SerialException) as error:
+            now = monotonic()
+            if not _port_not_ready_error(error) or now >= deadline:
+                raise
+            last_error = error
+            wait(min(interval_seconds, deadline - now))
 
 
 def disable_hangup_reset(
@@ -231,9 +289,16 @@ def main(arguments: list[str] | None = None) -> int:
     if args.duration <= 0:
         print("The duration must be greater than zero.", file=sys.stderr)
         return 2
-    return monitor(
-        args.port, args.duration, latency_report=args.latency_report
-    )
+    try:
+        return monitor(
+            args.port, args.duration, latency_report=args.latency_report
+        )
+    except (OSError, serial.SerialException):
+        print(
+            "The serial monitor stopped after an unexpected port error.",
+            file=sys.stderr,
+        )
+        return 1
 
 
 if __name__ == "__main__":

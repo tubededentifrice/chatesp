@@ -8,22 +8,24 @@ The firmware uses one bounded state machine:
 
 Each `app_main` start shows a full-boot splash with `CHAT ESP` and `STARTING`.
 Power-button setup and the initial button sample occur first. The display then
-applies the V2 CO5300 16-pixel column offset before the first splash transfer.
+uses one masked TCA9554 pulse for the cold panel and touch reset. It probes the
+touch address once and selects the original SH8601 or V2 CO5300 panel before
+panel creation. An unknown revision uses the V2 display and disables touch.
+The V2 path applies its 16-pixel column offset before the first splash transfer.
 It flushes the splash while the AMOLED is off and raises the brightness only
 after two complete black frames are ready. It then repeats the selected
-brightness command. The early offset covers all active columns. The transfer
-order prevents incomplete panel memory from becoming visible and recovers a
-CO5300 that
-accepts the first commands but does not show the first pixel transfer. The
+brightness command. The transfer order prevents incomplete panel memory from
+becoming visible and recovers a panel that accepts the first commands but does
+not show the first pixel transfer. The
 startup path completes panel start and then loads the small display-preference
 record before it raises the brightness. This order keeps NVS work from letting
 LVGL run during a polling display transaction. It then builds only the content,
 recording, footer, passkey, and sleep views that the voice path can need.
 One bounded startup task loads settings and saved memories after the capture
 views are ready. Firmware releases this task before it starts the input tasks.
-It probes touch and builds the optional control views only when voice work is
-idle. A new PWR action cancels
-this work between the touch probe and object construction. Firmware builds the
+It creates the cached-revision touch device and builds the optional control
+views only when voice work is idle. A new PWR action cancels this work between
+touch start and object construction. Firmware builds the
 Clock view only after an explicit BOOT-button action. It builds the image and
 plot overlays after capture stops and after it shows the transcript. The
 rounded Clock path uses double-precision geometry and a dedicated point buffer.
@@ -41,13 +43,13 @@ These changes do not change system-off or steady active power policy. The
 runtime replaces the splash as soon as its task and button queue can accept
 input. It does not use a minimum splash timer. An in-session display wake shows
 the current interaction state instead.
-Development soft sleep keeps the CO5300 initialized at its current brightness
-and covers the screen with one full black frame. Wake removes this frame and
+Development soft sleep keeps the selected panel initialized at its current
+brightness and covers the screen with one full black frame. Wake removes this frame and
 does not depend on a zero-to-nonzero brightness transition. Each deliberate
-in-session wake also replays the bounded CO5300 initialization table at zero
-brightness, sends one complete frame, and then restores the selected
+in-session wake also replays the bounded selected-panel initialization table
+at zero brightness, sends one complete frame, and then restores the selected
 brightness. It does not reset the
-panel or CST820 touch controller. This recovers a panel that accepts commands
+panel or touch controller. This recovers a panel that accepts commands
 but keeps its output stage black.
 An active short PWR press does not run this recovery before its action is
 known. Release can therefore draw the sleep frame without an intermediate
@@ -159,6 +161,15 @@ They are allocated once during display start. The QSPI driver does not allocate
 a large temporary DMA buffer while Wi-Fi and BLE are active. This keeps a
 failed late allocation from leaving LVGL in a permanent flush wait.
 
+One reviewed task table contains product task names, stacks, priorities, core
+choices, and memory capabilities. The same table supplies the explicit LVGL
+task configuration. Fixed-size telemetry samples task watermarks, internal DMA
+free memory, the largest internal DMA block, PSRAM free memory, and their
+minimum values. Saturating counters cover display requests, completions,
+errors, coalescing, touch reads, display locks, recovery, and PMIC sample
+failures. The runtime writes one content-free summary after a turn and every 15
+minutes during a soak. It does not write telemetry to NVS.
+
 The runtime initializes the ES8311 and reserves both I2S DMA channels before it
 starts Wi-Fi or BLE. The smaller display buffer leaves enough internal memory
 for the audio DMA channels and the Bluetooth controller at the same time. An
@@ -184,7 +195,8 @@ saved bond active and makes the phone the device network path.
 The button-wake path posts a BLE-on request and returns to button and audio
 work. One persistent BLE-control task owns all host start and stop calls. One
 persistent display-control task owns all panel recover, soft-black, and
-hard-off calls. Each task coalesces requests to the latest generation. Thus, a
+hard-off calls. It also owns runtime brightness commands and coalesces them to
+the latest generation. Each controller task coalesces state requests. Thus, a
 late operation cannot leave the radio or panel on after sleep. The voice task
 does not wait for either controller before microphone capture. If a complete
 saved bond is present, the runtime keeps BLE active for the full recording. It
@@ -218,8 +230,8 @@ intervals. If they all fail, the runtime performs one complete BLE host restart
 from its idle state. This prevents a transient host memory or procedure state
 from requiring another PWR cycle.
 
-Development sleep keeps the CO5300 initialized and covers the UI with one full
-black frame. It does not send brightness zero. A successful CO5300 command does
+Development sleep keeps the selected panel initialized and covers the UI with
+one full black frame. It does not send brightness zero. A successful panel command does
 not prove that pixels are visible after a zero-brightness interval. Production
 uses brightness zero only when its cancel window has ended and system-off is
 the next state. The system-off request enables the AXP2101 internal discharge
@@ -260,10 +272,10 @@ returned coarse location.
 
 Control movement sends the latest brightness and volume values through the
 same bounded callback. Volume uses safe atomic state at once, including during
-speech. The runtime sends the latest brightness command. It retries the command
-if a display refresh owns the display lock, and it does not move the visible
-control back for this temporary condition. The LVGL callback does not write
-flash, send a panel command, or wait for audio. The runtime saves the final
+speech. The display controller sends the latest brightness command after the
+active LVGL transfer drains. The lock and command wait have fixed limits. The
+LVGL callback does not write flash, send a panel command, or wait for audio.
+The runtime saves the final
 preference pair after release. It defers that write while voice work or a
 PWR-button action has priority. It does not write NVS for each track position.
 
@@ -322,7 +334,12 @@ the PMIC after that priority ends. Thus, a charging-direction change while USB
 stays connected cannot leave the footer with its pre-sleep state. At or below
 5 percent, it requests system-off only when VBUS is not good and the PMU does
 not report active charging. This protection uses system-off in development and
-production. The runtime does not read the battery after sleep starts.
+production. Each battery sample also reads raw VBAT millivolts for bounded
+diagnostics. The value does not enter the UI or normal logs. Development soft
+sleep samples the PMIC every 30 seconds without starting a peripheral and
+defers the sample while PWR or voice work has priority. A valid low-battery
+result enters the existing system-off retry path. Production system-off stops
+the processor and does not poll the battery.
 
 Each turn first uses a short required-tool route. The route is direct answer,
 web search, image search, restricted Python, memory management, or one

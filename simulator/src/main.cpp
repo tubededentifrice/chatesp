@@ -61,6 +61,76 @@ bool parse_clock(std::string_view text, ClockTime &time) {
     return time.valid();
 }
 
+bool matches_expectation(
+    const Simulator &simulator,
+    std::string_view field,
+    std::string_view expected) {
+    const auto value = simulator.snapshot();
+    const auto boolean = [expected](bool actual) {
+        return expected == (actual ? "true" : "false");
+    };
+    const auto number = [expected](auto actual) {
+        return expected == std::to_string(actual);
+    };
+    if (field == "state") {
+        return expected == chatesp::state_name(value.interaction);
+    }
+    if (field == "now_ms") {
+        return number(value.now_ms);
+    }
+    if (field == "mode") {
+        return expected == (value.mode == chatesp::AppMode::chat
+            ? "chat" : "clock");
+    }
+    if (field == "orientation") {
+        return expected == (value.orientation == chatesp::DisplayOrientation::chat
+            ? "chat" : "clock");
+    }
+    if (field == "screen_on") {
+        return boolean(value.screen_on);
+    }
+    if (field == "wifi") {
+        return expected == chatesp::simulator::wifi_state_name(value.wifi);
+    }
+    if (field == "brightness") {
+        return number(static_cast<unsigned>(value.brightness_percent));
+    }
+    if (field == "volume") {
+        return number(static_cast<unsigned>(value.volume_percent));
+    }
+    if (field == "battery") {
+        return number(static_cast<unsigned>(value.battery_percent));
+    }
+    if (field == "pairing_visible") {
+        return boolean(value.pairing_code_visible);
+    }
+    if (field == "controls_open") {
+        return boolean(value.controls_open);
+    }
+    if (field == "transcript_bytes") {
+        return number(value.transcript_bytes);
+    }
+    if (field == "answer_bytes") {
+        return number(value.answer_bytes);
+    }
+    if (field == "event_fuzz_cases") {
+        return number(value.event_fuzz_cases);
+    }
+    if (field == "ble.state") {
+        return expected == chatesp::simulator::ble_state_name(value.ble.state);
+    }
+    if (field == "ble.outcome") {
+        return expected == chatesp::simulator::ble_outcome_name(value.ble.outcome);
+    }
+    if (field == "ble.active_revision") {
+        return number(value.ble.active_revision);
+    }
+    if (field == "ble.fuzz_cases") {
+        return number(value.ble.fuzz_cases);
+    }
+    return false;
+}
+
 void print_help(std::ostream &output) {
     output
         << "version\nstatus\nreset\nready\nadvance MILLISECONDS\n"
@@ -72,6 +142,7 @@ void print_help(std::ostream &output) {
            "ble provision REVISION [none|disconnect-after-control|"
            "disconnect-after-data|drop-ack|corrupt-data|storage-failure]\n"
            "ble fuzz CASES SEED\n"
+           "fuzz CASES SEED\nexpect FIELD VALUE\n"
            "touch down X Y\ntouch up X Y\n"
            "controls brightness PERCENT\ncontrols volume PERCENT\n"
            "clock HH:MM:SS|unavailable\n"
@@ -242,6 +313,32 @@ CommandResult process_command(Simulator &simulator, std::string_view line) {
         std::string extra;
         return (input >> cases >> seed) && !(input >> extra) &&
                 simulator.ble_fuzz(cases, seed)
+            ? CommandResult::accepted
+            : CommandResult::rejected;
+    }
+
+    constexpr std::string_view fuzz_prefix = "fuzz ";
+    if (line.substr(0, fuzz_prefix.size()) == fuzz_prefix) {
+        std::istringstream input{
+            std::string(line.substr(fuzz_prefix.size()))};
+        std::size_t cases = 0;
+        std::uint32_t seed = 0;
+        std::string extra;
+        return (input >> cases >> seed) && !(input >> extra) &&
+                simulator.event_fuzz(cases, seed)
+            ? CommandResult::accepted
+            : CommandResult::rejected;
+    }
+
+    constexpr std::string_view expect_prefix = "expect ";
+    if (line.substr(0, expect_prefix.size()) == expect_prefix) {
+        std::istringstream input{
+            std::string(line.substr(expect_prefix.size()))};
+        std::string field;
+        std::string expected;
+        std::string extra;
+        return (input >> field >> expected) && !(input >> extra) &&
+                matches_expectation(simulator, field, expected)
             ? CommandResult::accepted
             : CommandResult::rejected;
     }

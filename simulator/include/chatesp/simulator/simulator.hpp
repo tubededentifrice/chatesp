@@ -19,6 +19,7 @@ constexpr std::size_t kMaximumPrivateTextBytes = kMaximumTranscriptBytes;
 constexpr std::size_t kMaximumArtifactPathBytes = 1'024;
 constexpr std::uint32_t kCommandProtocolVersion = 1;
 constexpr std::uint32_t kMaximumAdvanceMs = 10 * 60'000;
+constexpr std::size_t kMaximumEventFuzzCases = 100'000;
 
 enum class WifiState : std::uint8_t {
     setup,
@@ -47,6 +48,7 @@ struct Snapshot {
     bool external_power_connected = false;
     bool pairing_code_visible = false;
     bool controls_open = false;
+    std::size_t event_fuzz_cases = 0;
     // Compatibility field. Clock entry is never automatic.
     bool return_to_clock_pending = false;
     bool clock_network_shutdown_pending = false;
@@ -95,6 +97,7 @@ public:
         std::uint32_t revision,
         BleFault fault = BleFault::none);
     bool ble_fuzz(std::size_t cases, std::uint32_t seed);
+    bool event_fuzz(std::size_t cases, std::uint32_t seed);
 
     [[nodiscard]] Snapshot snapshot() const;
     [[nodiscard]] DisplayView display_view() const;
@@ -111,6 +114,7 @@ private:
     void enter_clock();
     void process_time();
     void refresh_controls_allowed();
+    [[nodiscard]] bool invariants_hold() const;
 
     InteractionStateMachine interaction_;
     BleSimulator ble_;
@@ -127,6 +131,7 @@ private:
     std::uint32_t pairing_code_ = 0;
     std::size_t transcript_size_ = 0;
     std::size_t answer_size_ = 0;
+    std::size_t event_fuzz_cases_ = 0;
     std::uint8_t brightness_percent_ = 65;
     std::uint8_t volume_percent_ = 70;
     std::uint8_t battery_percent_ = 0;

@@ -7,6 +7,8 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "resource_telemetry.hpp"
+#include "task_config.hpp"
 
 namespace chatesp {
 namespace cloud {
@@ -15,10 +17,7 @@ namespace {
 constexpr std::uint32_t kWaitSliceMs = 10;
 // Audio start reports progress through the UI. Codec and LVGL calls need much
 // more stack than the PCM loop itself.
-constexpr std::uint32_t kPlaybackStackBytes = 16 * 1'024;
 constexpr UBaseType_t kMinimumPlaybackStackFreeBytes = 4 * 1'024;
-constexpr UBaseType_t kPlaybackPriority = 6;
-constexpr BaseType_t kPlaybackCore = 1;
 constexpr std::size_t kPlaybackChunkBytes = 2'048;
 constexpr std::uint32_t kWorkerStopTimeoutMs = 1'000;
 constexpr std::uint32_t kWorkerDrainTimeoutMs = 50'000;
@@ -120,10 +119,8 @@ agent::Error StreamingPcmResponseSink::start_session() {
     played_bytes_.store(0, std::memory_order_release);
     response_start_offset_.store(0, std::memory_order_release);
     session_active_ = true;
-    const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        playback_task_entry, "tts_playback", kPlaybackStackBytes, this,
-        kPlaybackPriority, &task_, kPlaybackCore,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const BaseType_t created = task_config::create(
+        playback_task_entry, task_config::tts_playback, this, &task_);
     if (created != pdPASS) {
         ESP_LOGE(kTag, "PCM playback worker could not start");
         task_ = nullptr;
@@ -453,6 +450,8 @@ void StreamingPcmResponseSink::complete_worker(agent::Error result) {
         unlock();
     }
     xEventGroupSetBits(events_, kWorkerDoneBit | kSpaceReadyBit);
+    resource_telemetry::record_task_watermark(
+        task_config::TaskId::tts_playback);
     // The owner frees the PSRAM-backed task stack with the matching IDF API.
     vTaskSuspend(nullptr);
 }

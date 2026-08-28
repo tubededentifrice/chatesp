@@ -12,7 +12,9 @@ class BlePasskeyLifecycleTests(unittest.TestCase):
     def test_passkey_task_leaves_refresh_work_to_the_lvgl_task(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
         start = source.index("void run_passkey_ui()")
-        end = source.index("void process_quick_controls", start)
+        end = source.index(
+            "void sync_quick_controls_to_confirmed_state", start
+        )
         task = source[start:end]
 
         self.assertNotIn("with_display", task)

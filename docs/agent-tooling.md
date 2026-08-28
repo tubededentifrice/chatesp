@@ -46,6 +46,23 @@ source files or a complete tool cache. Device profiles share the ESP-IDF
 profile cannot replace a component while another profile uses it. Native tests
 do not take this device-build lock.
 
+Build each device profile and check its resolved contract before a release:
+
+```sh
+uv run --locked python tools/pio.py run -e watch_dev
+uv run --locked python tools/firmware_contract.py --environment watch_dev
+uv run --locked python tools/pio.py run -e watch_prod
+uv run --locked python tools/firmware_contract.py --environment watch_prod
+```
+
+Use `tools/device_upload.py` for a device write. It requires an explicit
+profile and port. It does not upload until the partition, image-size, and
+resolved SDK checks pass. The checked image ceiling keeps at least 20 percent
+of one 6 MiB OTA slot free. The report still gives image bytes and slot use.
+The tool copies the exact checked flash artifacts to one isolated staging
+directory and uploads them without a rebuild. It then erases only the
+validated OTA-selection range so slot 0 starts.
+
 ## Reproduce product and BLE faults locally
 
 Build the desktop simulator and run all scenarios with memory checks:
@@ -56,12 +73,18 @@ uv run --locked python simulator/tools/build.py --test --sanitize
 
 Run `simulator/.build/chatesp-sim` without arguments for the line command
 protocol. Use `ble connect`, `ble pair`, `ble provision`, `ble radio`,
-`ble reboot`, and `ble fuzz` to reproduce one flow. Each command writes one
-bounded JSON state record. Use an explicit seed for a repeatable fuzz run.
+`ble reboot`, `ble fuzz`, and `fuzz` to reproduce one flow. Use `expect FIELD
+VALUE` in a scenario to stop when state does not match the expected value.
+Each command writes one bounded JSON state record. Use an explicit seed for a
+repeatable fuzz run. The sanitized suite checks at least 50,000 deterministic
+product events and checks the state invariants after each event.
 
 The simulator compiles the real portable app, packet, transfer, settings, and
 provisioning-session code. It does not compile ESP-IDF or NimBLE. A local pass
 does not close a physical board or iPhone gate.
+The current SVG renderer has its own screen layout. It does not share the
+firmware LVGL presentation code. Treat an SVG match as a state and desktop
+layout check, not as proof of the physical pixel layout.
 
 ## Check the live model route
 

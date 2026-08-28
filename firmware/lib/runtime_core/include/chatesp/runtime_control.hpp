@@ -91,6 +91,12 @@ public:
             expected, State::poweroff_ready, std::memory_order_acq_rel);
     }
 
+    [[nodiscard]] bool promote_soft_sleep_to_poweroff_ready() {
+        State expected = State::soft_sleep;
+        return state_.compare_exchange_strong(
+            expected, State::poweroff_ready, std::memory_order_acq_rel);
+    }
+
     [[nodiscard]] ButtonRoute button_down() {
         const State prior =
             state_.exchange(State::awake, std::memory_order_acq_rel);

@@ -88,6 +88,16 @@ bool valid_private_text(std::string_view text) {
     return true;
 }
 
+std::uint32_t next_random(std::uint32_t &state) {
+    if (state == 0) {
+        state = 0x6d2b79f5U;
+    }
+    state ^= state << 13U;
+    state ^= state >> 17U;
+    state ^= state << 5U;
+    return state;
+}
+
 }  // namespace
 
 Simulator::Simulator(bool development_mode)
@@ -107,6 +117,7 @@ void Simulator::reset() {
     clock_entered_at_ms_ = 0;
     clock_unpowered_since_ms_ = 0;
     pairing_code_ = 0;
+    event_fuzz_cases_ = 0;
     brightness_percent_ = 65;
     volume_percent_ = 70;
     battery_percent_ = 0;
@@ -162,6 +173,7 @@ void Simulator::process_time() {
 
     if (interaction_.state() == InteractionState::sleep_pending) {
         screen_on_ = false;
+        wifi_ = WifiState::off;
         ble_.stop_radio();
         pairing_code_visible_ = false;
         controls_.set_allowed(false);
@@ -296,6 +308,8 @@ bool Simulator::fail_interaction() {
     if (interaction_.state() == InteractionState::sleep_pending) {
         return false;
     }
+    hide_pairing_code();
+    controls_.set_open(false, now_ms_);
     interaction_.fail(now_ms_);
     ble_.start_radio();
     clear_private_text();
@@ -304,7 +318,8 @@ bool Simulator::fail_interaction() {
 }
 
 bool Simulator::show_pairing_code(std::uint32_t code) {
-    if (code > 999'999U) {
+    if (code > 999'999U || !screen_on_ || interaction_.button_is_down() ||
+        interaction_.state() != InteractionState::idle) {
         return false;
     }
     pairing_code_ = code;
@@ -379,7 +394,11 @@ bool Simulator::set_clock_time(bool available, ClockTime time) {
     return true;
 }
 
-void Simulator::set_wifi(WifiState state) { wifi_ = state; }
+void Simulator::set_wifi(WifiState state) {
+    wifi_ = interaction_.state() == InteractionState::sleep_pending
+        ? WifiState::off
+        : state;
+}
 
 bool Simulator::set_battery(bool available, std::uint32_t percent) {
     if (available && percent > 100) {
@@ -431,7 +450,11 @@ bool Simulator::ble_disconnect() {
     return accepted;
 }
 
-void Simulator::ble_start_radio() { ble_.start_radio(); }
+void Simulator::ble_start_radio() {
+    if (screen_on_ && interaction_.state() == InteractionState::idle) {
+        ble_.start_radio();
+    }
+}
 
 void Simulator::ble_stop_radio() {
     ble_.stop_radio();
@@ -439,7 +462,11 @@ void Simulator::ble_stop_radio() {
 }
 
 void Simulator::ble_restart_radio() {
-    ble_.restart_radio();
+    if (screen_on_ && interaction_.state() == InteractionState::idle) {
+        ble_.restart_radio();
+    } else {
+        ble_.stop_radio();
+    }
     hide_pairing_code();
 }
 
@@ -459,6 +486,108 @@ bool Simulator::ble_provision(std::uint32_t revision, BleFault fault) {
 
 bool Simulator::ble_fuzz(std::size_t cases, std::uint32_t seed) {
     return ble_.fuzz(cases, seed);
+}
+
+bool Simulator::event_fuzz(std::size_t cases, std::uint32_t seed) {
+    if (cases == 0 || cases > kMaximumEventFuzzCases) {
+        return false;
+    }
+    reset();
+    (void)ready();
+    std::uint32_t random = seed;
+    for (std::size_t index = 0; index < cases; ++index) {
+        const std::uint32_t value = next_random(random);
+        switch (value % 24U) {
+        case 0:
+            reset();
+            break;
+        case 1:
+            (void)ready();
+            break;
+        case 2:
+            (void)advance((value >> 8U) % 1'001U);
+            break;
+        case 3:
+            (void)action_button(true);
+            break;
+        case 4:
+            (void)action_button(false);
+            break;
+        case 5:
+            (void)mode_button((value >> 8U) % 750U);
+            break;
+        case 6:
+            (void)set_transcript("synthetic transcript");
+            break;
+        case 7:
+            (void)start_tool();
+            break;
+        case 8:
+            (void)set_answer("synthetic answer");
+            break;
+        case 9:
+            (void)finish_interaction();
+            break;
+        case 10:
+            (void)fail_interaction();
+            break;
+        case 11:
+            (void)touch_down(
+                static_cast<std::int16_t>(value % 400U),
+                static_cast<std::int16_t>((value >> 9U) % 480U));
+            break;
+        case 12:
+            (void)touch_up(
+                static_cast<std::int16_t>(value % 400U),
+                static_cast<std::int16_t>((value >> 9U) % 480U));
+            break;
+        case 13:
+            (void)set_brightness((value >> 8U) % 106U);
+            break;
+        case 14:
+            (void)set_volume((value >> 8U) % 106U);
+            break;
+        case 15:
+            (void)set_clock_time(
+                (value & 1U) != 0,
+                ClockTime{
+                    static_cast<std::uint8_t>((value >> 8U) % 24U),
+                    static_cast<std::uint8_t>((value >> 13U) % 60U),
+                    static_cast<std::uint8_t>((value >> 19U) % 60U),
+                });
+            break;
+        case 16:
+            set_wifi(static_cast<WifiState>((value >> 8U) % 5U));
+            break;
+        case 17:
+            (void)set_battery(
+                (value & 1U) != 0, (value >> 8U) % 106U);
+            break;
+        case 18:
+            set_external_power((value & 1U) != 0);
+            break;
+        case 19:
+            (void)show_pairing_code((value >> 8U) % 1'000'001U);
+            break;
+        case 20:
+            hide_pairing_code();
+            break;
+        case 21:
+            (void)ble_connect();
+            break;
+        case 22:
+            (void)ble_confirm_pairing((value >> 8U) % 1'000'001U);
+            break;
+        case 23:
+            ble_restart_radio();
+            break;
+        }
+        if (!invariants_hold()) {
+            return false;
+        }
+    }
+    event_fuzz_cases_ = cases;
+    return true;
 }
 
 Snapshot Simulator::snapshot() const {
@@ -482,6 +611,7 @@ Snapshot Simulator::snapshot() const {
     value.external_power_connected = external_power_connected_;
     value.pairing_code_visible = pairing_code_visible_;
     value.controls_open = controls_.open();
+    value.event_fuzz_cases = event_fuzz_cases_;
     value.clock_network_shutdown_pending =
         clock_network_shutdown_pending_;
     value.ble = ble_.snapshot();
@@ -525,6 +655,7 @@ std::string Simulator::status_json(bool ok) const {
            << (value.controls_open ? "true" : "false")
            << ",\"transcript_bytes\":" << value.transcript_bytes
            << ",\"answer_bytes\":" << value.answer_bytes
+           << ",\"event_fuzz_cases\":" << value.event_fuzz_cases
            << ",\"return_to_clock_pending\":"
            << (value.return_to_clock_pending ? "true" : "false")
            << ",\"clock_network_shutdown_pending\":"
@@ -597,6 +728,39 @@ void Simulator::refresh_controls_allowed() {
     if (controls_.allowed() != allowed) {
         controls_.set_allowed(allowed);
     }
+}
+
+bool Simulator::invariants_hold() const {
+    const Snapshot value = snapshot();
+    const bool sleeping =
+        value.interaction == InteractionState::sleep_pending;
+    const bool voice_active =
+        value.interaction == InteractionState::transcribing ||
+        value.interaction == InteractionState::thinking ||
+        value.interaction == InteractionState::tool_work ||
+        value.interaction == InteractionState::speaking;
+    const bool private_text_cleared =
+        value.transcript_bytes == 0 && value.answer_bytes == 0;
+    return value.brightness_percent >= 5 &&
+        value.brightness_percent <= 100 && value.volume_percent <= 100 &&
+        value.battery_percent <= 100 &&
+        (value.battery_available || value.battery_percent == 0) &&
+        value.transcript_bytes <= kMaximumTranscriptBytes &&
+        value.answer_bytes <= kMaximumAnswerBytes &&
+        (!value.pairing_code_visible ||
+         (value.screen_on && value.orientation == DisplayOrientation::chat &&
+          value.interaction == InteractionState::idle)) &&
+        (!value.controls_open ||
+         (value.screen_on && !value.pairing_code_visible &&
+          value.interaction == InteractionState::idle)) &&
+        (!sleeping ||
+         (!value.screen_on && private_text_cleared &&
+          value.wifi == WifiState::off && value.ble.state == BleState::off &&
+          !value.pairing_code_visible && !value.controls_open)) &&
+        (value.mode != AppMode::clock || private_text_cleared) &&
+        (!voice_active ||
+         (value.ble.state == BleState::off &&
+          !value.pairing_code_visible));
 }
 
 const char *wifi_state_name(WifiState state) {

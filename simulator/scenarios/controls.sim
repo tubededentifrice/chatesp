@@ -4,3 +4,6 @@ touch up 184 70
 controls brightness 60
 controls volume 35
 status
+expect controls_open true
+expect brightness 60
+expect volume 35

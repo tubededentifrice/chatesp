@@ -4,7 +4,6 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/sdmmc_host.h"
-#include "esp_io_expander_tca9554.h"
 #include "driver/i2s_std.h"
 #include "bsp/config.h"
 #include "bsp/display.h"
@@ -29,7 +28,7 @@
 #define BSP_CAPS_IMU            0
 
 /**************************************************************************************************
- * ESP-SparkBot-BSP pinout
+ * Waveshare ESP32-S3-Touch-AMOLED-1.8 pinout
  **************************************************************************************************/
 
 /* I2C */
@@ -61,21 +60,40 @@
 #define BSP_SD_CMD           (GPIO_NUM_1)
 #define BSP_SD_CLK           (GPIO_NUM_2)
 
-#define BSP_IO_EXPANDER_I2C_ADDRESS     (ESP_IO_EXPANDER_I2C_TCA9554_ADDRESS_000)
-
 #define LVGL_BUFFER_HEIGHT          (CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT)
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/**
+ * @brief Detected hardware revision.
+ */
+typedef enum {
+    BSP_BOARD_REVISION_UNKNOWN = 0,
+    BSP_BOARD_REVISION_ORIGINAL,
+    BSP_BOARD_REVISION_V2,
+} bsp_board_revision_t;
+
+/**
+ * @brief Privacy-safe, saturating board diagnostic counters.
+ */
+typedef struct {
+    uint32_t touch_read_ok;
+    uint32_t touch_read_error;
+    uint32_t display_command_ok;
+    uint32_t display_command_error;
+    uint32_t display_recovery_ok;
+    uint32_t display_recovery_error;
+    uint32_t display_lock_timeout;
+} bsp_board_diagnostics_t;
+
 /**************************************************************************************************
  *
  * I2C interface
  *
- * There are two devices connected to I2C peripheral:
- *  - QMA7981 Inertial measurement unit
- *  - OV2640 Camera module
+ * The shared bus has the TCA9554 expander, AXP2101 PMIC, ES8311 codec,
+ * PCF85063A RTC, QMI8658 IMU, and one revision-specific touch controller.
  **************************************************************************************************/
 #define BSP_I2C_NUM     CONFIG_BSP_I2C_NUM
 
@@ -233,15 +251,31 @@ esp_err_t bsp_sdcard_mount(void);
 esp_err_t bsp_sdcard_unmount(void);
 
 /**
- * @brief Init IO expander chip TCA9554
+ * @brief Return the cached board revision.
  *
- * @note If the device was already initialized, users can also use it to get handle.
- * @note This function will be called in `bsp_display_start()` when using LCD sub-board 2 with the resolution of 480x480.
- * @note This function will be called in `bsp_audio_init()`.
- *
- * @return Pointer to device handle or NULL when error occurred
+ * The first call uses a bounded touch-controller probe. Later calls return the
+ * same result and do not access I2C.
  */
-esp_io_expander_handle_t bsp_io_expander_init(void);
+bsp_board_revision_t bsp_board_revision(void);
+
+/**
+ * @brief Initialize the active-high bottom PWR input on EXIO4.
+ */
+esp_err_t bsp_power_button_init(void);
+
+/**
+ * @brief Read the active-high bottom PWR input on EXIO4.
+ *
+ * @param[out] pressed True while the button is pressed
+ */
+esp_err_t bsp_power_button_is_pressed(bool *pressed);
+
+/**
+ * @brief Copy one fixed privacy-safe board diagnostic snapshot.
+ *
+ * @param[out] snapshot Destination snapshot
+ */
+esp_err_t bsp_board_diagnostics_get(bsp_board_diagnostics_t *snapshot);
 
 /**
  * @brief Initialize the top GPIO0 mode button as an active-low input.

@@ -7,3 +7,5 @@ ble provision 2 drop-ack
 ble disconnect
 ble connect
 ble provision 3 disconnect-after-data
+expect ble.outcome disconnected
+expect ble.active_revision 2

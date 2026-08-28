@@ -11,34 +11,47 @@ The target is the Waveshare ESP32-S3-Touch-AMOLED-1.8.
   the compatible CST816S driver-family API for this controller.
 - ES8311 codec with microphone input and speaker amplifier
 - AXP2101 power management
-- QMI8658 six-axis IMU
+- QMI8658 six-axis IMU, present but not used by ChatESP
 - PCF85063A real-time clock
 - MicroSD over SDMMC
 - Two physical buttons
 
+The 3.875 MiB `storage` partition is reserved and is not used by ChatESP. Do
+not put diagnostics, private content, or coredumps in it.
+
 The local `chatesp_board` component is based on the official
 `waveshare/esp32_s3_touch_amoled_1_8` component at a reviewed source commit. It
-starts the CO5300 at zero brightness and applies its 16-pixel column offset
-before the first splash transfer. The app draws two black frames before it
-raises the brightness. It then sends the same brightness command again. The
-offset covers all 368 active columns from the first frame. This bounded retry
-prevents an incomplete panel frame from becoming visible and recovers a
-controller that accepts
-the first commands but keeps the first frame black. The current package always
-creates a CO5300 panel. It probes both touch types, but it does not select an
-SH8601 display. The ChatESP board adapter must add the original-board SH8601
-path before original-board support is complete.
+pulses TCA9554 EXIO0, EXIO1, and EXIO2 low for 20 ms, then drives the same
+masked outputs high. This cold-start pulse does not change the EXIO4 PWR input
+or another expander bit. Firmware then probes touch address `0x15`, followed by
+`0x38`, with a fixed short limit. This probe runs once before panel creation.
+It selects the V2 CO5300 and its 16-pixel column offset, or the original SH8601
+and zero offset. The SH8601 driver is the exact `waveshare/esp_lcd_sh8601`
+version `2.0.0`. If neither touch address answers, firmware uses the V2 display
+path and does not start touch.
 
-The V2 adapter configures the LCD and CST820 reset GPIO values as not connected.
+Both panel paths start at zero brightness. The app draws two black frames
+before it raises the brightness. It then sends the same brightness command
+again. The selected offset is active before the first transfer. This bounded
+retry prevents an incomplete panel frame from becoming visible and recovers a
+controller that accepts the first commands but keeps the first frame black.
+The original-panel brightness command uses the required QSPI write framing.
+Both panel paths currently use a 40 MHz clock. Keep 40 MHz until the panel-clock
+receipt passes. Do not select 80 MHz from a build result alone.
+
+The original-board SH8601 and FT3168 path is not physically verified. Its cold
+start, crop, color order, brightness, rotation, touch, audio, sleep, and wake
+gates remain open.
+
 An in-session display wake does not reset either controller. Firmware replays
-the bounded CO5300 initialization table at zero brightness while LVGL is
-locked, sends one complete frame, and then restores the selected brightness. A
-brightness or display-on
-command acknowledgement alone is not wake proof.
-Cold start draws and shows the reliable splash before it probes and registers
-the CST820. A held cold start uses this active panel state. It does not replay
-the initialization table before listening. A failed touch start disables touch
-controls but does not block voice operation.
+the selected bounded panel table at zero brightness while LVGL is locked,
+sends one complete frame, and then restores the selected brightness. A
+brightness or display-on command acknowledgement alone is not wake proof.
+Runtime brightness commands use the display controller task. It coalesces the
+requested value, waits for the current LVGL transfer, and sends the panel
+command at one locked safe point. A failed touch start disables touch controls
+but does not block voice operation. The local single-point reader treats a
+touch read error as release and does not use the generated fatal read callback.
 
 The LVGL draw and software-rotation buffers are DMA-capable and use internal
 memory. The board allocates them during display start. Do not use a normal
@@ -50,10 +63,16 @@ can stop display refresh. Initialize I2S before Wi-Fi and BLE. An audio
 allocation error must return to the app without a fatal check. The optional
 timezone HTTPS worker uses its fixed 20 KiB stack in PSRAM. It does not take the
 internal RAM that the active Wi-Fi and I2S paths need.
+The reviewed task configuration contains each product task stack, priority,
+core, and memory capability. It also sets the LVGL task values explicitly.
+Fixed-size, content-free telemetry records stack watermarks, internal DMA and
+PSRAM minima, display and touch counters, and PMIC sample failures. It writes no
+event log to NVS. See [hardware measurement receipts](measurement-receipts.md).
 
 Probe the touch controller after reset release. Address `0x15` identifies V2.
 Address `0x38` identifies the original board. Do not infer the display revision
-from a failed display start.
+from a failed display start. Do not configure GPIO13. It is a panel signal even
+when ChatESP does not use tearing-effect synchronization.
 
 ## Button behavior
 
@@ -99,8 +118,8 @@ normal 350 ms recording threshold.
 
 Before sleep, stop audio, radio work, display updates, touch, and unused
 peripherals. Development soft sleep draws a full black frame and keeps the
-CO5300 initialized at its current brightness. The panel can accept a successful
-brightness or display-on command after brightness zero while its pixels stay
+selected panel initialized at its current brightness. The panel can accept a
+successful brightness or display-on command after brightness zero while its pixels stay
 black. Therefore, an in-session wake must not use this zero-to-nonzero path.
 Production sets brightness to zero only after the sleep cancel window, then it
 enables the AXP2101 internal output discharge and requests system-off. The PMIC
@@ -116,8 +135,13 @@ production. Good VBUS or active charging prevents the low-battery request so
 the device can start and charge. The active runtime reads the gauge at most
 once every 30 seconds, after a VBUS event, or once after a PWR wake. If the
 wake refresh is blocked while the button has priority, the runtime keeps it
-pending and reads the PMIC after that priority ends. It does not read the gauge
-after sleep starts. Production system-off also stops the processor, so no
+pending and reads the PMIC after that priority ends. A normal sample also reads
+the AXP2101 raw battery voltage. This diagnostic value does not enter the UI or
+normal logs. Development soft sleep keeps the processor active, so it samples
+the PMIC once every 30 seconds without starting the display, radios, touch, or
+audio. It defers this sample while PWR or voice work has priority. A valid
+low-battery result promotes the completed soft-sleep state to the normal
+system-off retry path. Production system-off stops the processor, so no
 firmware polling occurs in that state.
 
 The production profile does not run the optional full-PSRAM start test. It uses
@@ -263,7 +287,9 @@ The connected V2 board must pass these checks for this control change:
   private transmit-buffer allocation failure or block the LVGL task;
 - a held PWR-button cold start replaces the splash with `LISTENING` at the
   normal hold threshold without a second panel initialization;
-- the reliable cold-start splash appears before the touch-controller probe;
+- the bounded touch-controller revision probe completes before panel creation,
+  and optional LVGL touch registration remains deferred until voice work is
+  idle;
 - from production system-off, each PWR press starts the power rails after the
   128 ms recognition interval, without a short-versus-hold result;
 - after the fast PWR-on setting is applied, production system-off current is
@@ -338,7 +364,8 @@ The connected V2 board must pass these checks for this control change:
 - at 6 percent on battery power, the device stays on. At 5 percent, it requests
   system-off in development and production. Good VBUS or active charging
   prevents this request;
-- after sleep starts, the firmware does not read the battery gauge;
+- production system-off does not read the battery gauge. Development soft
+  sleep reads only the PMIC once per 30 seconds for battery protection;
 - model text grows on the display before the complete answer is available;
 - a long transcript, answer, or error scrolls vertically under the finger,
   keeps release momentum, resists both ends, and shows its scroll indicator
@@ -401,6 +428,9 @@ The connected V2 board must pass these checks for this control change:
   a temporary display-lock conflict;
 - active speech volume changes without a restart, and one release causes at
   most one preference write;
+- in a development build, tapping the `DEV` footer marker opens the touch
+  calibration view. Its six targets show coordinates only on the display for
+  portrait and landscape top, center, and bottom samples;
 - a PWR-button action keeps priority while the control panel is open;
 - changed brightness and volume values return after a reset;
 - an explicit model power-off gives one short confirmation and then sleeps;
@@ -490,7 +520,8 @@ can read the facts. The firmware must not log facts, memory tool arguments, or
 BLE memory frames.
 
 Run `tools/device_doctor.py` with the explicit local port after each display or
-power change. Its serial checks can verify the image, V2 probe, command order,
+power change. Its serial checks can verify the image, board-revision record,
+command order,
 and runtime start. They cannot verify emitted pixels. A person must confirm the
 visible splash or ready view.
 
@@ -504,8 +535,8 @@ visible splash or ready view.
   rotated touch mapping, full-screen image, and full-screen Python plot.
 - Record and replay speech through the ES8311 path without clipping.
 - Verify Wi-Fi connection and TLS requests.
-- Verify that Wi-Fi starts at boot and a held PWR button stays responsive while
-  the station connects.
+- Verify that Wi-Fi starts only after 100 ms of valid recording and that a held
+  PWR button stays responsive while the station connects.
 - Verify encrypted BLE provisioning and acknowledgement with a physical iPhone.
 - Verify that automatic memory loading and a settings transfer can start on the
   same connection, that the settings acknowledgement arrives, and that the
@@ -529,7 +560,8 @@ visible splash or ready view.
   battery voltage, stable current after rail discharge, and wake result. Do not
   use the AXP2101 40-microamp data-sheet value as a board measurement.
 - Measure ChatESP idle, externally powered Clock, battery-powered Clock,
-  recording, Wi-Fi, playback, and deep-sleep current.
+  recording, Wi-Fi, playback, development soft-sleep current, and AXP2101
+  production system-off current.
 - Run at least 100 talk cycles and 100 sleep/wake cycles without a leak, reset,
   stuck state, or unexpected NVS write.
 - Run 100 memory writes across sleep and wake without a lost old record,

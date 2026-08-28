@@ -315,6 +315,34 @@ class PlatformioWrapperTests(unittest.TestCase):
             wake_source.index("request_display_wake(now_ms)"),
         )
 
+    def test_development_sleep_keeps_battery_protection_active(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        runtime = (
+            root / "firmware" / "main" / "voice_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        power = (
+            root / "firmware" / "main" / "power_control.cpp"
+        ).read_text(encoding="utf-8")
+
+        sample_start = runtime.index(
+            "void sample_development_sleep_battery("
+        )
+        sample_end = runtime.index("void refresh_footer(", sample_start)
+        sample = runtime[sample_start:sample_end]
+        self.assertIn("button_pressed_", sample)
+        self.assertIn("voice_priority_", sample)
+        self.assertIn("power::battery_status()", sample)
+        self.assertIn("power::low_battery_requires_shutdown", sample)
+        self.assertIn(
+            "poweroff_gate_.promote_soft_sleep_to_poweroff_ready()",
+            sample,
+        )
+        self.assertIn("sample_development_sleep_battery(now_ms);", runtime)
+        self.assertIn("kAxp2101BatteryVoltageHigh = 0x34", power)
+        self.assertIn("kAxp2101BatteryVoltageLow = 0x35", power)
+        self.assertIn("axp2101_battery_millivolts", power)
+        self.assertIn("record_battery_sample_failure", power)
+
     def test_ble_advertising_has_shutdown_guard_and_recovery(self) -> None:
         root = Path(__file__).resolve().parents[1]
         ble = (
@@ -373,7 +401,7 @@ class PlatformioWrapperTests(unittest.TestCase):
         )
         self.assertLess(
             warm_source.index("ble_request_complete("),
-            warm_source.index("xTaskCreatePinnedToCore("),
+            warm_source.index("task_config::create("),
         )
         self.assertIn("ble_provisioning::bond_available()", warm_source)
         self.assertIn("runtime::keep_ble_during_recording(", warm_source)
@@ -599,8 +627,11 @@ class PlatformioWrapperTests(unittest.TestCase):
         wake_end = ui_source.index("esp_err_t set_brightness", wake_start)
         wake_source = ui_source[wake_start:wake_end]
         self.assertLess(
-            wake_source.index("bsp_display_recover()"),
             wake_source.index("lv_refr_now(display_handle)"),
+            wake_source.index("bsp_display_recover()"),
+        )
+        self.assertGreaterEqual(
+            wake_source.count("lv_refr_now(display_handle)"), 2
         )
         self.assertLess(
             wake_source.index("lv_refr_now(display_handle)"),
@@ -628,13 +659,19 @@ class PlatformioWrapperTests(unittest.TestCase):
             / "chatesp_board"
             / "esp32_s3_touch_amoled_1_8.c"
         ).read_text(encoding="utf-8")
-        gap_initialization = (
-            "static uint16_t panel_x_gap = BSP_LCD_CST816S_X_GAP;"
+        display_start = board_source.index("esp_err_t bsp_display_new(")
+        display_end = board_source.index(
+            "esp_err_t bsp_touch_new(", display_start
         )
-        self.assertIn(gap_initialization, board_source)
+        display_source = board_source[display_start:display_end]
+        gap_selection = (
+            "panel_x_gap = revision == BSP_BOARD_REVISION_ORIGINAL"
+        )
+        self.assertIn(gap_selection, display_source)
+        self.assertIn("BSP_LCD_CST816S_X_GAP", display_source)
         self.assertLess(
-            board_source.index(gap_initialization),
-            board_source.index("esp_err_t bsp_display_new("),
+            display_source.index(gap_selection),
+            display_source.index("esp_lcd_panel_set_gap("),
         )
 
     def test_device_policy_rejects_an_unsafe_profile(self) -> None:

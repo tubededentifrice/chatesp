@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 
 #include "bsp/esp-bsp.h"
 #include "chatesp/axp2101_power_key.hpp"
@@ -9,7 +10,6 @@
 #include "crash_diagnostics.hpp"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
-#include "esp_io_expander.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -26,6 +26,8 @@ constexpr std::uint8_t kAxp2101Status1 = 0x00;
 constexpr std::uint8_t kAxp2101Status2 = 0x01;
 constexpr std::uint8_t kAxp2101IrqEnable2 = 0x41;
 constexpr std::uint8_t kAxp2101IrqStatus2 = 0x49;
+constexpr std::uint8_t kAxp2101BatteryVoltageHigh = 0x34;
+constexpr std::uint8_t kAxp2101BatteryVoltageLow = 0x35;
 constexpr std::uint8_t kAxp2101BatteryPercent = 0xA4;
 constexpr std::uint8_t kAxp2101BatteryPresent = 1U << 3;
 constexpr std::uint8_t kAxp2101InternalOffDischarge = 1U << 5;
@@ -44,13 +46,11 @@ constexpr std::uint8_t kAxp2101VbusRemoveEvent = 1U << 6;
 constexpr std::uint8_t kAxp2101VbusInsertEvent = 1U << 7;
 constexpr std::uint8_t kAxp2101PowerSourceEventMask =
     kAxp2101VbusRemoveEvent | kAxp2101VbusInsertEvent;
-constexpr std::uint32_t kPowerButtonPin = IO_EXPANDER_PIN_NUM_4;
 constexpr int kI2cTimeoutMs = 100;
 constexpr std::uint32_t kPolicyErrorLogIntervalMs = 1'000;
 
 PowerButtonFilter action_button;
 ButtonDebouncer mode_button;
-esp_io_expander_handle_t io_expander = nullptr;
 i2c_master_dev_handle_t axp2101 = nullptr;
 bool initialized = false;
 bool mode_button_initialized = false;
@@ -62,31 +62,53 @@ bool startup_power_key_wake = false;
 std::uint32_t hold_policy_error_reported_at_ms = 0;
 std::atomic<std::uint32_t> source_revision{0};
 std::atomic<bool> external_power_latched{false};
+std::atomic<std::uint16_t> battery_sample_failures{0};
+std::atomic<std::uint32_t> i2c_failures{0};
 
 std::uint32_t monotonic_ms() {
     return static_cast<std::uint32_t>(esp_timer_get_time() / 1000ULL);
 }
 
+void record_battery_sample_failure() {
+    std::uint16_t failures =
+        battery_sample_failures.load(std::memory_order_relaxed);
+    while (failures != 0xffffU &&
+           !battery_sample_failures.compare_exchange_weak(
+               failures, saturating_battery_sample_failure_count(failures),
+               std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+}
+
+void record_i2c_failure() {
+    std::uint32_t failures = i2c_failures.load(std::memory_order_relaxed);
+    while (failures != std::numeric_limits<std::uint32_t>::max() &&
+           !i2c_failures.compare_exchange_weak(
+               failures, failures + 1U, std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+}
+
 esp_err_t read_action_button(bool *pressed) {
-    ESP_RETURN_ON_FALSE(
-        pressed != nullptr, ESP_ERR_INVALID_ARG, kTag, "No button output");
-    std::uint32_t levels = 0;
-    ESP_RETURN_ON_ERROR(
-        esp_io_expander_get_level(io_expander, kPowerButtonPin, &levels),
-        kTag,
-        "PWR button read failed");
-    *pressed = (levels & kPowerButtonPin) != 0;
-    return ESP_OK;
+    return bsp_power_button_is_pressed(pressed);
 }
 
 esp_err_t read_axp2101(std::uint8_t reg, std::uint8_t *value) {
-    return i2c_master_transmit_receive(
+    const esp_err_t result = i2c_master_transmit_receive(
         axp2101, &reg, sizeof(reg), value, sizeof(*value), kI2cTimeoutMs);
+    if (result != ESP_OK) {
+        record_i2c_failure();
+    }
+    return result;
 }
 
 esp_err_t write_axp2101(std::uint8_t reg, std::uint8_t value) {
     const std::uint8_t data[] = {reg, value};
-    return i2c_master_transmit(axp2101, data, sizeof(data), kI2cTimeoutMs);
+    const esp_err_t result = i2c_master_transmit(
+        axp2101, data, sizeof(data), kI2cTimeoutMs);
+    if (result != ESP_OK) {
+        record_i2c_failure();
+    }
+    return result;
 }
 
 esp_err_t set_hardware_hold_shutdown(bool enabled) {
@@ -268,12 +290,8 @@ esp_err_t initialize() {
         return ESP_OK;
     }
 
-    io_expander = bsp_io_expander_init();
-    ESP_RETURN_ON_FALSE(
-        io_expander != nullptr, ESP_FAIL, kTag, "IO expander start failed");
     ESP_RETURN_ON_ERROR(
-        esp_io_expander_set_dir(
-            io_expander, kPowerButtonPin, IO_EXPANDER_INPUT),
+        bsp_power_button_init(),
         kTag,
         "PWR button setup failed");
 
@@ -518,12 +536,15 @@ std::optional<BatteryStatus> battery_status() {
     }
     std::uint8_t status = 0;
     if (read_axp2101(kAxp2101Status1, &status) != ESP_OK) {
+        record_battery_sample_failure();
         return std::nullopt;
     }
     std::uint8_t status2 = 0;
-    const bool charging =
-        read_axp2101(kAxp2101Status2, &status2) == ESP_OK &&
-        axp2101_status_is_charging(status2);
+    if (read_axp2101(kAxp2101Status2, &status2) != ESP_OK) {
+        record_battery_sample_failure();
+        return std::nullopt;
+    }
+    const bool charging = axp2101_status_is_charging(status2);
     const bool vbus_good = axp2101_status_has_external_power(status);
     BatteryStatus result{
         0, charging,
@@ -533,11 +554,26 @@ std::optional<BatteryStatus> battery_status() {
     if ((status & kAxp2101BatteryPresent) == 0) {
         return result;
     }
+    std::uint8_t voltage_high = 0;
+    std::uint8_t voltage_low = 0;
+    const bool voltage_high_available =
+        read_axp2101(kAxp2101BatteryVoltageHigh, &voltage_high) == ESP_OK;
+    const bool voltage_low_available = voltage_high_available &&
+        read_axp2101(kAxp2101BatteryVoltageLow, &voltage_low) == ESP_OK;
+    if (voltage_low_available) {
+        result.millivolts =
+            axp2101_battery_millivolts(voltage_high, voltage_low);
+        result.millivolts_available = true;
+    } else {
+        record_battery_sample_failure();
+    }
     std::uint8_t percent = 0;
     if (read_axp2101(kAxp2101BatteryPercent, &percent) == ESP_OK &&
         percent <= 100) {
         result.percent = percent;
         result.available = true;
+    } else {
+        record_battery_sample_failure();
     }
     return result;
 }
@@ -547,6 +583,14 @@ std::optional<std::uint8_t> battery_percent() {
     return status.has_value() && status->available
         ? std::optional<std::uint8_t>{status->percent}
         : std::nullopt;
+}
+
+std::uint16_t battery_sample_failure_count() {
+    return battery_sample_failures.load(std::memory_order_relaxed);
+}
+
+std::uint32_t i2c_error_count() {
+    return i2c_failures.load(std::memory_order_relaxed);
 }
 
 std::uint32_t power_source_revision() {

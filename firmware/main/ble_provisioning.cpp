@@ -34,6 +34,8 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "settings_store.hpp"
+#include "resource_telemetry.hpp"
+#include "task_config.hpp"
 
 extern "C" void ble_store_config_init(void);
 
@@ -49,8 +51,6 @@ constexpr char kDeviceName[] = "ChatESP";
 constexpr std::uint16_t kNoConnection = BLE_HS_CONN_HANDLE_NONE;
 constexpr std::size_t kMaximumDataFrameSize =
     provisioning::kDataFrameHeaderSize + provisioning::kMaximumFrameDataSize;
-constexpr std::uint32_t kStopTaskStackBytes = 4 * 1024;
-constexpr UBaseType_t kStopTaskPriority = 5;
 constexpr std::uint32_t kStopTaskReclaimDelayMs = 10;
 constexpr std::uint32_t kLifecyclePollMs = 1;
 constexpr std::uint32_t kDisconnectTimeoutMs = 2'000;
@@ -1261,6 +1261,7 @@ void stop_task(void *) {
     ESP_LOGI(
         kLogTag, "BLE stop stack minimum free bytes: %u",
         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    resource_telemetry::record_task_watermark(task_config::TaskId::ble_stop);
     if (watchdog_active) {
         (void)esp_task_wdt_delete(nullptr);
     }
@@ -1989,9 +1990,8 @@ esp_err_t stop(std::uint32_t timeout_ms) {
             return ESP_ERR_INVALID_STATE;
         }
         crash_diagnostics::mark(runtime::CrashEvent::ble_stop_requested);
-        const BaseType_t task_result = xTaskCreate(
-            stop_task, "ble_stop", kStopTaskStackBytes, nullptr,
-            kStopTaskPriority, nullptr);
+        const BaseType_t task_result = task_config::create(
+            stop_task, task_config::ble_stop, nullptr, nullptr);
         if (task_result != pdPASS) {
             (void)s_stop_gate.cancel_begin();
             s_lifecycle.store(

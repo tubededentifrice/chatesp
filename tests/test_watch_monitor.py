@@ -11,7 +11,9 @@ from tools.watch_monitor import (
     close_safe_serial,
     disable_hangup_reset,
     monitor,
+    main,
     open_safe_serial,
+    reopen_safe_serial,
     redact_serial_text,
 )
 
@@ -107,6 +109,87 @@ class WatchMonitorTests(unittest.TestCase):
             [("get", 7), ("set", 7, terminal.TCSANOW, 0x20)],
         )
 
+    def test_same_port_reopen_is_bounded_until_the_port_returns(self) -> None:
+        connection = RecordingSerial()
+        attempts: list[str] = []
+        clock = iter((0.0, 0.0, 0.1, 0.2, 0.3, 0.4))
+
+        def opener(port: str) -> RecordingSerial:
+            attempts.append(port)
+            if len(attempts) < 3:
+                raise OSError(2, "No such file")
+            return connection
+
+        waits: list[float] = []
+        result = reopen_safe_serial(
+            "LOCAL_PORT",
+            timeout_seconds=1.0,
+            interval_seconds=0.1,
+            opener=opener,
+            monotonic=lambda: next(clock),
+            wait=waits.append,
+        )
+
+        self.assertIs(connection, result)
+        self.assertEqual(["LOCAL_PORT"] * 3, attempts)
+        self.assertEqual([0.1, 0.1], waits)
+
+    def test_same_port_reopen_stops_after_the_fixed_timeout(self) -> None:
+        attempts: list[str] = []
+
+        def opener(port: str) -> RecordingSerial:
+            attempts.append(port)
+            raise serial.SerialException("could not open port: No such file")
+
+        clock = iter((0.0, 0.0, 0.5))
+        with self.assertRaises(serial.SerialException):
+            reopen_safe_serial(
+                "LOCAL_PORT",
+                timeout_seconds=0.5,
+                interval_seconds=0.1,
+                opener=opener,
+                monotonic=lambda: next(clock),
+                wait=lambda _: None,
+            )
+
+        self.assertEqual(["LOCAL_PORT"], attempts)
+
+    def test_same_port_reopen_does_not_retry_permission_failure(self) -> None:
+        attempts: list[str] = []
+
+        def opener(port: str) -> RecordingSerial:
+            attempts.append(port)
+            raise serial.SerialException("could not open port: Permission denied")
+
+        with self.assertRaises(serial.SerialException):
+            reopen_safe_serial(
+                "LOCAL_PORT",
+                opener=opener,
+                monotonic=lambda: 0.0,
+                wait=lambda _: None,
+            )
+
+        self.assertEqual(["LOCAL_PORT"], attempts)
+
+    def test_same_port_reopen_does_not_retry_invalid_argument(self) -> None:
+        attempts: list[str] = []
+
+        def opener(port: str) -> RecordingSerial:
+            attempts.append(port)
+            raise serial.SerialException(
+                "could not open port: Invalid argument"
+            )
+
+        with self.assertRaises(serial.SerialException):
+            reopen_safe_serial(
+                "LOCAL_PORT",
+                opener=opener,
+                monotonic=lambda: 0.0,
+                wait=lambda _: None,
+            )
+
+        self.assertEqual(["LOCAL_PORT"], attempts)
+
     def test_close_resets_native_usb_into_application_mode(self) -> None:
         connection = RecordingSerial()
 
@@ -158,6 +241,19 @@ class WatchMonitorTests(unittest.TestCase):
 
         safe_close.assert_called_once_with(connection)
 
+    def test_cli_redacts_an_unexpected_serial_error(self) -> None:
+        with patch(
+            "tools.watch_monitor.monitor",
+            side_effect=serial.SerialException(
+                "private raw port error /dev/cu.private"
+            ),
+        ), patch("tools.watch_monitor.sys.stderr", new_callable=StringIO) as error:
+            result = main(["--port", "/dev/cu.private", "--duration", "1"])
+
+        self.assertEqual(1, result)
+        self.assertNotIn("/dev/cu.private", error.getvalue())
+        self.assertNotIn("private raw", error.getvalue())
+
     def test_system_off_disconnect_during_close_is_clean(self) -> None:
         connection = DisconnectingSerial(
             [b"I power: Requesting AXP2101 system off\r\n"]
@@ -196,7 +292,21 @@ class WatchMonitorTests(unittest.TestCase):
         self.assertNotIn("fe80::1234", redacted)
         self.assertNotIn("another-private-name", redacted)
         self.assertIn("[redacted network]", redacted)
-        self.assertEqual(redacted.count("[redacted address]"), 5)
+        self.assertEqual(redacted.count("[redacted address]"), 4)
+
+    def test_network_names_with_commas_are_fully_redacted(self) -> None:
+        text = (
+            "wifi:connected with office,private, aid = 2\n"
+            "ssid: home,private, channel = 6\n"
+        )
+
+        redacted = redact_serial_text(text)
+
+        self.assertNotIn("office", redacted)
+        self.assertNotIn("private", redacted)
+        self.assertNotIn("home", redacted)
+        self.assertNotIn("channel", redacted)
+        self.assertEqual(redacted.count("[redacted network]"), 2)
 
     def test_overlong_line_is_discarded_until_the_next_line(self) -> None:
         redactor = SerialRedactor()

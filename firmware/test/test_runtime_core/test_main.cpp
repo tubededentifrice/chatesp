@@ -8,6 +8,7 @@
 
 #include "chatesp/byte_ring.hpp"
 #include "chatesp/ble_controller.hpp"
+#include "chatesp/brightness_coordinator.hpp"
 #include "chatesp/clock_network_transition.hpp"
 #include "chatesp/crash_trace.hpp"
 #include "chatesp/device_preferences.hpp"
@@ -518,6 +519,15 @@ void test_poweroff_gate_keeps_development_sleep_out_of_poweroff() {
         static_cast<int>(gate.button_down()));
 }
 
+void test_poweroff_gate_promotes_development_sleep_for_battery_protection() {
+    chatesp::runtime::PoweroffGate gate;
+    gate.begin_sleep();
+    TEST_ASSERT_TRUE(gate.mark_soft_sleep());
+    TEST_ASSERT_TRUE(gate.promote_soft_sleep_to_poweroff_ready());
+    TEST_ASSERT_TRUE(gate.poweroff_ready());
+    TEST_ASSERT_FALSE(gate.promote_soft_sleep_to_poweroff_ready());
+}
+
 void test_async_shutdown_gate_bounds_one_worker_lifecycle() {
     chatesp::runtime::AsyncShutdownGate gate;
     TEST_ASSERT_TRUE(gate.begin());
@@ -829,6 +839,110 @@ void test_turn_timing_contains_only_phase_durations() {
     TEST_ASSERT_NULL(std::strstr(output.data(), "key="));
 }
 
+void test_brightness_coordinator_rejects_stale_completion() {
+    chatesp::runtime::BrightnessCoordinator coordinator;
+    const auto submission = coordinator.submit(55);
+    const auto work = coordinator.begin_next();
+    TEST_ASSERT_EQUAL_UINT32(submission.request.generation, work.generation);
+    TEST_ASSERT_FALSE(coordinator.complete({work.generation + 1, 55}, false));
+}
+
+void test_brightness_coordinator_completes_failure() {
+    chatesp::runtime::BrightnessCoordinator coordinator;
+    const auto submission = coordinator.submit(55);
+    const auto work = coordinator.begin_next();
+    TEST_ASSERT_TRUE(coordinator.complete(work, false));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::failed),
+        static_cast<int>(
+            coordinator.outcome(submission.request.generation)));
+}
+
+void test_brightness_coordinator_cancels_before_execution() {
+    chatesp::runtime::BrightnessCoordinator coordinator;
+    const auto submission = coordinator.submit(60);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            chatesp::runtime::BrightnessCancelResult::
+                cancelled_before_execution),
+        static_cast<int>(
+            coordinator.cancel(submission.request.generation)));
+    TEST_ASSERT_FALSE(coordinator.begin_next().valid());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::cancelled),
+        static_cast<int>(
+            coordinator.outcome(submission.request.generation)));
+}
+
+void test_brightness_coordinator_keeps_late_active_completion() {
+    chatesp::runtime::BrightnessCoordinator coordinator;
+    const auto submission = coordinator.submit(65);
+    const auto work = coordinator.begin_next();
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(
+            chatesp::runtime::BrightnessCancelResult::already_executing),
+        static_cast<int>(
+            coordinator.cancel(submission.request.generation)));
+    TEST_ASSERT_TRUE(coordinator.complete(work, true));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::succeeded),
+        static_cast<int>(
+            coordinator.outcome(submission.request.generation)));
+}
+
+void test_brightness_coordinator_coalesces_only_waiting_preview() {
+    chatesp::runtime::BrightnessCoordinator coordinator;
+    const auto first = coordinator.submit(25);
+    const auto active = coordinator.begin_next();
+    const auto second = coordinator.submit(40);
+    const auto third = coordinator.submit(75);
+    TEST_ASSERT_FALSE(second.coalesced);
+    TEST_ASSERT_TRUE(third.coalesced);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::superseded),
+        static_cast<int>(coordinator.outcome(second.request.generation)));
+    TEST_ASSERT_TRUE(coordinator.complete(active, true));
+    const auto latest = coordinator.begin_next();
+    TEST_ASSERT_EQUAL_UINT32(third.request.generation, latest.generation);
+    TEST_ASSERT_EQUAL_UINT8(75, latest.percent);
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::succeeded),
+        static_cast<int>(coordinator.outcome(first.request.generation)));
+}
+
+void test_brightness_coordinator_keeps_active_result_through_preview_burst() {
+    chatesp::runtime::BrightnessCoordinator coordinator;
+    const auto first = coordinator.submit(25);
+    const auto active = coordinator.begin_next();
+    for (std::uint8_t percent = 30; percent <= 80; percent += 5) {
+        (void)coordinator.submit(percent);
+    }
+    TEST_ASSERT_TRUE(coordinator.complete(active, true));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::succeeded),
+        static_cast<int>(coordinator.outcome(first.request.generation)));
+    TEST_ASSERT_EQUAL_UINT8(80, coordinator.begin_next().percent);
+}
+
+void test_brightness_coordinator_cancels_waiting_work_before_display_sleep() {
+    chatesp::runtime::BrightnessCoordinator coordinator;
+    const auto active = coordinator.submit(35);
+    TEST_ASSERT_TRUE(coordinator.begin_next().valid());
+    const auto waiting = coordinator.submit(70);
+    const auto cancelled = coordinator.cancel_pending();
+    TEST_ASSERT_EQUAL_UINT32(
+        waiting.request.generation, cancelled.generation);
+    TEST_ASSERT_TRUE(coordinator.work_active());
+    TEST_ASSERT_FALSE(coordinator.work_pending());
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::cancelled),
+        static_cast<int>(
+            coordinator.outcome(waiting.request.generation)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(chatesp::runtime::BrightnessOutcome::pending),
+        static_cast<int>(coordinator.outcome(active.request.generation)));
+}
+
 }  // namespace
 
 void setUp() {}
@@ -862,6 +976,8 @@ int main(int, char **) {
     RUN_TEST(test_poweroff_gate_routes_a_cold_wake_press);
     RUN_TEST(test_poweroff_gate_cancels_a_sleep_boundary);
     RUN_TEST(test_poweroff_gate_keeps_development_sleep_out_of_poweroff);
+    RUN_TEST(
+        test_poweroff_gate_promotes_development_sleep_for_battery_protection);
     RUN_TEST(test_async_shutdown_gate_bounds_one_worker_lifecycle);
     RUN_TEST(test_ble_controller_coalesces_one_requested_state);
     RUN_TEST(test_ble_controller_stops_a_superseded_successful_start);
@@ -882,5 +998,14 @@ int main(int, char **) {
     RUN_TEST(test_speech_queue_orders_segments_and_applies_backpressure);
     RUN_TEST(test_speech_queue_finish_cancel_and_reset_are_bounded);
     RUN_TEST(test_turn_timing_contains_only_phase_durations);
+    RUN_TEST(test_brightness_coordinator_rejects_stale_completion);
+    RUN_TEST(test_brightness_coordinator_completes_failure);
+    RUN_TEST(test_brightness_coordinator_cancels_before_execution);
+    RUN_TEST(test_brightness_coordinator_keeps_late_active_completion);
+    RUN_TEST(test_brightness_coordinator_coalesces_only_waiting_preview);
+    RUN_TEST(
+        test_brightness_coordinator_keeps_active_result_through_preview_burst);
+    RUN_TEST(
+        test_brightness_coordinator_cancels_waiting_work_before_display_sleep);
     return UNITY_END();
 }

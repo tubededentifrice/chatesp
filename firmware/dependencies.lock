@@ -29,20 +29,6 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.2.1
-  espressif/esp_io_expander_tca9554:
-    component_hash: ee94a439ade1c17129a491efe572c600899306a2ffadbde491852d95333e28b4
-    dependencies:
-    - name: espressif/esp_io_expander
-      registry_url: https://components.espressif.com
-      require: public
-      version: ^1.2.0
-    - name: idf
-      require: private
-      version: '>=5.2'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 2.0.3
   espressif/esp_lcd_co5300:
     component_hash: 21f84c5c825509ebacbddb379555b49092ae165b3e19f0edfbf6f8eff8aa036d
     dependencies:
@@ -138,9 +124,22 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.5.0
+  waveshare/esp_lcd_sh8601:
+    component_hash: af135de8ee4a036bcff17bde98e6a96e02202d388fecf6004363e3d3e047943a
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.0.0
 direct_dependencies:
 - espressif/esp_codec_dev
-- espressif/esp_io_expander_tca9554
 - espressif/esp_lcd_co5300
 - espressif/esp_lcd_panel_io_additions
 - espressif/esp_lcd_touch_cst816s
@@ -148,6 +147,7 @@ direct_dependencies:
 - espressif/esp_lvgl_port
 - idf
 - lvgl/lvgl
-manifest_hash: 81761f0bba6fb52089ae1c264d8765b1280af177ef81ab5a34af37eb16f93de1
+- waveshare/esp_lcd_sh8601
+manifest_hash: 25e670630543207bbbe9a5663ab5eebde87d6a957eced6db7c34d7612989de97
 target: esp32s3
 version: 2.0.0

@@ -18,8 +18,8 @@ ChatESP.*
 > [!IMPORTANT]
 > Buy the V2 board with the CO5300 display and CST820 touch controller.
 > Waveshare states that shipments changed to V2 on May 30, 2026. ChatESP keeps
-> an original-board driver path, but original-board display support is not
-> complete.
+> an implemented original-board driver path, but it is not physically
+> verified.
 
 ## Why ChatESP?
 
@@ -197,6 +197,9 @@ uv run --locked python -m unittest discover -s tests -p 'test_*.py'
 uv run --locked opendle-secrets check
 uv run --locked python tools/pio.py test -e native
 uv run --locked python tools/pio.py run -e watch_dev
+uv run --locked python tools/firmware_contract.py --environment watch_dev
+uv run --locked python tools/pio.py run -e watch_prod
+uv run --locked python tools/firmware_contract.py --environment watch_prod
 ```
 
 Run the complete local product and BLE simulator with address and
@@ -215,7 +218,8 @@ acceptance gates. See [the simulator guide](simulator/README.md).
 Upload the development image:
 
 ```sh
-uv run --locked python tools/pio.py run -e watch_dev -t upload
+uv run --locked python tools/device_upload.py \
+  --environment watch_dev --port LOCAL_PORT
 ```
 
 Development mode keeps USB flashing available and uses the same 30-second
@@ -262,6 +266,8 @@ recovery procedure, and local credential setup. Read the
 - [Development mode](docs/development-mode.md): safe firmware work and
   recovery.
 - [Agent tooling](docs/agent-tooling.md): task and tool procedures.
+- [Measurement receipts](docs/measurement-receipts.md): open hardware and
+  resource evidence.
 - [Simulator](simulator/README.md): local product, BLE, fault, and crash tests.
 
 Never put credentials in tracked files. Local development values belong in

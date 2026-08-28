@@ -555,6 +555,62 @@ void test_ble_bond_restart_and_sanitized_fuzz() {
         "voice request completion must restart BLE advertising");
 }
 
+void test_deterministic_event_fuzz_checks_each_state() {
+    Simulator simulator(true);
+    check(
+        !simulator.event_fuzz(0, 1),
+        "zero event fuzz cases must be rejected");
+    check(
+        !simulator.event_fuzz(
+            chatesp::simulator::kMaximumEventFuzzCases + 1, 1),
+        "an excessive event fuzz run must be rejected");
+    check(
+        simulator.event_fuzz(50'000, 0x5eed1234U),
+        "deterministic event fuzz must preserve all invariants");
+    check(
+        simulator.snapshot().event_fuzz_cases == 50'000,
+        "event fuzz must report all checked events");
+}
+
+void test_sleep_and_voice_keep_private_state_and_radios_bounded() {
+    Simulator simulator(true);
+    check(simulator.ready(), "simulator must become ready");
+    check(simulator.action_button(true), "recording press must start");
+    check(simulator.advance(350), "recording threshold must pass");
+    check(simulator.action_button(false), "recording release must submit");
+    simulator.ble_start_radio();
+    simulator.ble_restart_radio();
+    check(
+        !simulator.show_pairing_code(123456),
+        "voice work must reject a pairing overlay");
+    auto value = simulator.snapshot();
+    check(
+        value.ble.state == chatesp::simulator::BleState::off,
+        "voice work must keep BLE off");
+    check(!value.pairing_code_visible, "voice work must hide pairing");
+
+    check(
+        simulator.set_transcript("bounded private text"),
+        "transcript must be accepted");
+    check(
+        simulator.set_answer("bounded private answer"),
+        "answer must be accepted");
+    check(simulator.finish_interaction(), "turn must finish");
+    check(simulator.advance(30'000), "follow-up window must expire");
+    simulator.set_wifi(chatesp::simulator::WifiState::online);
+    simulator.ble_restart_radio();
+    value = simulator.snapshot();
+    check(!value.screen_on, "sleep must turn the screen off");
+    check(value.transcript_bytes == 0, "sleep must clear transcript bytes");
+    check(value.answer_bytes == 0, "sleep must clear answer bytes");
+    check(
+        value.wifi == chatesp::simulator::WifiState::off,
+        "sleep must keep Wi-Fi off");
+    check(
+        value.ble.state == chatesp::simulator::BleState::off,
+        "sleep must keep BLE off");
+}
+
 }  // namespace
 
 int main() {
@@ -572,6 +628,8 @@ int main() {
     test_ble_pairing_security_and_retry_flow();
     test_ble_faults_recover_without_partial_state();
     test_ble_bond_restart_and_sanitized_fuzz();
+    test_deterministic_event_fuzz_checks_each_state();
+    test_sleep_and_voice_keep_private_state_and_radios_bounded();
     if (failures != 0) {
         std::cerr << failures << " simulator test(s) failed\n";
         return EXIT_FAILURE;

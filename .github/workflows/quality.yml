@@ -49,10 +49,34 @@ jobs:
           version: "0.12.4"
       - name: Install locked tools
         run: uv sync --locked
+      - name: Check dependencies before product builds
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run --locked opendle-deps check
       - name: Run native firmware tests
         run: uv run --locked python tools/pio.py test -e native
       - name: Build watch development firmware
         run: uv run --locked python tools/pio.py run -e watch_dev
+      - name: Validate watch development firmware contract
+        run: >-
+          uv run --locked python tools/firmware_contract.py
+          --environment watch_dev
+      - name: Build watch production firmware
+        run: uv run --locked python tools/pio.py run -e watch_prod
+      - name: Validate watch production firmware contract
+        run: >-
+          uv run --locked python tools/firmware_contract.py
+          --environment watch_prod
+      - name: Configure the documented simulator build
+        run: >-
+          cmake -S simulator -B simulator/.build/cmake
+          -DCHATESP_APP_CORE_DIR="$PWD/firmware/lib/app_core"
+          -DCHATESP_PROVISIONING_CORE_DIR="$PWD/firmware/lib/provisioning_core"
+          -DCHATESP_BLE_CORE_DIR="$PWD/firmware/lib/ble_core"
+      - name: Build and test the documented simulator path
+        run: >-
+          cmake --build simulator/.build/cmake &&
+          ctest --test-dir simulator/.build/cmake --output-on-failure
       - name: Run the sanitized product simulator
         run: uv run --locked python simulator/tools/build.py --test --sanitize
 

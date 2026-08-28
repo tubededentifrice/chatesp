@@ -22,6 +22,9 @@ repository split.
 The command program never logs transcript or answer text. It reports only
 bounded metadata. The SVG renderer writes text only after an explicit render
 command. Scenarios must use synthetic content.
+The SVG renderer currently duplicates the firmware LVGL layout. This boundary
+keeps the simulator portable, but it can drift from the device presentation.
+SVG checks are not physical pixel checks.
 
 ## Portability rules
 

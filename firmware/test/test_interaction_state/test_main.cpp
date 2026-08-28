@@ -555,6 +555,49 @@ void test_axp2101_charge_state_uses_current_direction() {
     TEST_ASSERT_FALSE(chatesp::power::axp2101_status_is_charging(0x60));
 }
 
+void test_axp2101_battery_voltage_uses_thirteen_bits() {
+    TEST_ASSERT_EQUAL_UINT16(
+        0x1234,
+        chatesp::power::axp2101_battery_millivolts(0xf2, 0x34));
+    TEST_ASSERT_EQUAL_UINT16(
+        0x1fff,
+        chatesp::power::axp2101_battery_millivolts(0xff, 0xff));
+}
+
+void test_raw_battery_voltage_does_not_change_footer_presentation() {
+    using chatesp::power::BatteryStatus;
+    BatteryStatus first{50, false, false, true, 3'800, true};
+    BatteryStatus second{50, false, false, true, 3'790, true};
+
+    TEST_ASSERT_TRUE(chatesp::power::same_battery_presentation(first, second));
+    TEST_ASSERT_TRUE(first != second);
+    second.percent = 49;
+    TEST_ASSERT_FALSE(chatesp::power::same_battery_presentation(first, second));
+}
+
+void test_development_sleep_battery_sample_is_bounded_and_wrap_safe() {
+    using chatesp::power::development_sleep_battery_sample_due;
+    TEST_ASSERT_FALSE(development_sleep_battery_sample_due(
+        false, false, 100, 30'100));
+    TEST_ASSERT_FALSE(development_sleep_battery_sample_due(
+        true, true, 100, 30'100));
+    TEST_ASSERT_FALSE(development_sleep_battery_sample_due(
+        true, false, 100, 30'099));
+    TEST_ASSERT_TRUE(development_sleep_battery_sample_due(
+        true, false, 100, 30'100));
+    constexpr std::uint32_t started = 0xfffffff0U;
+    constexpr std::uint32_t finished = started + 30'000U;
+    TEST_ASSERT_TRUE(development_sleep_battery_sample_due(
+        true, false, started, finished));
+}
+
+void test_battery_sample_failure_count_saturates() {
+    using chatesp::power::saturating_battery_sample_failure_count;
+    TEST_ASSERT_EQUAL_UINT16(1, saturating_battery_sample_failure_count(0));
+    TEST_ASSERT_EQUAL_UINT16(
+        0xffff, saturating_battery_sample_failure_count(0xffff));
+}
+
 void test_battery_limit_requires_low_battery_without_vbus_or_charging() {
     using chatesp::power::BatteryStatus;
     TEST_ASSERT_TRUE(chatesp::power::axp2101_status_has_external_power(0x20));
@@ -933,6 +976,10 @@ int main(int, char **) {
     RUN_TEST(test_power_button_filter_rejects_key_edges_with_a_usb_event);
     RUN_TEST(test_power_button_filter_ignores_two_key_edges_in_one_poll);
     RUN_TEST(test_axp2101_charge_state_uses_current_direction);
+    RUN_TEST(test_axp2101_battery_voltage_uses_thirteen_bits);
+    RUN_TEST(test_raw_battery_voltage_does_not_change_footer_presentation);
+    RUN_TEST(test_development_sleep_battery_sample_is_bounded_and_wrap_safe);
+    RUN_TEST(test_battery_sample_failure_count_saturates);
     RUN_TEST(test_battery_limit_requires_low_battery_without_vbus_or_charging);
     RUN_TEST(test_external_power_uses_vbus_or_charge_current);
     RUN_TEST(test_external_power_latches_insert_until_remove);

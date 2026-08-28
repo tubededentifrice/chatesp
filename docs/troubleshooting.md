@@ -42,11 +42,20 @@ A successful brightness or display-on command does not prove that CO5300 pixels
 became visible after a sleep interval. Repeating only the same commands is not
 a valid recovery check. Development soft sleep must keep the initialized panel
 at its current brightness and draw one full black frame. Each in-session wake
-replays the bounded CO5300 initialization table at zero brightness, forces one
-complete redraw, and then restores brightness. It does not reset the panel or
-CST820 touch
-controller. Production uses brightness zero only after the sleep cancel window,
+replays the bounded selected-panel initialization table at zero brightness,
+forces one complete redraw, and then restores brightness. It does not reset the
+panel or touch controller. Production uses brightness zero only after the sleep cancel window,
 immediately before AXP2101 system-off.
+
+### Touch NACKs or a disconnected touch controller
+
+A failed touch read is a release. It must not keep the prior pressed point or
+restart the device. The board reports only a rate-limited error category and a
+saturating counter. It does not log coordinates. If touch stays unavailable,
+use PWR for recording and sleep. Voice, playback, later turns, and display
+sleep must continue. An unknown board revision uses the V2 display path and
+does not start touch. Original-board touch and display gates remain open until
+they pass on physical hardware.
 
 ### ESP-IDF connection reattempt stops advertising
 
