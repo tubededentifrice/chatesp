@@ -8,6 +8,7 @@ multi-ecosystem-groups:
 updates:
   - package-ecosystem: uv
     directory: /
+    open-pull-requests-limit: 1
     patterns:
       - "*"
     cooldown:
@@ -16,6 +17,7 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    open-pull-requests-limit: 1
     patterns:
       - "*"
     cooldown:
@@ -24,6 +26,7 @@ updates:
 
   - package-ecosystem: gitsubmodule
     directory: /
+    open-pull-requests-limit: 1
     patterns:
       - "*"
     cooldown:

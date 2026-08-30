@@ -1,9 +1,9 @@
 [submodule "firmware/third_party/micropython"]
 	path = firmware/third_party/micropython
 	url = https://github.com/micropython/micropython.git
-	commit = e0e9fbb17ed6fd06bb76e266ae554784c9c80804
+	commit = 2e3304a128b3166d48d6877f4e5c9fbd2e48122f
 	shallow = true
 [submodule "shared/opendle-esp32"]
 	path = shared/opendle-esp32
 	url = https://github.com/opendle/opendle-esp32.git
-	commit = 51fc3d906dc4f389fae828b369cce0c1ee593fb2
+	commit = 3f364e859fcd8ad9b975b7c35fa0c1c2498b699f

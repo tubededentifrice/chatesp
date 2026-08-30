@@ -150,4 +150,4 @@ direct_dependencies:
 - waveshare/esp_lcd_sh8601
 manifest_hash: 25e670630543207bbbe9a5663ab5eebde87d6a957eced6db7c34d7612989de97
 target: esp32s3
-version: 2.0.0
+version: 3.0.0

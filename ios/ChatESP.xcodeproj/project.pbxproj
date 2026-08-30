@@ -248,7 +248,6 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 32J9W47SH8;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ChatESP/Info.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your ChatESP device.";
@@ -271,7 +270,6 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 32J9W47SH8;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ChatESP/Info.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "ChatESP uses Bluetooth to send settings, time, and approximate location securely to your ChatESP device.";
