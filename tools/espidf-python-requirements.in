@@ -1,6 +1,6 @@
 # These are the Python requirements in the pinned PlatformIO ESP-IDF builder.
 urllib3<3
-cryptography~=50.0.0
+cryptography~=50.0.1
 pyparsing>=3.1.0,<4
 idf-component-manager~=3.1
 esp-idf-kconfig~=3.12.0
